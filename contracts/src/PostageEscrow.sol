@@ -27,6 +27,13 @@ contract PostageEscrow {
 
     uint64 public constant EXPIRY = 14 days;
 
+    /// @notice Share of a claimed stamp that funds the vault. Applies only to
+    /// spam: refunds and expiries go back to the sender whole.
+    uint16 public constant VAULT_BPS = 2_000;
+    uint16 private constant ONE = 10_000;
+
+    address public immutable vault;
+
     /// @notice Minimum postage each inbox owner requires from a stranger.
     mapping(address inbox => uint256 amount) public price;
 
@@ -40,7 +47,12 @@ contract PostageEscrow {
         uint256 amount
     );
     event StampReleased(bytes32 indexed messageId, address indexed sender, uint256 amount);
-    event StampClaimed(bytes32 indexed messageId, address indexed recipient, uint256 amount);
+    event StampClaimed(
+        bytes32 indexed messageId,
+        address indexed recipient,
+        uint256 amount,
+        uint256 toVault
+    );
     event StampExpired(bytes32 indexed messageId, address indexed sender, uint256 amount);
 
     error StampAlreadyExists();
@@ -50,6 +62,12 @@ contract PostageEscrow {
     error InvalidRecipient();
     error PostageTooLow(uint256 required, uint256 provided);
     error TransferFailed();
+    error ZeroAddress();
+
+    constructor(address vault_) {
+        if (vault_ == address(0)) revert ZeroAddress();
+        vault = vault_;
+    }
 
     function setPrice(uint256 amount) external {
         price[msg.sender] = amount;
@@ -87,7 +105,8 @@ contract PostageEscrow {
         _pay(sender, amount);
     }
 
-    /// @notice The message was spam. Keep the postage.
+    /// @notice The message was spam. Keep most of the postage; the rest funds
+    /// the vault that pays gas for people who verify instead of paying.
     function claim(bytes32 messageId) external {
         Stamp storage stamp = _heldStamp(messageId);
         if (msg.sender != stamp.recipient) revert NotRecipient();
@@ -95,8 +114,11 @@ contract PostageEscrow {
         uint256 amount = stamp.amount;
         stamp.status = Status.Claimed;
 
-        emit StampClaimed(messageId, msg.sender, amount);
-        _pay(msg.sender, amount);
+        uint256 toVault = (amount * VAULT_BPS) / ONE;
+
+        emit StampClaimed(messageId, msg.sender, amount - toVault, toVault);
+        _pay(msg.sender, amount - toVault);
+        _pay(vault, toVault);
     }
 
     /// @notice Recipients who never respond do not get to hold postage forever.

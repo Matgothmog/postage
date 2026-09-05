@@ -3,9 +3,11 @@ pragma solidity 0.8.28;
 
 import {Test} from "forge-std/Test.sol";
 import {PostageEscrow} from "../src/PostageEscrow.sol";
+import {PostageVault} from "../src/PostageVault.sol";
 
 contract PostageEscrowTest is Test {
     PostageEscrow internal escrow;
+    PostageVault internal vault;
 
     address internal alice = makeAddr("alice");
     address internal bob = makeAddr("bob");
@@ -14,8 +16,12 @@ contract PostageEscrowTest is Test {
     bytes32 internal constant MESSAGE = keccak256("subject: hello");
     uint256 internal constant CENT = 0.01 ether;
 
+    address internal treasury = makeAddr("treasury");
+    address internal relayer = makeAddr("relayer");
+
     function setUp() public {
-        escrow = new PostageEscrow();
+        vault = new PostageVault(treasury, relayer);
+        escrow = new PostageEscrow(address(vault));
         vm.deal(bob, 1 ether);
         vm.deal(mallory, 1 ether);
 
@@ -39,14 +45,36 @@ contract PostageEscrowTest is Test {
         assertEq(alice.balance, 0);
     }
 
-    function test_claimPaysRecipient() public {
+    function test_claimSplitsBetweenRecipientAndVault() public {
         _post(bob, MESSAGE);
 
         vm.prank(alice);
         escrow.claim(MESSAGE);
 
-        assertEq(alice.balance, CENT);
+        uint256 toVault = (CENT * escrow.VAULT_BPS()) / 10_000;
+        assertEq(alice.balance, CENT - toVault);
+        assertEq(address(vault).balance, toVault);
         assertEq(bob.balance, 1 ether - CENT);
+    }
+
+    function test_refundsAreNeverSkimmed() public {
+        _post(bob, MESSAGE);
+
+        vm.prank(alice);
+        escrow.release(MESSAGE);
+
+        assertEq(bob.balance, 1 ether, "sender must get the whole bond back");
+        assertEq(address(vault).balance, 0, "vault must not touch a refund");
+    }
+
+    function test_expiryIsNeverSkimmed() public {
+        _post(bob, MESSAGE);
+
+        vm.warp(block.timestamp + 14 days);
+        escrow.expire(MESSAGE);
+
+        assertEq(bob.balance, 1 ether);
+        assertEq(address(vault).balance, 0);
     }
 
     function test_expireRefundsSenderAfterFourteenDays() public {

@@ -58,3 +58,17 @@ type HumanAttestation @entity(immutable: false) {
   attestedAt: BigInt!
   renewals: Int!
 }
+
+"""
+Where the protocol's share of claimed spam goes. There is one of these, id
+"vault", so a single query answers how much spam has paid for verification.
+"""
+type Vault @entity(immutable: false) {
+  id: Bytes!
+  totalFunded: BigInt!
+  toTreasury: BigInt!
+  toSponsorship: BigInt!
+  refilledToRelayer: BigInt!
+  withdrawnByTreasury: BigInt!
+  fundingEvents: Int!
+}

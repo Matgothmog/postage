@@ -3,7 +3,7 @@
 import { usePrivy, useSendTransaction, useWallets } from "@privy-io/react-auth";
 import { useCallback, useEffect, useState } from "react";
 import { encodeFunctionData } from "viem";
-import { HUMAN_REGISTRY, POSTAGE_ESCROW, escrowAbi, registryAbi } from "@/lib/contracts";
+import { POSTAGE_ESCROW, escrowAbi } from "@/lib/contracts";
 import { formatUsdc } from "@/lib/format";
 
 interface Props {
@@ -90,27 +90,10 @@ export function UnlockActions({ token, messageHash, recipientWallet, price }: Pr
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ wallet: wallet.address }),
       });
-      const attestation = (await response.json()) as {
-        nullifierHash?: string;
-        expiresAt?: number;
-        signature?: string;
-        error?: string;
-      };
-      if (!attestation.signature) throw new Error(attestation.error ?? "Verification failed");
-
-      await sendTransaction({
-        to: HUMAN_REGISTRY,
-        data: encodeFunctionData({
-          abi: registryAbi,
-          functionName: "attest",
-          args: [
-            wallet.address as `0x${string}`,
-            attestation.nullifierHash as `0x${string}`,
-            attestation.expiresAt!,
-            attestation.signature as `0x${string}`,
-          ],
-        }),
-      });
+      const attestation = (await response.json()) as { sponsored?: boolean; error?: string };
+      // The relayer posts the attestation and the vault pays its gas, so
+      // verifying costs the sender nothing at all.
+      if (!attestation.sponsored) throw new Error(attestation.error ?? "Verification failed");
 
       setOutcome(await unlock());
     } catch (cause) {
@@ -163,7 +146,7 @@ export function UnlockActions({ token, messageHash, recipientWallet, price }: Pr
         </div>
       )}
       <button onClick={verifyHuman} disabled={busy !== null} className={primaryButton}>
-        {busy === "human" ? "Verifying" : "I'm a person — send for free"}
+        {busy === "human" ? "Verifying" : "I'm a person — send free, no gas"}
       </button>
       <button onClick={payPostage} disabled={busy !== null} className={secondaryButton}>
         {busy === "stamp" ? "Paying" : `Attach ${formatUsdc(stampPrice)} postage instead`}

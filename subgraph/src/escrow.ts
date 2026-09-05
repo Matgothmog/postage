@@ -62,7 +62,9 @@ export function handleStampClaimed(event: StampClaimed): void {
 
   const inbox = loadInbox(stamp.recipient);
   inbox.claimedCount += 1;
-  inbox.claimedTotal = inbox.claimedTotal.plus(stamp.amount);
+  // What the recipient actually kept, not the face value of the stamp. The
+  // rest went to the vault.
+  inbox.claimedTotal = inbox.claimedTotal.plus(event.params.amount);
   inbox.save();
 }
 

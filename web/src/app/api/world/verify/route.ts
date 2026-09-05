@@ -1,6 +1,7 @@
-import { type Hex, isAddress, keccak256, stringToBytes } from "viem";
+import { type Hex, createWalletClient, http, isAddress, keccak256, stringToBytes } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { HUMAN_REGISTRY, chain } from "@/lib/contracts";
+import { publicClient } from "@/lib/client";
+import { HUMAN_REGISTRY, chain, registryAbi } from "@/lib/contracts";
 import { identityMode, required } from "@/lib/env";
 
 /// Matches the Selfie Check credential lifetime, so the free lane lapses when
@@ -58,7 +59,48 @@ export async function POST(request: Request) {
     message: { wallet, nullifierHash, expiresAt },
   });
 
-  return Response.json({ wallet, nullifierHash, expiresAt, signature });
+  // The relayer posts it, funded by the vault out of postage that recipients
+  // claimed from spam. The signature names the wallet, so who submits it
+  // changes nothing about who it belongs to.
+  let transactionHash: string;
+  try {
+    transactionHash = await sponsorAttestation(wallet, nullifierHash, expiresAt, signature);
+  } catch (cause) {
+    const detail = cause instanceof Error ? cause.message : "Could not sponsor the attestation";
+    return Response.json(
+      { wallet, nullifierHash, expiresAt, signature, sponsored: false, error: detail },
+      { status: 502 }
+    );
+  }
+
+  return Response.json({
+    wallet,
+    nullifierHash,
+    expiresAt,
+    signature,
+    sponsored: true,
+    transactionHash,
+  });
+}
+
+async function sponsorAttestation(
+  wallet: Hex,
+  nullifierHash: Hex,
+  expiresAt: number,
+  signature: Hex
+): Promise<string> {
+  const relayer = privateKeyToAccount(required("RELAYER_PRIVATE_KEY") as Hex);
+  const client = createWalletClient({ account: relayer, chain, transport: http() });
+
+  const hash = await client.writeContract({
+    address: HUMAN_REGISTRY,
+    abi: registryAbi,
+    functionName: "attest",
+    args: [wallet, nullifierHash, expiresAt, signature],
+  });
+
+  await publicClient.waitForTransactionReceipt({ hash });
+  return hash;
 }
 
 /// Forwards the IDKit result to the Developer Portal and pulls out the selfie

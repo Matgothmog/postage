@@ -7,9 +7,9 @@ dataSources:
     name: PostageEscrow
     network: arc-testnet
     source:
-      address: "0xa17f3d284ce462e049c54b98aee55b7739b06c16"
+      address: "0x164f432fd08dd4611172aa077882859b7c3ead7f"
       abi: PostageEscrow
-      startBlock: 60558189
+      startBlock: 60568030
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.9
@@ -29,7 +29,7 @@ dataSources:
           handler: handleStampPosted
         - event: StampReleased(indexed bytes32,indexed address,uint256)
           handler: handleStampReleased
-        - event: StampClaimed(indexed bytes32,indexed address,uint256)
+        - event: StampClaimed(indexed bytes32,indexed address,uint256,uint256)
           handler: handleStampClaimed
         - event: StampExpired(indexed bytes32,indexed address,uint256)
           handler: handleStampExpired
@@ -37,9 +37,9 @@ dataSources:
     name: HumanRegistry
     network: arc-testnet
     source:
-      address: "0xfcdca9fbd11dd826e459eddccf8f0581de77ab46"
+      address: "0x1b83c30c4138ca29a942f1a14237881daa7320d9"
       abi: HumanRegistry
-      startBlock: 60558189
+      startBlock: 60568030
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.9
@@ -54,3 +54,27 @@ dataSources:
       eventHandlers:
         - event: HumanAttested(indexed address,indexed bytes32,uint40)
           handler: handleHumanAttested
+  - kind: ethereum
+    name: PostageVault
+    network: arc-testnet
+    source:
+      address: "0x771f3da6d0d05f904fd28a782bfafdf18393aa90"
+      abi: PostageVault
+      startBlock: 60568030
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      file: ./src/vault.ts
+      entities:
+        - Vault
+      abis:
+        - name: PostageVault
+          file: ./abis/PostageVault.json
+      eventHandlers:
+        - event: Funded(uint256,uint256,uint256)
+          handler: handleFunded
+        - event: RelayerRefilled(uint256)
+          handler: handleRelayerRefilled
+        - event: TreasuryWithdrawn(indexed address,uint256)
+          handler: handleTreasuryWithdrawn
