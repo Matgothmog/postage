@@ -1,7 +1,7 @@
 "use client";
 
 import { usePrivy, useSendTransaction, useWallets } from "@privy-io/react-auth";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { encodeFunctionData } from "viem";
 import { HUMAN_REGISTRY, POSTAGE_ESCROW, escrowAbi, registryAbi } from "@/lib/contracts";
 import { formatUsdc } from "@/lib/format";
@@ -13,6 +13,13 @@ interface Props {
   price: string;
 }
 
+interface PriceQuote {
+  price: string;
+  multiplierBps: number;
+  free: boolean;
+  reasons: string[];
+}
+
 type Outcome = { kind: "delivered"; reason: string } | { kind: "error"; message: string };
 
 export function UnlockActions({ token, messageHash, recipientWallet, price }: Props) {
@@ -22,8 +29,23 @@ export function UnlockActions({ token, messageHash, recipientWallet, price }: Pr
 
   const [busy, setBusy] = useState<"human" | "stamp" | null>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
+  const [quote, setQuote] = useState<PriceQuote | null>(null);
 
   const wallet = wallets[0];
+  const address = wallet?.address;
+
+  // What this particular sender pays is only knowable once we know who they
+  // are, so the quote is fetched after the wallet connects rather than
+  // rendered with the page.
+  const loadQuote = useCallback(async () => {
+    if (!address) return;
+    const response = await fetch(`/api/price?token=${token}&wallet=${address}`);
+    if (response.ok) setQuote((await response.json()) as PriceQuote);
+  }, [address, token]);
+
+  useEffect(() => {
+    loadQuote().catch(() => setQuote(null));
+  }, [loadQuote]);
 
   if (!ready) return null;
 
@@ -104,7 +126,7 @@ export function UnlockActions({ token, messageHash, recipientWallet, price }: Pr
     try {
       await sendTransaction({
         to: POSTAGE_ESCROW,
-        value: BigInt(price),
+        value: BigInt(quote?.price ?? price),
         data: encodeFunctionData({
           abi: escrowAbi,
           functionName: "postStamp",
@@ -119,13 +141,32 @@ export function UnlockActions({ token, messageHash, recipientWallet, price }: Pr
     }
   }
 
+  const stampPrice = BigInt(quote?.price ?? price);
+
   return (
     <div className="mt-8 space-y-3">
+      {quote && !quote.free && (
+        <div className="rounded-xl border border-neutral-200 bg-white p-4 text-sm">
+          <p className="font-medium">
+            Your postage is {formatUsdc(stampPrice)}
+            {quote.multiplierBps !== 10_000 && (
+              <span className="ml-1 font-normal text-neutral-500">
+                ({(quote.multiplierBps / 10_000).toFixed(2)}x this inbox&apos;s base)
+              </span>
+            )}
+          </p>
+          <ul className="mt-2 space-y-1 text-neutral-600">
+            {quote.reasons.map((reason) => (
+              <li key={reason}>{reason}</li>
+            ))}
+          </ul>
+        </div>
+      )}
       <button onClick={verifyHuman} disabled={busy !== null} className={primaryButton}>
         {busy === "human" ? "Verifying" : "I'm a person — send for free"}
       </button>
       <button onClick={payPostage} disabled={busy !== null} className={secondaryButton}>
-        {busy === "stamp" ? "Paying" : `Attach ${formatUsdc(BigInt(price))} postage instead`}
+        {busy === "stamp" ? "Paying" : `Attach ${formatUsdc(stampPrice)} postage instead`}
       </button>
       {outcome?.kind === "error" && (
         <p className="text-sm text-red-600">{outcome.message}</p>
