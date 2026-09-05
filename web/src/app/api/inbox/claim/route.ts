@@ -16,17 +16,17 @@ export async function POST(request: Request) {
     return Response.json({ error: "A valid wallet is required" }, { status: 400 });
   }
 
-  const existing = walletForInbox(localPart);
+  const existing = await walletForInbox(localPart);
   if (existing && existing !== wallet.toLowerCase()) {
     return Response.json({ error: "That name is taken" }, { status: 409 });
   }
 
-  claimInbox(localPart, wallet);
+  await claimInbox(localPart, wallet);
   return Response.json({ localPart: localPart.toLowerCase(), wallet: wallet.toLowerCase() });
 }
 
 export async function GET(request: Request) {
   const localPart = new URL(request.url).searchParams.get("localPart");
   if (!localPart) return Response.json({ error: "localPart required" }, { status: 400 });
-  return Response.json({ messages: inboxMessages(localPart) });
+  return Response.json({ messages: await inboxMessages(localPart) });
 }

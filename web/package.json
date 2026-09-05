@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@libsql/client": "^0.18.0",
     "@privy-io/react-auth": "^3.40.0",
     "@worldcoin/idkit": "^4.2.3",
     "@worldcoin/idkit-server": "^1.1.1",

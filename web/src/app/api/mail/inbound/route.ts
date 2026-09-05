@@ -30,7 +30,7 @@ export async function POST(request: Request) {
   }
 
   const localPart = to.split("@")[0]?.toLowerCase() ?? "";
-  if (!walletForInbox(localPart)) {
+  if (!(await walletForInbox(localPart))) {
     return Response.json({ status: "unknown_inbox" }, { status: 404 });
   }
 
@@ -38,7 +38,7 @@ export async function POST(request: Request) {
   const receivedAt = Math.floor(Date.now() / 1000);
   const sender = from.toLowerCase();
 
-  insertMessage({
+  await insertMessage({
     id: randomUUID(),
     // The id the sender will pay against onchain. Derived from the message so
     // one stamp can only ever unlock the message it was bought for.
@@ -54,8 +54,8 @@ export async function POST(request: Request) {
 
   // Someone the recipient has already corresponded with never pays again.
   // Without this every first reply from a friend would be held too.
-  if (isKnownSender(localPart, sender)) {
-    deliver(token, "known");
+  if (await isKnownSender(localPart, sender)) {
+    await deliver(token, "known");
     return Response.json({ status: "delivered", reason: "known_sender" });
   }
 

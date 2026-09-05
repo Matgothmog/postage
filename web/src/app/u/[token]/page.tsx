@@ -8,10 +8,10 @@ import { UnlockActions } from "./UnlockActions";
 export default async function UnlockPage({ params }: PageProps<"/u/[token]">) {
   const { token } = await params;
 
-  const message = messageByToken(token);
+  const message = await messageByToken(token);
   if (!message) notFound();
 
-  const recipientWallet = walletForInbox(message.recipient_local);
+  const recipientWallet = await walletForInbox(message.recipient_local);
   if (!recipientWallet) notFound();
 
   const price = await publicClient.readContract({

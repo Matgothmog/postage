@@ -19,18 +19,18 @@ export async function POST(request: Request) {
     return Response.json({ error: "token and a valid wallet are required" }, { status: 400 });
   }
 
-  const message = messageByToken(token);
+  const message = await messageByToken(token);
   if (!message) return Response.json({ error: "Unknown message" }, { status: 404 });
   if (message.status === "delivered") return Response.json({ status: "delivered" });
 
   if (await isHuman(wallet)) {
-    deliver(token, "human");
-    rememberSender(message.recipient_local, message.sender);
+    await deliver(token, "human");
+    await rememberSender(message.recipient_local, message.sender);
     return Response.json({ status: "delivered", reason: "human" });
   }
 
   if (await hasStamp(message.message_hash as Hex)) {
-    deliver(token, "stamp");
+    await deliver(token, "stamp");
     return Response.json({ status: "delivered", reason: "stamp" });
   }
 
