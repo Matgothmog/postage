@@ -61,6 +61,6 @@ export async function POST(request: Request) {
 
   return Response.json({
     status: "held",
-    unlock_url: `${required("NEXT_PUBLIC_APP_URL")}/u/${token}`,
+    unlock_url: `${required("APP_URL")}/u/${token}`,
   });
 }

@@ -109,7 +109,7 @@ async function sponsorAttestation(
 async function verifyWithWorld(proof: unknown): Promise<string> {
   if (!proof || typeof proof !== "object") throw new Error("Missing World ID proof");
 
-  const rpId = required("NEXT_PUBLIC_WORLD_RP_ID");
+  const rpId = required("WORLD_RP_ID");
   const response = await fetch(`${VERIFY_ENDPOINT}/verify/${rpId}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

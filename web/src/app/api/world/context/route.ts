@@ -7,11 +7,11 @@ import { required } from "@/lib/env";
 export async function POST() {
   const signature = signRequest({
     signingKeyHex: required("WORLD_RP_SIGNING_KEY"),
-    action: required("NEXT_PUBLIC_WORLD_ACTION"),
+    action: required("WORLD_ACTION"),
   });
 
   return Response.json({
-    rp_id: required("NEXT_PUBLIC_WORLD_RP_ID"),
+    rp_id: required("WORLD_RP_ID"),
     nonce: signature.nonce,
     created_at: signature.createdAt,
     expires_at: signature.expiresAt,
