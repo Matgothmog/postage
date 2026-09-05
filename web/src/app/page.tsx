@@ -69,9 +69,14 @@ export default function Home() {
             </p>
           )}
         </div>
-        <button onClick={logout} className="text-sm text-neutral-500 hover:text-neutral-900">
-          Sign out
-        </button>
+        <div className="flex items-baseline gap-4 text-sm">
+          <a href="/network" className="text-neutral-500 hover:text-neutral-900">
+            Network
+          </a>
+          <button onClick={logout} className="text-neutral-500 hover:text-neutral-900">
+            Sign out
+          </button>
+        </div>
       </header>
 
       {loaded && !localPart ? (
