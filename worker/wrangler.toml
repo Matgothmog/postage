@@ -1,0 +1,5 @@
+name = "postage-mail"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+
+# Set with: wrangler secret put POSTAGE_API_URL / POSTAGE_SECRET
