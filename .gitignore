@@ -15,3 +15,6 @@ web/out/
 # subgraph codegen
 subgraph/generated/
 subgraph/build/
+
+# forge install pulls these
+contracts/lib/
