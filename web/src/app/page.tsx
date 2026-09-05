@@ -6,9 +6,36 @@ import { encodeFunctionData } from "viem";
 import { publicClient } from "@/lib/client";
 import { POSTAGE_ESCROW, escrowAbi } from "@/lib/contracts";
 import { formatUsdc, parseUsdc, shortAddress } from "@/lib/format";
+import { ClaimInbox } from "./ClaimInbox";
+import { type InboxMessage, MessageList } from "./MessageList";
 
 export default function Home() {
   const { ready, authenticated, login, logout } = usePrivy();
+  const { wallets } = useWallets();
+  const wallet = wallets[0];
+
+  const [localPart, setLocalPart] = useState<string | null>(null);
+  const [messages, setMessages] = useState<InboxMessage[]>([]);
+  const [loaded, setLoaded] = useState(false);
+
+  const address = wallet?.address;
+
+  const refresh = useCallback(async () => {
+    if (!address) return;
+    const response = await fetch(`/api/inbox?wallet=${address}`);
+    if (!response.ok) return;
+    const data = (await response.json()) as {
+      localPart: string | null;
+      messages: InboxMessage[];
+    };
+    setLocalPart(data.localPart);
+    setMessages(data.messages);
+    setLoaded(true);
+  }, [address]);
+
+  useEffect(() => {
+    refresh().catch(() => setLoaded(true));
+  }, [refresh]);
 
   if (!ready) return <Centered>Loading</Centered>;
 
@@ -29,53 +56,63 @@ export default function Home() {
     );
   }
 
+  if (!wallet) return <Centered>Setting up your wallet</Centered>;
+
   return (
     <main className="mx-auto w-full max-w-2xl px-6 py-12">
       <header className="flex items-baseline justify-between">
-        <h1 className="text-xl font-semibold tracking-tight">Postage</h1>
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight">Postage</h1>
+          {localPart && (
+            <p className="mt-0.5 font-mono text-sm text-neutral-500">
+              {localPart}@usepostage.com
+            </p>
+          )}
+        </div>
         <button onClick={logout} className="text-sm text-neutral-500 hover:text-neutral-900">
           Sign out
         </button>
       </header>
-      <InboxSettings />
+
+      {loaded && !localPart ? (
+        <ClaimInbox wallet={wallet.address} onClaimed={refresh} />
+      ) : (
+        <>
+          <MessageList messages={messages} onSettled={refresh} />
+          <InboxSettings address={wallet.address} />
+        </>
+      )}
     </main>
   );
 }
 
-function InboxSettings() {
-  const { wallets } = useWallets();
+function InboxSettings({ address }: { address: string }) {
   const { sendTransaction } = useSendTransaction();
-  const wallet = wallets[0];
-
   const [price, setPrice] = useState<bigint | null>(null);
   const [balance, setBalance] = useState<bigint | null>(null);
   const [draft, setDraft] = useState("0.01");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const address = wallet?.address as `0x${string}` | undefined;
-
-  const refresh = useCallback(async () => {
-    if (!address) return;
+  const read = useCallback(async () => {
     const [onchainPrice, onchainBalance] = await Promise.all([
       publicClient.readContract({
         address: POSTAGE_ESCROW,
         abi: escrowAbi,
         functionName: "price",
-        args: [address],
+        args: [address as `0x${string}`],
       }),
-      publicClient.getBalance({ address }),
+      publicClient.getBalance({ address: address as `0x${string}` }),
     ]);
     setPrice(onchainPrice);
     setBalance(onchainBalance);
   }, [address]);
 
   useEffect(() => {
-    refresh().catch((cause: unknown) => setError(String(cause)));
-  }, [refresh]);
+    read().catch((cause: unknown) => setError(String(cause)));
+  }, [read]);
 
   async function save() {
-    if (!address) return;
     setPending(true);
     setError(null);
     try {
@@ -87,66 +124,52 @@ function InboxSettings() {
           args: [parseUsdc(draft)],
         }),
       });
-      await refresh();
-    } catch (cause: unknown) {
+      await read();
+    } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setPending(false);
     }
   }
 
-  if (!wallet) return <p className="mt-8 text-sm text-neutral-500">Creating your wallet</p>;
-
   return (
-    <section className="mt-8 space-y-6">
-      <div className="rounded-xl border border-neutral-200 bg-white p-5">
-        <Row label="Wallet" value={shortAddress(wallet.address)} />
-        <Row
-          label="Balance"
-          value={balance === null ? "..." : `${formatUsdc(balance)} USDC`}
-        />
-        <Row
-          label="Postage price"
-          value={price === null ? "..." : formatUsdc(price)}
-        />
+    <section className="mt-10 rounded-xl border border-neutral-200 bg-white p-5">
+      <div className="flex justify-between text-sm">
+        <span className="text-neutral-500">Wallet</span>
+        <span className="font-mono">{shortAddress(address)}</span>
+      </div>
+      <div className="mt-2 flex justify-between text-sm">
+        <span className="text-neutral-500">Balance</span>
+        <span className="font-mono">
+          {balance === null ? "..." : `${formatUsdc(balance)} USDC`}
+        </span>
+      </div>
+      <div className="mt-2 flex justify-between text-sm">
+        <span className="text-neutral-500">Postage from strangers</span>
+        <span className="font-mono">{price === null ? "..." : formatUsdc(price)}</span>
       </div>
 
-      <div className="rounded-xl border border-neutral-200 bg-white p-5">
-        <label htmlFor="price" className="text-sm font-medium">
-          What should a stranger pay to reach you?
-        </label>
-        <p className="mt-1 text-sm text-neutral-600">
-          Verified humans always send free. This is what everyone else escrows, and you give it
-          back when the message turns out to be worth reading.
-        </p>
-        <div className="mt-4 flex gap-2">
-          <input
-            id="price"
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            inputMode="decimal"
-            className="w-32 rounded-lg border border-neutral-300 px-3 py-2 text-sm"
-          />
-          <button
-            onClick={save}
-            disabled={pending}
-            className="rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
-          >
-            {pending ? "Saving" : "Save"}
-          </button>
-        </div>
-        {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+      <div className="mt-4 flex gap-2 border-t border-neutral-100 pt-4">
+        <input
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          inputMode="decimal"
+          className="w-28 rounded-lg border border-neutral-300 px-3 py-2 text-sm"
+        />
+        <button
+          onClick={save}
+          disabled={pending}
+          className="rounded-lg border border-neutral-300 px-4 py-2 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
+        >
+          {pending ? "Saving" : "Update price"}
+        </button>
       </div>
+      <p className="mt-2 text-xs text-neutral-500">
+        Verified people always send free. Reputation decides what everyone else pays, from this
+        price up to five times it.
+      </p>
+      {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
     </section>
-  );
-}
-
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex justify-between border-b border-neutral-100 py-2 text-sm last:border-0">
-      <span className="text-neutral-500">{label}</span>
-      <span className="font-mono">{value}</span>
-    </div>
   );
 }
 

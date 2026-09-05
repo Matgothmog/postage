@@ -23,6 +23,11 @@ export async function POST(request: Request) {
     return Response.json({ error: "Bad secret" }, { status: 401 });
   }
 
+  // Read the config before touching the database. Discovering a missing
+  // variable after the insert leaves a message stored that nobody can ever be
+  // told how to unlock.
+  const appUrl = required("APP_URL");
+
   const payload = (await request.json()) as Partial<InboundPayload>;
   const { from, to, subject, body } = payload;
   if (!from || !to) {
@@ -61,6 +66,6 @@ export async function POST(request: Request) {
 
   return Response.json({
     status: "held",
-    unlock_url: `${required("APP_URL")}/u/${token}`,
+    unlock_url: `${appUrl}/u/${token}`,
   });
 }

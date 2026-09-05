@@ -91,6 +91,14 @@ export async function walletForInbox(localPart: string): Promise<string | null> 
   return rows[0]?.wallet ?? null;
 }
 
+export async function inboxForWallet(wallet: string): Promise<string | null> {
+  const rows = await all<{ local_part: string }>(
+    `SELECT local_part FROM inboxes WHERE wallet = ?`,
+    [wallet.toLowerCase()]
+  );
+  return rows[0]?.local_part ?? null;
+}
+
 export async function isKnownSender(localPart: string, sender: string): Promise<boolean> {
   const rows = await all(
     `SELECT 1 FROM known_senders WHERE recipient_local = ? AND sender = ?`,
