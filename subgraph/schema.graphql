@@ -1,0 +1,60 @@
+"""
+A wallet that has sent stamped mail. This is the reputation record: how often
+someone's mail was worth receiving, and how often it was spam.
+"""
+type Sender @entity(immutable: false) {
+  id: Bytes!
+  stampsPosted: Int!
+  totalEscrowed: BigInt!
+  releasedCount: Int!
+  claimedCount: Int!
+  """
+  claimed / (claimed + released). Undefined until a stamp is settled, so it
+  starts at zero and only means something once settledCount > 0.
+  """
+  spamRate: BigDecimal!
+  settledCount: Int!
+  humanUntil: BigInt
+  firstSeenAt: BigInt!
+  stamps: [Stamp!]! @derivedFrom(field: "sender")
+}
+
+"""An inbox and the postage it demands from strangers."""
+type Inbox @entity(immutable: false) {
+  id: Bytes!
+  price: BigInt!
+  receivedCount: Int!
+  releasedCount: Int!
+  claimedCount: Int!
+  claimedTotal: BigInt!
+  stamps: [Stamp!]! @derivedFrom(field: "recipient")
+}
+
+type Stamp @entity(immutable: false) {
+  id: Bytes!
+  sender: Sender!
+  recipient: Inbox!
+  amount: BigInt!
+  status: StampStatus!
+  postedAt: BigInt!
+  postedTx: Bytes!
+  settledAt: BigInt
+  settledTx: Bytes
+}
+
+enum StampStatus {
+  Held
+  Released
+  Claimed
+  Expired
+}
+
+"""A World ID Selfie Check result, recorded on Arc."""
+type HumanAttestation @entity(immutable: false) {
+  id: Bytes!
+  wallet: Bytes!
+  nullifierHash: Bytes!
+  expiresAt: BigInt!
+  attestedAt: BigInt!
+  renewals: Int!
+}
