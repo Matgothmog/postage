@@ -60,5 +60,7 @@ Built for ETHOnline 2026. Work in progress.
 
     contracts/   escrow and identity registry (Foundry)
     subgraph/    indexes both contracts on Arc
-    web/         inbox, compose, unlock page
-    gateway/     inbound mail webhook and hold/release logic
+    web/         inbox and unlock page, plus the API routes behind them:
+                 inbound mail webhook, attestation signing, pricing
+
+Contract addresses are in DEPLOYMENTS.md.
