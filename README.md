@@ -63,4 +63,5 @@ Built for ETHOnline 2026. Work in progress.
     web/         inbox and unlock page, plus the API routes behind them:
                  inbound mail webhook, attestation signing, pricing
 
-Contract addresses are in DEPLOYMENTS.md.
+[ARCHITECTURE.md](ARCHITECTURE.md) explains how the parts fit together and why
+each one is there. Contract addresses are in [DEPLOYMENTS.md](DEPLOYMENTS.md).
