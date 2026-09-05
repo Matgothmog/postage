@@ -21,6 +21,14 @@ Measured gas, at the 25 gwei the network was charging:
 
 A full stamp cycle costs about half a cent to move a one cent stamp.
 
+## Subgraph
+
+Studio: https://thegraph.com/studio/subgraph/usepostage
+
+    https://api.studio.thegraph.com/query/1758667/usepostage/v0.1.0
+
+Indexes both contracts on arc-testnet from block 60558189.
+
 ## Arc Mainnet (5042)
 
 Not deployed yet.
