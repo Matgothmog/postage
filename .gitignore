@@ -1,0 +1,17 @@
+node_modules/
+.env
+.env.local
+.DS_Store
+
+# foundry
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+
+# next
+web/.next/
+web/out/
+
+# subgraph codegen
+subgraph/generated/
+subgraph/build/
