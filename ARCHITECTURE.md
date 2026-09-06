@@ -1,7 +1,13 @@
 # Architecture
 
-Postage is a filter in front of an inbox you already own. This describes how the
-pieces fit and, more usefully, why each one is there rather than something else.
+Postage is a filter in front of an inbox you already own, and a way to charge
+for the mail it holds back. The filter exists to decide who gets charged; the
+charge is the point. This describes how the pieces fit and, more usefully, why
+each one is there rather than something else.
+
+It is a proof of concept. What follows is accurate about what runs today,
+including the parts that are not finished — see
+[what privacy would actually take](#what-privacy-would-actually-take).
 
 ## The shape of it
 
@@ -55,6 +61,13 @@ unreachable, the gateway falls back to SPF/DKIM/DMARC, sender domain and subject
 heuristics, and that path is barred from returning `dangerous` — a wrong verdict
 there both blocks real mail and charges punitively for it.
 
+Clearing the gate once puts a sender on the inbox's allowlist, and that skips
+classification entirely from then on. The allowlist is keyed on the envelope
+address, which anyone can write anything into, so the fast path is taken only
+when the receiving MTA could confirm the sender is who they say — DMARC passing,
+or SPF passing without DKIM failing. Everything else is classified on its
+merits. Otherwise the allowlist would be a list of names worth forging.
+
 ## The price cannot be invented
 
 ```
@@ -75,6 +88,13 @@ classifier reads the message
 code whose identity is public produced it — not as a promise, as a precondition
 the chain enforces. Quotes are single-use and expire, so a cheap one cannot be
 banked or replayed onto another message.
+
+The `messageId` a quote is bound to is an HMAC of the message under a gateway
+key, not a plain hash of it. Every part it names is guessable — the handle is
+published on purpose, the sender is a short list, the subject of paid mail is
+templated, and the second it arrived is bounded by the block that settled it.
+A bare `keccak256` of those would be a preimage anyone could search, and the
+ledger would become a public record of who writes to whom.
 
 **Where this stands today.** The registered key belongs to an ordinary server
 process, and the measurement recorded against it says exactly that:
@@ -131,6 +151,16 @@ Two sources compose into one number:
 The tier sets the base; reputation moves it, clamped so a quote never falls
 below the inbox floor the escrow enforces.
 
+Reputation is only worth reading if it cannot be written by anyone who feels
+like it. `reportSpam` is callable only by the inbox that actually received the
+message, and only once — the escrow records who paid for each settled message
+so the report is checked against the payment rather than taken on the caller's
+word. Without that, driving any sender to the price ceiling would be free.
+
+The link from an email address to a wallet is made when a sender pays: the
+challenge records which wallet settled it, so the next message from that
+address is priced on their record instead of from scratch.
+
 ### Privy — wallets for people who have none
 
 The person clicking an unlock link is a stranger with no wallet and no reason to
@@ -168,6 +198,15 @@ Sponsoring one attestation costs 0.00188 USDC. `refillRelayer()` is callable by
 anyone, because the funds can only ever move to the relayer — a keeper can top
 it up without anyone gaining the ability to move money elsewhere.
 
+## Setup a new user does not have to do
+
+An inbox that has never called `setFloorPrice` reads zero, and a zero floor
+prices every message at nothing. So the escrow does not read `floorPrice`
+directly: `effectiveFloor` returns the owner's chosen price, or one cent if
+they never chose one, and `payToSend` enforces that. Claiming a handle is
+therefore the entire signup — the first message is charged for correctly
+without a transaction, a balance, or a decision about pricing.
+
 ## Trust boundaries
 
 | Secret | Lives in | Protects |
@@ -194,5 +233,65 @@ Message bodies are never written anywhere. A held message leaves a challenge row
 recording sender, recipient and price — never the subject or the body. The mail
 is refused at the door and lives only in the sender's outbox until they resend.
 
-Only the message *hash* goes on-chain, as the id a payment is bound to. The
-escrow does not need to read a message to charge for it.
+Only a keyed commitment to the message goes onchain, as the id a payment is
+bound to. The escrow does not need to read a message to charge for it.
+
+## What privacy would actually take
+
+Not storing a message is not the same as not reading one, and it is worth being
+exact about which of those Postage does.
+
+Five parties see a message in plaintext today: Cloudflare terminates the SMTP
+connection, the mail worker parses the MIME, the gateway receives the parsed
+fields, the classifier reads them, and the destination provider receives the
+forward. Turso durably holds the map from each handle to the real address behind
+it, and the list of who has written to whom.
+
+**This is not an implementation shortcut.** SMTP has no end-to-end encryption in
+practice. STARTTLS, MTA-STS and DANE protect the hop between two servers; the
+receiving server decrypts. Unless the sender encrypts to the recipient — PGP or
+S/MIME, which essentially none of the mail Postage exists to filter uses —
+whatever terminates the connection holds the plaintext. That cannot be designed
+away. The only question is *what* holds it, and what that thing can be compelled
+or compromised into revealing.
+
+So there is no cryptographic answer here. FHE is the wrong shape: it lets a
+server compute on data a client encrypted, but here the server is the data's
+first contact, and nobody upstream is encrypting anything. Zero-knowledge proofs
+cannot prove a property of a message to a party that does not have it. What is
+left is attestation — making the thing that holds the plaintext a piece of code
+whose identity is public and which is structurally unable to keep or export it.
+
+**That means the enclave has to be the MX, not the classifier.** Attesting the
+classifier alone would prove very little, because Cloudflare and the gateway
+have already read the message by the time it runs. The honest version is an
+enclave that terminates SMTP itself: it holds the TLS key sealed to its own
+measurement, parses, classifies, forwards, and never writes a body anywhere. The
+host machine proxies opaque TCP and cannot read the session. Cloudflare leaves
+the trust boundary entirely.
+
+`EnclaveRegistry` is already the contract for this, and
+`stage1-plain-classifier-not-attested` is already the honest name for what is
+registered against it today. Two things stand in the way, and neither is small:
+
+- **Nitro Enclaves have no GPU.** A frontier model cannot run inside one. Either
+  the classifier becomes a small model quantized onto enclave CPU — four coarse
+  tiers with authentication headers as the dominant signal is not a frontier
+  problem, and the header-only fallback already shows the task degrades — or the
+  enclave calls out to an attested inference endpoint and verifies its
+  attestation against a pinned measurement before sending a byte.
+- **Running an MTA is real work.** IP reputation, greylisting, backscatter, TLS
+  certificates. Cloudflare does all of it for free and does it well. Trading
+  working delivery for a better threat model would be trading down, so this
+  belongs behind a fallback, not in front of one.
+
+Onchain, the remaining leak is structural rather than accidental: `Paid` carries
+the inbox address, the tier and the amount, so the ledger publishes a profile of
+what an inbox receives even though the message ids are commitments. Stealth
+addresses would unlink the recipient; Circle's own confidential-contract engine
+for Arc would hide the payment outright, with a view key for the recipient to
+audit their own earnings. Neither is available on Arc yet.
+
+None of this is required for Postage to work. It is required for the claim
+"nobody can read your mail" to be true, and until it is built that claim is not
+made here.
