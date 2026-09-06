@@ -40,6 +40,15 @@ const SCHEMA = [
      cf_verified_at INTEGER,
      created_at INTEGER NOT NULL
    )`,
+  /// Every address we have asked to confirm, kept only long enough to throttle.
+  /// Claims are keyed on handle, so they cannot answer how often one mailbox
+  /// has been mailed.
+  `CREATE TABLE IF NOT EXISTS claim_sends (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     destination TEXT NOT NULL,
+     sent_at INTEGER NOT NULL
+   )`,
+  `CREATE INDEX IF NOT EXISTS claim_sends_by_destination ON claim_sends (destination, sent_at)`,
   /// The wallet a sender last paid from, so the next message they write can be
   /// priced on what The Graph knows about them rather than as a stranger.
   `CREATE TABLE IF NOT EXISTS sender_wallets (
@@ -168,6 +177,21 @@ export async function startClaim(
   );
 }
 
+export async function recordClaimSend(destination: string): Promise<void> {
+  await run(`INSERT INTO claim_sends (destination, sent_at) VALUES (?, ?)`, [
+    destination.toLowerCase(),
+    Math.floor(Date.now() / 1000),
+  ]);
+}
+
+export async function recentClaimsTo(destination: string, windowSeconds: number): Promise<number> {
+  const rows = await all<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM claim_sends WHERE destination = ? AND sent_at > ?`,
+    [destination.toLowerCase(), Math.floor(Date.now() / 1000) - windowSeconds]
+  );
+  return Number(rows[0]?.n ?? 0);
+}
+
 export async function claimByHandle(handle: string): Promise<InboxClaim | null> {
   const rows = await all<InboxClaim>(`SELECT * FROM inbox_claims WHERE handle = ?`, [
     handle.toLowerCase(),
@@ -175,10 +199,16 @@ export async function claimByHandle(handle: string): Promise<InboxClaim | null> 
   return rows[0] ?? null;
 }
 
-export async function countClaimAttempt(handle: string): Promise<void> {
-  await run(`UPDATE inbox_claims SET attempts = attempts + 1 WHERE handle = ?`, [
-    handle.toLowerCase(),
-  ]);
+/// Takes a guess before checking the code rather than after, so concurrent
+/// requests cannot all read the same count and slip past the ceiling together.
+/// Returns false once the allowance is spent.
+export async function consumeAttempt(handle: string, max: number): Promise<boolean> {
+  const client = await db();
+  const result = await client.execute({
+    sql: `UPDATE inbox_claims SET attempts = attempts + 1 WHERE handle = ? AND attempts < ?`,
+    args: [handle.toLowerCase(), max],
+  });
+  return result.rowsAffected > 0;
 }
 
 export async function markCodeVerified(handle: string): Promise<void> {
@@ -188,10 +218,18 @@ export async function markCodeVerified(handle: string): Promise<void> {
   ]);
 }
 
-export async function markCloudflareVerified(handle: string, verifiedAt: number): Promise<void> {
-  await run(`UPDATE inbox_claims SET cf_verified_at = ? WHERE handle = ?`, [
+/// Pinned to the address the status was read for. Without that, a slow reply
+/// about one destination could stamp a claim that has since been repointed at
+/// another, marking an address Cloudflare never verified as verified.
+export async function markCloudflareVerified(
+  handle: string,
+  addressId: string,
+  verifiedAt: number
+): Promise<void> {
+  await run(`UPDATE inbox_claims SET cf_verified_at = ? WHERE handle = ? AND cf_address_id = ?`, [
     verifiedAt,
     handle.toLowerCase(),
+    addressId,
   ]);
 }
 

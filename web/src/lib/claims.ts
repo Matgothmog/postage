@@ -23,9 +23,10 @@ export async function settleClaim(handle: string): Promise<ClaimState | null> {
 
   let cloudflareVerified = claim.cf_verified_at !== null;
   if (!cloudflareVerified && claim.cf_address_id) {
-    const current = await destinationStatus(claim.cf_address_id);
+    const addressId = claim.cf_address_id;
+    const current = await destinationStatus(addressId);
     if (current?.verifiedAt != null) {
-      await markCloudflareVerified(claim.handle, current.verifiedAt);
+      await markCloudflareVerified(claim.handle, addressId, current.verifiedAt);
       cloudflareVerified = true;
     }
   }

@@ -1,11 +1,12 @@
 "use client";
 
-import { usePrivy, useSendTransaction, useWallets } from "@privy-io/react-auth";
+import { usePrivy, useSendTransaction, useSignMessage, useWallets } from "@privy-io/react-auth";
 import { useCallback, useEffect, useState } from "react";
 import { encodeFunctionData, formatUnits } from "viem";
 import { publicClient } from "@/lib/client";
 import { POSTAGE_ESCROW, USDC_DECIMALS, escrowAbi } from "@/lib/contracts";
 import { formatUsdc, parseUsdc, shortAddress } from "@/lib/format";
+import { claimStatement, readStatement } from "@/lib/statements";
 
 interface Inbox {
   handle: string;
@@ -15,17 +16,35 @@ interface Inbox {
 export default function Home() {
   const { ready, authenticated, login, logout } = usePrivy();
   const { wallets } = useWallets();
+  const { signMessage } = useSignMessage();
   const wallet = wallets[0];
 
   const [inbox, setInbox] = useState<Inbox | null>(null);
   const [loaded, setLoaded] = useState(false);
 
+  // The row holds the address the user actually reads, so the server will not
+  // hand it over on the strength of a wallet address alone - those are public.
   const refresh = useCallback(async () => {
-    if (!wallet?.address) return;
-    const response = await fetch(`/api/inbox?wallet=${wallet.address}`);
-    if (response.ok) setInbox(((await response.json()) as { inbox: Inbox | null }).inbox);
-    setLoaded(true);
-  }, [wallet?.address]);
+    const address = wallet?.address;
+    if (!address) return;
+    try {
+      const issuedAt = Math.floor(Date.now() / 1000);
+      const { signature } = await signMessage(
+        { message: readStatement(address, issuedAt) },
+        { address, uiOptions: { showWalletUIs: false } }
+      );
+      const response = await fetch("/api/inbox", {
+        headers: {
+          "x-postage-wallet": address,
+          "x-postage-issued": String(issuedAt),
+          "x-postage-signature": signature,
+        },
+      });
+      if (response.ok) setInbox(((await response.json()) as { inbox: Inbox | null }).inbox);
+    } finally {
+      setLoaded(true);
+    }
+  }, [wallet?.address, signMessage]);
 
   useEffect(() => {
     refresh().catch(() => setLoaded(true));
@@ -91,6 +110,7 @@ function CreateInbox({ wallet, onCreated }: { wallet: string; onCreated: () => v
 }
 
 function StartClaim({ wallet, onStarted }: { wallet: string; onStarted: (claim: ClaimState) => void }) {
+  const { signMessage } = useSignMessage();
   const [handle, setHandle] = useState("");
   const [destination, setDestination] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -100,10 +120,18 @@ function StartClaim({ wallet, onStarted }: { wallet: string; onStarted: (claim: 
     setSaving(true);
     setError(null);
     try {
+      const name = handle.trim().toLowerCase();
+      const to = destination.trim().toLowerCase();
+      const issuedAt = Math.floor(Date.now() / 1000);
+      const { signature } = await signMessage(
+        { message: claimStatement(name, to, wallet, issuedAt) },
+        { address: wallet, uiOptions: { showWalletUIs: false } }
+      );
+
       const response = await fetch("/api/inbox", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ handle: handle.trim().toLowerCase(), destination: destination.trim(), wallet }),
+        body: JSON.stringify({ handle: name, destination: to, wallet, issuedAt, signature }),
       });
       const result = (await response.json()) as ClaimState & { error?: string };
       if (!response.ok) throw new Error(result.error ?? "Could not claim that address");
@@ -179,7 +207,11 @@ function ConfirmClaim({
         onLive();
         return;
       }
-      onClaim({ ...claim, codeVerified: next.codeVerified, cloudflareVerified: next.cloudflareVerified });
+      onClaim({
+        ...claim,
+        codeVerified: claim.codeVerified || next.codeVerified,
+        cloudflareVerified: claim.cloudflareVerified || next.cloudflareVerified,
+      });
     },
     [claim, onClaim, onLive]
   );

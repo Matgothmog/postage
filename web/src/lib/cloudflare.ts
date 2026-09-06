@@ -32,15 +32,38 @@ async function call<T>(path: string, init?: RequestInit): Promise<Envelope<T>> {
     cache: "no-store",
   });
 
-  const payload = (await response.json()) as Envelope<T>;
-  if (!response.ok && !payload.errors?.length) {
+  const body = await response.text();
+  let payload: Envelope<T>;
+  try {
+    payload = JSON.parse(body) as Envelope<T>;
+  } catch {
+    // An edge 5xx or a WAF challenge answers with HTML, not JSON.
     throw new Error(`Cloudflare returned ${response.status}`);
+  }
+
+  // A refusal that names an address as already registered is an answer we act
+  // on. Anything else — a revoked token, a rate limit, an outage — is a
+  // failure, and returning it as data would read as "not verified yet" forever.
+  if (!response.ok && !isDuplicate(payload)) {
+    throw new Error(payload.errors?.[0]?.message ?? `Cloudflare returned ${response.status}`);
   }
   return payload;
 }
 
+/// Cloudflare sends a zero value rather than null for an address it has not
+/// verified, and an unparseable date would otherwise become NaN — which passes
+/// every null check and then fails the database bind.
 function toDestination(address: Address): Destination {
-  return { id: address.id, verifiedAt: address.verified ? Math.floor(Date.parse(address.verified) / 1000) : null };
+  const parsed = address.verified ? Date.parse(address.verified) : Number.NaN;
+  const seconds = Math.floor(parsed / 1000);
+  const verifiedAt = Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+  return { id: address.id, verifiedAt };
+}
+
+/// The one refusal that carries information rather than a fault: this address
+/// is already on the account.
+function isDuplicate(payload: Envelope<unknown>): boolean {
+  return (payload.errors ?? []).some((error) => /exist|already/i.test(error.message ?? ""));
 }
 
 /// Registers the address so `message.forward()` will accept it, which also
