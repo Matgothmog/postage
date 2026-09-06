@@ -10,16 +10,12 @@ the behaviour, and confirming it is the first task, not fixing it.
 
 ## Blocking a real demo
 
-**The Cloudflare API token has lost its Email Routing permission.** Verified.
-`GET /accounts/{id}/tokens/verify` reports the token active, but every call to
-`/email/routing/addresses` answers `10000 Authentication error`, three times in
-a row, with the same account id that worked earlier the same day. So signup
-fails at `ensureDestination` before it ever reaches Resend. A token with *Email
-Routing Addresses Write* fixes it, in `web/.env.local` and in the deployment.
-
-**`RESEND_API_KEY` has never been exercised.** The claim path dies at Cloudflare
-first, so nothing has proved the key or `MAIL_FROM` work. `usepostage.com` also
-has to be verified in Resend before it can mail arbitrary recipients.
+**`RESEND_API_KEY` is not set in the deployment.** Verified: a signed claim
+against production answers `{"error":"RESEND_API_KEY is not set"}`, which is our
+own `required()` speaking, so the variable is absent rather than wrong. This is
+the only thing left between here and a working signup. `usepostage.com` also has
+to be verified in Resend before it can mail arbitrary recipients, and `MAIL_FROM`
+is unproven for the same reason.
 
 **World ID is not actually integrated in the browser.** Verified.
 `@worldcoin/idkit` is a dependency, `/api/world/context` signs an `rp_context`
@@ -36,9 +32,14 @@ deployment by exercising the code path that reads each one: `APP_URL`,
 `MAIL_WEBHOOK_SECRET`, `MESSAGE_ID_SECRET`, `CLASSIFIER_PRIVATE_KEY`,
 `ANTHROPIC_API_KEY` (verdicts come back `degraded: false`, so the model really
 runs), `GRAPH_QUERY_URL`, `GRAPH_API_KEY`, `WORLD_RP_ID`, `WORLD_ACTION`,
-`WORLD_RP_SIGNING_KEY` and `CLOUDFLARE_ACCOUNT_ID` all answer correctly.
-`IDENTITY_MODE`, `ATTESTER_PRIVATE_KEY` and `RELAYER_PRIVATE_KEY` are still
-unproven, because exercising them posts a real attestation on Arc.
+`WORLD_RP_SIGNING_KEY`, `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` all
+answer correctly.
+
+`IDENTITY_MODE`, `ATTESTER_PRIVATE_KEY` and `RELAYER_PRIVATE_KEY` were proven by
+posting a real attestation: the relayer submitted it, `isHuman` reads true
+onchain, the subgraph indexed it, and gas came to 75,395 — the figure
+[DEPLOYMENTS.md](DEPLOYMENTS.md) records. Sponsorship therefore works end to
+end: a wallet holding nothing verified without paying.
 
 ## Security
 
@@ -123,6 +124,10 @@ and reaching it kills signup permanently.
 - `mail.ts` hardcodes "15 minutes" while `CODE_TTL_SECONDS` is the source of
   truth, and the `expiresIn` the API returns is dropped client side.
 - Two different `ClaimState` interfaces share a name across files.
+- `recordClaimSend` runs after the mail is sent, but `ensureDestination` runs
+  before it, so a claim that clears Cloudflare and then fails at Resend has
+  already made Cloudflare mail the address without counting against the
+  throttle.
 
 ## Documentation that has drifted
 
