@@ -1,141 +1,155 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-/// @notice Holds postage that a stranger attaches to a message until the
-/// recipient decides whether it was worth receiving.
+import {EIP712} from "openzeppelin/utils/cryptography/EIP712.sol";
+import {ECDSA} from "openzeppelin/utils/cryptography/ECDSA.sol";
+import {EnclaveRegistry} from "./EnclaveRegistry.sol";
+
+/// @notice Collects what a sender pays to reach an inbox, and accrues it to the
+/// person who owns that inbox.
 ///
-/// Postage is paid in native USDC, which on Arc is the gas token, so a stamp
-/// and the transaction that carries it are both denominated in dollars.
-/// Amounts here use the native 18-decimal representation, never the 6-decimal
-/// ERC-20 view of the same balance.
-contract PostageEscrow {
-    enum Status {
-        None,
-        Held,
-        Released,
-        Claimed,
-        Expired
+/// The price is not ours to choose at call time. It is quoted by an enclave
+/// that read the message and decided what it was, and this contract will not
+/// accept a payment unless that quote carries a signature from a key registered
+/// in EnclaveRegistry. A price therefore cannot exist without code whose hash
+/// is public having produced it.
+///
+/// Amounts are native USDC, which on Arc is the gas token, at its 18-decimal
+/// representation. The 6-decimal ERC-20 view of the same balance is never used.
+contract PostageEscrow is EIP712 {
+    /// @notice What the enclave decided a message was. Mirrors the classifier.
+    enum Tier {
+        Human,
+        Important,
+        Commercial,
+        Dangerous
     }
 
-    struct Stamp {
-        address sender;
-        address recipient;
-        uint256 amount;
-        uint64 postedAt;
-        Status status;
-    }
+    bytes32 private constant QUOTE_TYPEHASH = keccak256(
+        "Quote(bytes32 messageId,address inbox,uint8 tier,uint256 amount,uint40 expiresAt)"
+    );
 
-    uint64 public constant EXPIRY = 14 days;
-
-    /// @notice Share of a claimed stamp that funds the vault. Applies only to
-    /// spam: refunds and expiries go back to the sender whole.
+    /// @notice Share of each payment funding the vault that pays gas for people
+    /// who verify. The rest accrues to the inbox.
     uint16 public constant VAULT_BPS = 2_000;
     uint16 private constant ONE = 10_000;
 
+    EnclaveRegistry public immutable registry;
     address public immutable vault;
 
-    /// @notice Minimum postage each inbox owner requires from a stranger.
-    mapping(address inbox => uint256 amount) public price;
+    /// @notice Floor an inbox owner will accept. The enclave may quote above it
+    /// for a risky sender, never below.
+    mapping(address inbox => uint256 amount) public floorPrice;
 
-    mapping(bytes32 messageId => Stamp) public stamps;
+    mapping(address inbox => uint256 amount) public earnings;
 
-    event PriceSet(address indexed inbox, uint256 amount);
-    event StampPosted(
+    /// @notice One payment per message, so a quote cannot be replayed.
+    mapping(bytes32 messageId => bool) public settled;
+
+    event FloorPriceSet(address indexed inbox, uint256 amount);
+    event Paid(
         bytes32 indexed messageId,
         address indexed sender,
-        address indexed recipient,
-        uint256 amount
-    );
-    event StampReleased(bytes32 indexed messageId, address indexed sender, uint256 amount);
-    event StampClaimed(
-        bytes32 indexed messageId,
-        address indexed recipient,
+        address indexed inbox,
+        Tier tier,
         uint256 amount,
         uint256 toVault
     );
-    event StampExpired(bytes32 indexed messageId, address indexed sender, uint256 amount);
+    /// @notice Recipient disagreeing with the classifier after the fact. Moves
+    /// no money; it is reputation the subgraph picks up.
+    event SpamReported(bytes32 indexed messageId, address indexed inbox, address indexed sender);
+    event EarningsClaimed(address indexed inbox, address indexed to, uint256 amount);
 
-    error StampAlreadyExists();
-    error StampNotHeld();
-    error NotRecipient();
-    error NotYetExpired();
-    error InvalidRecipient();
-    error PostageTooLow(uint256 required, uint256 provided);
-    error TransferFailed();
+    error AlreadySettled();
+    error NotSettled();
+    error QuoteExpired();
+    error UnknownEnclave(address signer);
+    error BelowFloor(uint256 required, uint256 quoted);
+    error Underpaid(uint256 quoted, uint256 provided);
+    error NothingToClaim();
     error ZeroAddress();
+    error TransferFailed();
 
-    constructor(address vault_) {
-        if (vault_ == address(0)) revert ZeroAddress();
+    constructor(address registry_, address vault_) EIP712("Postage", "2") {
+        if (registry_ == address(0) || vault_ == address(0)) revert ZeroAddress();
+        registry = EnclaveRegistry(registry_);
         vault = vault_;
     }
 
-    function setPrice(uint256 amount) external {
-        price[msg.sender] = amount;
-        emit PriceSet(msg.sender, amount);
+    function setFloorPrice(uint256 amount) external {
+        floorPrice[msg.sender] = amount;
+        emit FloorPriceSet(msg.sender, amount);
     }
 
-    /// @param messageId Hash of the message this stamp pays for.
-    function postStamp(bytes32 messageId, address recipient) external payable {
-        if (recipient == address(0)) revert InvalidRecipient();
-        if (stamps[messageId].status != Status.None) revert StampAlreadyExists();
+    /// @param enclaveSignature EIP-712 signature over the quote, from a key
+    /// registered in EnclaveRegistry.
+    function payToSend(
+        bytes32 messageId,
+        address inbox,
+        Tier tier,
+        uint256 amount,
+        uint40 expiresAt,
+        bytes calldata enclaveSignature
+    ) external payable {
+        if (settled[messageId]) revert AlreadySettled();
+        if (block.timestamp >= expiresAt) revert QuoteExpired();
 
-        uint256 required = price[recipient];
-        if (msg.value < required) revert PostageTooLow(required, msg.value);
+        uint256 floor = floorPrice[inbox];
+        if (amount < floor) revert BelowFloor(floor, amount);
+        if (msg.value < amount) revert Underpaid(amount, msg.value);
 
-        stamps[messageId] = Stamp({
-            sender: msg.sender,
-            recipient: recipient,
-            amount: msg.value,
-            postedAt: uint64(block.timestamp),
-            status: Status.Held
-        });
+        address signer = _recoverQuoteSigner(messageId, inbox, tier, amount, expiresAt, enclaveSignature);
+        if (!registry.isRegistered(signer)) revert UnknownEnclave(signer);
 
-        emit StampPosted(messageId, msg.sender, recipient, msg.value);
-    }
+        settled[messageId] = true;
 
-    /// @notice The message was legitimate. Give the postage back.
-    function release(bytes32 messageId) external {
-        Stamp storage stamp = _heldStamp(messageId);
-        if (msg.sender != stamp.recipient) revert NotRecipient();
+        uint256 toVault = (msg.value * VAULT_BPS) / ONE;
+        earnings[inbox] += msg.value - toVault;
 
-        (address sender, uint256 amount) = (stamp.sender, stamp.amount);
-        stamp.status = Status.Released;
-
-        emit StampReleased(messageId, sender, amount);
-        _pay(sender, amount);
-    }
-
-    /// @notice The message was spam. Keep most of the postage; the rest funds
-    /// the vault that pays gas for people who verify instead of paying.
-    function claim(bytes32 messageId) external {
-        Stamp storage stamp = _heldStamp(messageId);
-        if (msg.sender != stamp.recipient) revert NotRecipient();
-
-        uint256 amount = stamp.amount;
-        stamp.status = Status.Claimed;
-
-        uint256 toVault = (amount * VAULT_BPS) / ONE;
-
-        emit StampClaimed(messageId, msg.sender, amount - toVault, toVault);
-        _pay(msg.sender, amount - toVault);
+        emit Paid(messageId, msg.sender, inbox, tier, msg.value - toVault, toVault);
         _pay(vault, toVault);
     }
 
-    /// @notice Recipients who never respond do not get to hold postage forever.
-    function expire(bytes32 messageId) external {
-        Stamp storage stamp = _heldStamp(messageId);
-        if (block.timestamp < stamp.postedAt + EXPIRY) revert NotYetExpired();
-
-        (address sender, uint256 amount) = (stamp.sender, stamp.amount);
-        stamp.status = Status.Expired;
-
-        emit StampExpired(messageId, sender, amount);
-        _pay(sender, amount);
+    /// @notice The classifier let something through that should not have been.
+    /// Recorded rather than refunded: the money has already accrued, and what
+    /// matters is that this sender is priced worse next time.
+    function reportSpam(bytes32 messageId, address sender) external {
+        if (!settled[messageId]) revert NotSettled();
+        emit SpamReported(messageId, msg.sender, sender);
     }
 
-    function _heldStamp(bytes32 messageId) private view returns (Stamp storage stamp) {
-        stamp = stamps[messageId];
-        if (stamp.status != Status.Held) revert StampNotHeld();
+    function claimEarnings(address to) external {
+        if (to == address(0)) revert ZeroAddress();
+
+        uint256 amount = earnings[msg.sender];
+        if (amount == 0) revert NothingToClaim();
+        earnings[msg.sender] = 0;
+
+        emit EarningsClaimed(msg.sender, to, amount);
+        _pay(to, amount);
+    }
+
+    function quoteDigest(
+        bytes32 messageId,
+        address inbox,
+        Tier tier,
+        uint256 amount,
+        uint40 expiresAt
+    ) public view returns (bytes32) {
+        return _hashTypedDataV4(
+            keccak256(abi.encode(QUOTE_TYPEHASH, messageId, inbox, uint8(tier), amount, expiresAt))
+        );
+    }
+
+    function _recoverQuoteSigner(
+        bytes32 messageId,
+        address inbox,
+        Tier tier,
+        uint256 amount,
+        uint40 expiresAt,
+        bytes calldata signature
+    ) private view returns (address) {
+        return ECDSA.recover(quoteDigest(messageId, inbox, tier, amount, expiresAt), signature);
     }
 
     function _pay(address to, uint256 amount) private {

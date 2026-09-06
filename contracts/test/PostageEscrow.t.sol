@@ -2,158 +2,184 @@
 pragma solidity 0.8.28;
 
 import {Test} from "forge-std/Test.sol";
+import {EnclaveRegistry} from "../src/EnclaveRegistry.sol";
 import {PostageEscrow} from "../src/PostageEscrow.sol";
 import {PostageVault} from "../src/PostageVault.sol";
 
 contract PostageEscrowTest is Test {
+    EnclaveRegistry internal registry;
     PostageEscrow internal escrow;
     PostageVault internal vault;
 
-    address internal alice = makeAddr("alice");
-    address internal bob = makeAddr("bob");
-    address internal mallory = makeAddr("mallory");
+    uint256 internal enclaveKey = 0xE1C1A7E;
+    address internal enclave;
 
-    bytes32 internal constant MESSAGE = keccak256("subject: hello");
-    uint256 internal constant CENT = 0.01 ether;
-
+    address internal owner = makeAddr("owner");
     address internal treasury = makeAddr("treasury");
     address internal relayer = makeAddr("relayer");
+    address internal alice = makeAddr("alice");
+    address internal sender = makeAddr("sender");
+
+    bytes32 internal constant MESSAGE = keccak256("subject: newsletter");
+    bytes32 internal constant MEASUREMENT = keccak256("pcr0");
+    uint256 internal constant CENT = 0.01 ether;
 
     function setUp() public {
+        enclave = vm.addr(enclaveKey);
+
         vault = new PostageVault(treasury, relayer);
-        escrow = new PostageEscrow(address(vault));
-        vm.deal(bob, 1 ether);
-        vm.deal(mallory, 1 ether);
+        registry = new EnclaveRegistry(owner);
+        escrow = new PostageEscrow(address(registry), address(vault));
+
+        vm.startPrank(owner);
+        registry.setMeasurement(MEASUREMENT);
+        registry.register(enclave);
+        vm.stopPrank();
 
         vm.prank(alice);
-        escrow.setPrice(CENT);
+        escrow.setFloorPrice(CENT);
+
+        vm.deal(sender, 1 ether);
     }
 
-    function _post(address sender, bytes32 messageId) private {
+    function _sign(uint256 key, bytes32 messageId, PostageEscrow.Tier tier, uint256 amount, uint40 expiresAt)
+        private
+        view
+        returns (bytes memory)
+    {
+        bytes32 digest = escrow.quoteDigest(messageId, alice, tier, amount, expiresAt);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(key, digest);
+        return abi.encodePacked(r, s, v);
+    }
+
+    function _expiry() private view returns (uint40) {
+        return uint40(block.timestamp + 1 hours);
+    }
+
+    function test_paymentAccruesToInboxAndVault() public {
+        uint40 expiry = _expiry();
+        bytes memory quote = _sign(enclaveKey, MESSAGE, PostageEscrow.Tier.Commercial, CENT, expiry);
+
         vm.prank(sender);
-        escrow.postStamp{value: CENT}(messageId, alice);
-    }
-
-    function test_releaseRefundsSender() public {
-        _post(bob, MESSAGE);
-        assertEq(bob.balance, 1 ether - CENT);
-
-        vm.prank(alice);
-        escrow.release(MESSAGE);
-
-        assertEq(bob.balance, 1 ether);
-        assertEq(alice.balance, 0);
-    }
-
-    function test_claimSplitsBetweenRecipientAndVault() public {
-        _post(bob, MESSAGE);
-
-        vm.prank(alice);
-        escrow.claim(MESSAGE);
+        escrow.payToSend{value: CENT}(MESSAGE, alice, PostageEscrow.Tier.Commercial, CENT, expiry, quote);
 
         uint256 toVault = (CENT * escrow.VAULT_BPS()) / 10_000;
-        assertEq(alice.balance, CENT - toVault);
+        assertEq(escrow.earnings(alice), CENT - toVault);
         assertEq(address(vault).balance, toVault);
-        assertEq(bob.balance, 1 ether - CENT);
     }
 
-    function test_refundsAreNeverSkimmed() public {
-        _post(bob, MESSAGE);
+    function test_rejectsPriceNotSignedByAnEnclave() public {
+        uint40 expiry = _expiry();
+        bytes memory forged = _sign(0xBAD, MESSAGE, PostageEscrow.Tier.Commercial, CENT, expiry);
+        address forger = vm.addr(0xBAD);
+
+        vm.prank(sender);
+        vm.expectRevert(abi.encodeWithSelector(PostageEscrow.UnknownEnclave.selector, forger));
+        escrow.payToSend{value: CENT}(MESSAGE, alice, PostageEscrow.Tier.Commercial, CENT, expiry, forged);
+    }
+
+    function test_rejectsRevokedEnclave() public {
+        uint40 expiry = _expiry();
+        bytes memory quote = _sign(enclaveKey, MESSAGE, PostageEscrow.Tier.Commercial, CENT, expiry);
+
+        vm.prank(owner);
+        registry.revoke(enclave);
+
+        vm.prank(sender);
+        vm.expectRevert(abi.encodeWithSelector(PostageEscrow.UnknownEnclave.selector, enclave));
+        escrow.payToSend{value: CENT}(MESSAGE, alice, PostageEscrow.Tier.Commercial, CENT, expiry, quote);
+    }
+
+    function test_quoteCannotBeReplayedOnAnotherMessage() public {
+        uint40 expiry = _expiry();
+        bytes memory quote = _sign(enclaveKey, MESSAGE, PostageEscrow.Tier.Commercial, CENT, expiry);
+
+        vm.prank(sender);
+        escrow.payToSend{value: CENT}(MESSAGE, alice, PostageEscrow.Tier.Commercial, CENT, expiry, quote);
+
+        vm.prank(sender);
+        vm.expectRevert(PostageEscrow.AlreadySettled.selector);
+        escrow.payToSend{value: CENT}(MESSAGE, alice, PostageEscrow.Tier.Commercial, CENT, expiry, quote);
+    }
+
+    function test_staleQuoteIsRejected() public {
+        uint40 expiry = _expiry();
+        bytes memory quote = _sign(enclaveKey, MESSAGE, PostageEscrow.Tier.Commercial, CENT, expiry);
+
+        vm.warp(expiry);
+
+        vm.prank(sender);
+        vm.expectRevert(PostageEscrow.QuoteExpired.selector);
+        escrow.payToSend{value: CENT}(MESSAGE, alice, PostageEscrow.Tier.Commercial, CENT, expiry, quote);
+    }
+
+    /// The enclave may price above an inbox's floor but never below it.
+    function test_quoteBelowInboxFloorIsRejected() public {
+        uint40 expiry = _expiry();
+        uint256 tooLow = CENT - 1;
+        bytes memory quote = _sign(enclaveKey, MESSAGE, PostageEscrow.Tier.Commercial, tooLow, expiry);
+
+        vm.prank(sender);
+        vm.expectRevert(abi.encodeWithSelector(PostageEscrow.BelowFloor.selector, CENT, tooLow));
+        escrow.payToSend{value: CENT}(MESSAGE, alice, PostageEscrow.Tier.Commercial, tooLow, expiry, quote);
+    }
+
+    function test_underpayingTheQuoteIsRejected() public {
+        uint40 expiry = _expiry();
+        uint256 quoted = CENT * 5;
+        bytes memory quote = _sign(enclaveKey, MESSAGE, PostageEscrow.Tier.Dangerous, quoted, expiry);
+
+        vm.prank(sender);
+        vm.expectRevert(abi.encodeWithSelector(PostageEscrow.Underpaid.selector, quoted, CENT));
+        escrow.payToSend{value: CENT}(MESSAGE, alice, PostageEscrow.Tier.Dangerous, quoted, expiry, quote);
+    }
+
+    /// Tampering with any signed field must invalidate the quote, since the
+    /// signature is what makes the price trustworthy.
+    function test_tamperedAmountInvalidatesTheQuote() public {
+        uint40 expiry = _expiry();
+        bytes memory quote = _sign(enclaveKey, MESSAGE, PostageEscrow.Tier.Commercial, CENT, expiry);
+
+        vm.prank(sender);
+        vm.expectRevert();
+        escrow.payToSend{value: CENT * 2}(MESSAGE, alice, PostageEscrow.Tier.Commercial, CENT * 2, expiry, quote);
+    }
+
+    function test_inboxClaimsItsEarningsOnce() public {
+        uint40 expiry = _expiry();
+        bytes memory quote = _sign(enclaveKey, MESSAGE, PostageEscrow.Tier.Commercial, CENT, expiry);
+
+        vm.prank(sender);
+        escrow.payToSend{value: CENT}(MESSAGE, alice, PostageEscrow.Tier.Commercial, CENT, expiry, quote);
+
+        uint256 accrued = escrow.earnings(alice);
+        vm.prank(alice);
+        escrow.claimEarnings(alice);
+
+        assertEq(alice.balance, accrued);
+        assertEq(escrow.earnings(alice), 0);
 
         vm.prank(alice);
-        escrow.release(MESSAGE);
-
-        assertEq(bob.balance, 1 ether, "sender must get the whole bond back");
-        assertEq(address(vault).balance, 0, "vault must not touch a refund");
+        vm.expectRevert(PostageEscrow.NothingToClaim.selector);
+        escrow.claimEarnings(alice);
     }
 
-    function test_expiryIsNeverSkimmed() public {
-        _post(bob, MESSAGE);
-
-        vm.warp(block.timestamp + 14 days);
-        escrow.expire(MESSAGE);
-
-        assertEq(bob.balance, 1 ether);
-        assertEq(address(vault).balance, 0);
-    }
-
-    function test_expireRefundsSenderAfterFourteenDays() public {
-        _post(bob, MESSAGE);
-
-        vm.warp(block.timestamp + 14 days);
-        escrow.expire(MESSAGE);
-
-        assertEq(bob.balance, 1 ether);
-    }
-
-    function test_expireRevertsBeforeDeadline() public {
-        _post(bob, MESSAGE);
-
-        vm.warp(block.timestamp + 14 days - 1);
-        vm.expectRevert(PostageEscrow.NotYetExpired.selector);
-        escrow.expire(MESSAGE);
-    }
-
-    function test_onlyRecipientCanRelease() public {
-        _post(bob, MESSAGE);
-
-        vm.prank(mallory);
-        vm.expectRevert(PostageEscrow.NotRecipient.selector);
-        escrow.release(MESSAGE);
-    }
-
-    function test_onlyRecipientCanClaim() public {
-        _post(bob, MESSAGE);
-
-        vm.prank(mallory);
-        vm.expectRevert(PostageEscrow.NotRecipient.selector);
-        escrow.claim(MESSAGE);
-    }
-
-    function test_underpaidStampReverts() public {
-        vm.prank(bob);
-        vm.expectRevert(
-            abi.encodeWithSelector(PostageEscrow.PostageTooLow.selector, CENT, CENT - 1)
-        );
-        escrow.postStamp{value: CENT - 1}(MESSAGE, alice);
-    }
-
-    function test_cannotReuseMessageId() public {
-        _post(bob, MESSAGE);
-
-        vm.prank(mallory);
-        vm.expectRevert(PostageEscrow.StampAlreadyExists.selector);
-        escrow.postStamp{value: CENT}(MESSAGE, alice);
-    }
-
-    function test_cannotSettleTwice() public {
-        _post(bob, MESSAGE);
-
-        vm.startPrank(alice);
-        escrow.claim(MESSAGE);
-        vm.expectRevert(PostageEscrow.StampNotHeld.selector);
-        escrow.release(MESSAGE);
-        vm.stopPrank();
-    }
-
-    function test_inboxWithoutPriceAcceptsAnything() public {
-        vm.prank(bob);
-        escrow.postStamp{value: 1 wei}(MESSAGE, mallory);
-
-        (,, uint256 amount,,) = escrow.stamps(MESSAGE);
-        assertEq(amount, 1 wei);
-    }
-
-    function testFuzz_releaseAlwaysReturnsFullAmount(uint96 amount) public {
-        vm.assume(amount >= CENT);
-        vm.deal(bob, amount);
-
-        vm.prank(bob);
-        escrow.postStamp{value: amount}(MESSAGE, alice);
-        assertEq(bob.balance, 0);
-
+    function test_spamReportNeedsASettledMessage() public {
         vm.prank(alice);
-        escrow.release(MESSAGE);
-        assertEq(bob.balance, amount);
+        vm.expectRevert(PostageEscrow.NotSettled.selector);
+        escrow.reportSpam(MESSAGE, sender);
+    }
+
+    function testFuzz_vaultAndInboxAlwaysSplitTheWholePayment(uint96 paid) public {
+        vm.assume(paid >= CENT);
+        vm.deal(sender, paid);
+
+        uint40 expiry = _expiry();
+        bytes memory quote = _sign(enclaveKey, MESSAGE, PostageEscrow.Tier.Commercial, CENT, expiry);
+
+        vm.prank(sender);
+        escrow.payToSend{value: paid}(MESSAGE, alice, PostageEscrow.Tier.Commercial, CENT, expiry, quote);
+
+        assertEq(escrow.earnings(alice) + address(vault).balance, paid);
     }
 }
