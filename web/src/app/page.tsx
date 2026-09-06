@@ -10,7 +10,6 @@ import { formatUsdc, parseUsdc, shortAddress } from "@/lib/format";
 interface Inbox {
   handle: string;
   destination: string;
-  floor_price: string;
 }
 
 export default function Home() {

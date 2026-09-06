@@ -6,7 +6,6 @@ export interface Inbox {
   destination: string;
   /// Wallet that earnings accrue to and that can claim them.
   wallet: string | null;
-  floor_price: string;
   created_at: number;
 }
 
@@ -15,7 +14,6 @@ const SCHEMA = [
      handle TEXT PRIMARY KEY,
      destination TEXT NOT NULL,
      wallet TEXT,
-     floor_price TEXT NOT NULL DEFAULT '10000000000000000',
      created_at INTEGER NOT NULL
    )`,
   `CREATE INDEX IF NOT EXISTS inboxes_by_wallet ON inboxes (wallet)`,

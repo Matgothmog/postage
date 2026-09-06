@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { Hex } from "viem";
+import { publicClient } from "@/lib/client";
 import { classify, extractUrls, type MailFacts } from "@/lib/classify";
+import { POSTAGE_ESCROW, escrowAbi } from "@/lib/contracts";
 import { allowlist, createChallenge, inboxByHandle, isAllowlisted } from "@/lib/db";
 import { required } from "@/lib/env";
 import { quote } from "@/lib/pricing";
@@ -71,7 +73,17 @@ export async function POST(request: Request) {
   }
 
   const signals = payload.senderWallet ? await gatherSignals(payload.senderWallet) : null;
-  const priced = quote(BigInt(inbox.floor_price), verdict.tier, signals, verdict.degraded);
+
+  // The floor comes from the chain, never from our own database. The escrow
+  // reverts on anything below it, so a cached copy that drifts out of date
+  // produces quotes nobody can pay.
+  const floor = await publicClient.readContract({
+    address: POSTAGE_ESCROW,
+    abi: escrowAbi,
+    functionName: "floorPrice",
+    args: [inbox.wallet as Hex],
+  });
+  const priced = quote(floor, verdict.tier, signals, verdict.degraded);
 
   const token = randomUUID().replaceAll("-", "");
   const receivedAt = Math.floor(Date.now() / 1000);
