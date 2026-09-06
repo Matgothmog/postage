@@ -89,6 +89,7 @@ itself inside an enclave — see [ARCHITECTURE.md](ARCHITECTURE.md#what-privacy-
     worker/      the Cloudflare mail worker
 
 [ARCHITECTURE.md](ARCHITECTURE.md) explains how the parts fit together and why
-each is there. Addresses are in [DEPLOYMENTS.md](DEPLOYMENTS.md).
+each is there. Addresses are in [DEPLOYMENTS.md](DEPLOYMENTS.md). What is known
+to be wrong with it is in [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
 
 Built for ETHOnline 2026.
