@@ -27,7 +27,8 @@ export default async function ChallengePage({ params }: PageProps<"/c/[token]">)
       <Shell>
         <h1 className="text-xl font-semibold">Already cleared</h1>
         <p className="mt-2 text-neutral-600">
-          You can write to {challenge.handle}@usepostage.com and it will go straight through.
+          Whatever you sent to {challenge.handle}@usepostage.com has been dealt with. A pass lasts
+          fifteen minutes, so writing again later means proving you are a person again.
         </p>
       </Shell>
     );
@@ -54,16 +55,18 @@ export default async function ChallengePage({ params }: PageProps<"/c/[token]">)
       {dangerous ? (
         <p className="mt-6 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
           This looked like an attempt to deceive the recipient, so it will not be delivered
-          whatever happens next. If that is wrong, proving you are a person is the way to say so.
+          whatever happens next. Being a person does not clear it, and paying is a penalty rather
+          than a price. If the verdict is wrong, this page is where to say so.
         </p>
       ) : (
         <p className="mt-6 text-sm text-neutral-600">
-          Prove there is a person behind it and it goes through for nothing, permanently. Otherwise
-          this inbox charges {formatUsdc(BigInt(quote.amount))} for automated mail.
+          Prove there is a person behind it and it goes through for nothing. Otherwise we take you
+          for a machine, and this inbox charges {formatUsdc(BigInt(quote.amount))} to let it
+          through.
         </p>
       )}
 
-      <ChallengeActions token={token} quote={quote} dangerous={dangerous} />
+      <ChallengeActions token={token} quote={quote} dangerous={dangerous} handle={challenge.handle} />
 
       <p className="mt-10 border-t border-neutral-200 pt-6 text-sm text-neutral-500">
         Tired of the same problem? Hand out a Postage address instead of your own and get paid by

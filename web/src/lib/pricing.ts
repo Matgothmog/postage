@@ -16,7 +16,12 @@ const YEAR_SECONDS = 365 * 24 * 60 * 60;
 /// What each verdict costs before reputation is considered, in basis points of
 /// the inbox's floor price.
 const TIER_BPS: Record<Tier, number> = {
-  human: 0,
+  /// Reads as written by a person, but nobody proved it. We assume a machine
+  /// and charge the floor - the cheapest tier, because it probably is someone
+  /// who could not or would not verify.
+  human: ONE,
+  /// Never charged, because it is never held. A login code nobody can pay for
+  /// is a login code that never arrives.
   important: 0,
   commercial: ONE,
   /// Deliberately punitive. Dangerous mail is blocked either way; this is what
@@ -34,9 +39,6 @@ export function quote(
   signals: SenderSignals | null,
   degraded: boolean
 ): Quote {
-  if (tier === "human") {
-    return { amount: 0n, floor, multiplierBps: 0, free: true, reasons: ["Written by a verified person"] };
-  }
   if (tier === "important") {
     return {
       amount: 0n,
@@ -52,6 +54,8 @@ export function quote(
 
   if (tier === "dangerous") {
     reasons.push("Classified as an attempt to deceive the recipient");
+  } else if (tier === "human") {
+    reasons.push("Reads as written by a person, but nobody has proved it yet");
   } else {
     reasons.push("Automated mail the recipient did not ask for");
   }

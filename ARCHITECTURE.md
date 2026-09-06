@@ -41,14 +41,23 @@ flowchart TB
 The classifier reads the whole message plus the SPF, DKIM and DMARC results the
 receiving MTA already computed, and returns one verdict.
 
-| Verdict | Delivered | Charged |
-| --- | --- | --- |
-| `human` | yes, free | no |
-| `important` | yes, free | no |
-| `commercial` | once paid | inbox floor × reputation |
-| `dangerous` | **never** | 10× floor, if a wallet is attached |
+| Verdict | Held | Cleared by | Charged |
+| --- | --- | --- | --- |
+| `important` | no | — | no |
+| `human` | yes | proving personhood | floor × reputation, if they will not prove it |
+| `commercial` | yes | paying | floor × reputation |
+| `dangerous` | yes, permanently | **nothing** | 10× floor, if a wallet is attached |
 
-Two consequences worth being explicit about:
+The tier does not decide whether a stranger is held — everyone is. It decides
+who pays to get out.
+
+Three consequences worth being explicit about:
+
+**`important` is never held, and that is not a loophole.** A login code nobody
+can pay for is a login code that never arrives. No bank or SaaS will click a
+challenge link, so holding this tier would lock people out of their own accounts
+rather than charge anyone. It is the one place the gate would cost more than the
+spam it stops.
 
 **Dangerous mail is blocked whether or not anyone pays.** Charging a connected
 wallet is a penalty, not a price for delivery. Real phishing attaches no wallet
@@ -61,12 +70,17 @@ unreachable, the gateway falls back to SPF/DKIM/DMARC, sender domain and subject
 heuristics, and that path is barred from returning `dangerous` — a wrong verdict
 there both blocks real mail and charges punitively for it.
 
-Clearing the gate once puts a sender on the inbox's allowlist, and that skips
-classification entirely from then on. The allowlist is keyed on the envelope
-address, which anyone can write anything into, so the fast path is taken only
-when the receiving MTA could confirm the sender is who they say — DMARC passing,
-or SPF passing without DKIM failing. Everything else is classified on its
-merits. Otherwise the allowlist would be a list of names worth forging.
+Clearing the gate grants a pass, and a pass runs out. Proving personhood opens a
+fifteen minute window; paying buys a single delivery. Neither is a standing
+welcome, because a World ID proof says a person was present a moment ago rather
+than that an address belongs to one — and an address is not a person, it is a
+string a machine can hold. Until liveness detection can tell those apart over
+time, the honest reading of a proof is the narrow one.
+
+The pass is keyed on the envelope address, which anyone can write anything into,
+so it is honoured only when the receiving MTA could confirm the sender is who
+they say — DMARC passing, or SPF passing without DKIM failing. Otherwise it
+would be a list of names worth forging.
 
 ## The price cannot be invented
 
@@ -226,6 +240,26 @@ else is server-side.
 The attester, relayer and classifier are separate keys on purpose. Compromising
 the relayer drains a few cents of sponsorship and nothing else; compromising the
 classifier lets someone set prices but not mint personhood.
+
+## Nothing is held on our side
+
+A held message is refused inside SMTP, so it never becomes ours. It stays in the
+sender's outbox, which is the only copy that existed before we saw it.
+
+The alternative — accepting the message, keeping it while the sender verifies,
+then delivering it — is what "held" usually means, and it was considered. It
+would remove the resend, and it costs too much. Cloudflare cannot defer an SMTP
+session: `setReject` is a permanent error and the API has no way to hold a
+message. So holding means taking custody of the body, storing strangers' mail in
+plaintext, and re-injecting it later through a raw-MIME relay to keep DKIM
+intact. That trades the one confidentiality claim this design can honestly make
+for a saving in clicks.
+
+The bounce carries the weight instead. It says what happened and what to do in a
+single line, and the challenge page will take the message pasted back in and
+deliver it, so the sender need not return to their mail client. What is pasted
+is relayed and forgotten; it is sent under our name with theirs in `Reply-To`,
+never forged into `From`.
 
 ## What is deliberately not stored
 

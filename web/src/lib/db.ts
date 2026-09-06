@@ -17,12 +17,17 @@ const SCHEMA = [
      created_at INTEGER NOT NULL
    )`,
   `CREATE INDEX IF NOT EXISTS inboxes_by_wallet ON inboxes (wallet)`,
-  /// Senders that cleared the gate once for this inbox and never see it again.
-  `CREATE TABLE IF NOT EXISTS allowlist (
+  /// A sender's permission to reach an inbox, and it runs out. Proving
+  /// personhood buys a short window rather than a standing welcome, because
+  /// the proof says a person was there a moment ago, not that this address
+  /// belongs to one. Paying buys exactly one delivery.
+  `CREATE TABLE IF NOT EXISTS passes (
      handle TEXT NOT NULL,
      sender TEXT NOT NULL,
      reason TEXT NOT NULL,
-     added_at INTEGER NOT NULL,
+     expires_at INTEGER NOT NULL,
+     uses_left INTEGER,
+     created_at INTEGER NOT NULL,
      PRIMARY KEY (handle, sender)
    )`,
   /// A handle someone is part way through claiming. It becomes a row in
@@ -119,18 +124,52 @@ export async function inboxByWallet(wallet: string): Promise<Inbox | null> {
   return rows[0] ?? null;
 }
 
-export async function isAllowlisted(handle: string, sender: string): Promise<boolean> {
-  const rows = await all(`SELECT 1 FROM allowlist WHERE handle = ? AND sender = ?`, [
-    handle.toLowerCase(),
-    sender.toLowerCase(),
-  ]);
-  return rows.length > 0;
+/// How long proving personhood keeps the gate open. Long enough to send the
+/// message that was just refused, short enough that the proof is about now.
+export const PASS_WINDOW_SECONDS = 15 * 60;
+
+export interface Pass {
+  reason: string;
+  expires_at: number;
+  uses_left: number | null;
 }
 
-export async function allowlist(handle: string, sender: string, reason: string): Promise<void> {
+/// Takes one delivery from a live pass. A pass bought by paying carries a
+/// single use and is spent here; one earned by proving personhood carries none,
+/// and lasts until it expires.
+export async function spendPass(handle: string, sender: string): Promise<Pass | null> {
+  const rows = await all<Pass>(
+    `SELECT reason, expires_at, uses_left FROM passes
+     WHERE handle = ? AND sender = ? AND expires_at > ? AND (uses_left IS NULL OR uses_left > 0)`,
+    [handle.toLowerCase(), sender.toLowerCase(), Math.floor(Date.now() / 1000)]
+  );
+  const pass = rows[0];
+  if (!pass) return null;
+
+  if (pass.uses_left !== null) {
+    await run(
+      `UPDATE passes SET uses_left = uses_left - 1 WHERE handle = ? AND sender = ? AND uses_left > 0`,
+      [handle.toLowerCase(), sender.toLowerCase()]
+    );
+  }
+  return pass;
+}
+
+export async function grantPass(
+  handle: string,
+  sender: string,
+  reason: string,
+  usesLeft: number | null
+): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
   await run(
-    `INSERT OR IGNORE INTO allowlist (handle, sender, reason, added_at) VALUES (?, ?, ?, ?)`,
-    [handle.toLowerCase(), sender.toLowerCase(), reason, Math.floor(Date.now() / 1000)]
+    `INSERT INTO passes (handle, sender, reason, expires_at, uses_left, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT (handle, sender) DO UPDATE SET
+       reason = excluded.reason,
+       expires_at = excluded.expires_at,
+       uses_left = excluded.uses_left`,
+    [handle.toLowerCase(), sender.toLowerCase(), reason, now + PASS_WINDOW_SECONDS, usesLeft, now]
   );
 }
 

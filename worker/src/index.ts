@@ -54,13 +54,20 @@ export default {
       return;
     }
 
-    message.setReject(
-      verdict.challenge_url
-        ? `Message held. Release it at ${verdict.challenge_url}`
-        : "Message rejected"
-    );
+    // This line is the only thing the sender ever sees, so it has to say what
+    // happened and what to do about it in one breath. Their mail is still in
+    // their outbox; the link is how it gets through.
+    message.setReject(rejection(verdict));
   },
 };
+
+function rejection(verdict: Verdict): string {
+  if (!verdict.challenge_url) return "Not delivered.";
+  if (verdict.reason === "dangerous") {
+    return `Not delivered: this looks like an attempt to deceive the recipient, and paying will not change that. If it is a mistake, say so at ${verdict.challenge_url}`;
+  }
+  return `Not delivered: prove you are a person for free, or pay, then send again - ${verdict.challenge_url}`;
+}
 
 async function ask(
   env: Env,

@@ -40,3 +40,42 @@ function body(handle: string, code: string): string {
     "confirm, and the code expires in 15 minutes.",
   ].join("\n");
 }
+
+/// Sends a message a cleared sender pasted back in.
+///
+/// It goes out under our own name with theirs in Reply-To, rather than forged
+/// into the From line. A message that claimed to be from them would be
+/// unsigned mail wearing their domain, which is the thing this whole gateway
+/// exists to catch.
+export async function relayHeldMessage(message: {
+  to: string;
+  from: string;
+  handle: string;
+  subject: string;
+  body: string;
+}): Promise<void> {
+  const response = await fetch(RESEND_ENDPOINT, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${required("RESEND_API_KEY")}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      from: required("MAIL_FROM"),
+      to: message.to,
+      reply_to: message.from,
+      subject: message.subject,
+      text: [
+        message.body,
+        "",
+        "—",
+        `Sent to ${message.handle}@usepostage.com by ${message.from}, who cleared the gate.`,
+        "Replying goes straight to them.",
+      ].join("\n"),
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Could not deliver it: ${(await response.text()).slice(0, 200)}`);
+  }
+}

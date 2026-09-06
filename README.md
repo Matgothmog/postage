@@ -17,16 +17,26 @@ for it, and the money is yours.
 That is the whole idea. Everything below is in service of making a one-cent
 charge on a stranger's email actually work.
 
+Every stranger is held. The classifier does not decide whether to hold you, it
+decides **who pays to get through**.
+
 | What it is | What happens |
 | --- | --- |
-| Written by a person | Delivered free. The sender never sees the gate again. |
-| Something you are waiting for — a login code, a receipt, a delivery update | Delivered free, immediately |
-| Ordinary automated mail — newsletters, marketing | Held. The sender pays your price, and it goes to you |
-| Trying to deceive you | Never delivered. Charged if a wallet is attached |
+| Something you are waiting for — a login code, a receipt, a delivery update | Delivered at once, free. Never held. |
+| Written by a person | Held. Proving you are a person clears it for nothing. |
+| Ordinary automated mail — newsletters, marketing | Held. Nobody proved a person is behind it, so it pays. |
+| Trying to deceive you | Never delivered. Being a person does not clear it, and paying is a penalty. |
 
-A stranger is refused once, inside SMTP, with a link. They prove they are a
-person and it costs nothing, or they pay. Either way they join your allowlist
-and never hit the gate again. **One refusal per sender, ever.**
+A stranger is refused inside SMTP with a link. They prove they are a person and
+it costs nothing, or they pay, and their message goes through. The refusal is
+not a bounce into nowhere — their mail is still in their outbox, and the
+challenge page will deliver it for them if they paste it back in.
+
+**A pass runs out.** Proving personhood opens a fifteen minute window; paying
+buys one delivery. Writing again tomorrow means proving it again. World ID is a
+check that someone was there a moment ago, not a badge an address keeps, and
+until liveness detection is good enough to say otherwise this treats it that
+way.
 
 ## Why it needs all of this
 
@@ -34,7 +44,7 @@ and never hit the gate again. **One refusal per sender, ever.**
 and the half-cent of gas that moves it are quoted in the same unit. On a chain
 with a volatile gas token, a one-cent price is not a coherent idea.
 
-**World ID** is the free lane. A liveness and uniqueness check built for exactly
+**World ID** is the free lane, and it is asked every time. A liveness and uniqueness check built for exactly
 this — bot defence where speed matters — and its per-action nullifier means one
 person cannot mint themselves unlimited free senders.
 

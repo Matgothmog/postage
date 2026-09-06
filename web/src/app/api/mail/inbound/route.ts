@@ -3,13 +3,7 @@ import type { Hex } from "viem";
 import { publicClient } from "@/lib/client";
 import { classify, extractUrls, type MailFacts } from "@/lib/classify";
 import { POSTAGE_ESCROW, escrowAbi } from "@/lib/contracts";
-import {
-  allowlist,
-  createChallenge,
-  inboxByHandle,
-  isAllowlisted,
-  walletForSender,
-} from "@/lib/db";
+import { createChallenge, inboxByHandle, spendPass, walletForSender } from "@/lib/db";
 import { required } from "@/lib/env";
 import { quote } from "@/lib/pricing";
 import { messageIdFor, signQuote } from "@/lib/quote";
@@ -34,8 +28,18 @@ function senderIsAuthenticated(payload: Partial<InboundPayload>): boolean {
   return payload.spf === "pass" && payload.dkim !== "fail";
 }
 
-/// Called by the mail worker for every inbound message. Decides whether it is
-/// forwarded, and if not, what it would cost to change that.
+/// Called by the mail worker for every inbound message.
+///
+/// Every stranger is held. The classifier does not decide whether to hold, it
+/// decides who pays to get through:
+///
+///   important   delivered at once, free. A login code nobody can pay for is a
+///               login code that never arrives, so this tier is never held.
+///   human       held. Proving personhood clears it for nothing.
+///   commercial  held. Assumed to be a machine, so it pays.
+///   dangerous   never delivered, whatever anyone does. Charged as a penalty
+///               if a wallet is attached, and proving personhood does not
+///               clear it - a real person can still be phishing.
 ///
 /// Nothing about the message is stored. The challenge row records who wrote to
 /// whom and the price, never the subject or the body.
@@ -59,10 +63,13 @@ export async function POST(request: Request) {
 
   const sender = from.toLowerCase();
 
-  // Someone who already cleared the gate never sees it again, as long as the
-  // envelope they cleared it with is the one they are writing from now.
-  if (senderIsAuthenticated(payload) && (await isAllowlisted(handle, sender))) {
-    return Response.json({ action: "forward", to: inbox.destination, reason: "known_sender" });
+  // A live pass, and the envelope it was earned with. Passes run out, so this
+  // is a sender who cleared the gate minutes ago rather than ever.
+  if (senderIsAuthenticated(payload)) {
+    const pass = await spendPass(handle, sender);
+    if (pass) {
+      return Response.json({ action: "forward", to: inbox.destination, reason: pass.reason });
+    }
   }
 
   const facts: MailFacts = {
@@ -78,10 +85,9 @@ export async function POST(request: Request) {
 
   const verdict = await classify(facts);
 
-  if (verdict.tier === "human" || verdict.tier === "important") {
-    // A person who wrote once will write again; an OTP sender likewise. Both
-    // skip the gate from here on.
-    await allowlist(handle, sender, verdict.tier);
+  // The only tier that is never held. It grants no pass, because the next
+  // message from the same sender has to earn its own way through.
+  if (verdict.tier === "important") {
     return Response.json({
       action: "forward",
       to: inbox.destination,

@@ -22,16 +22,21 @@ const TIER_INDEX: Record<string, number> = { human: 0, important: 1, commercial:
 const SETTLEMENT_ATTEMPTS = 10;
 const SETTLEMENT_INTERVAL_MS = 1_500;
 
-type Outcome = { kind: "cleared"; reason: string } | { kind: "error"; message: string };
+type Outcome =
+  | { kind: "cleared"; reason: string }
+  | { kind: "charged" }
+  | { kind: "error"; message: string };
 
 export function ChallengeActions({
   token,
   quote,
   dangerous,
+  handle,
 }: {
   token: string;
   quote: Quote;
   dangerous: boolean;
+  handle: string;
 }) {
   const { ready, authenticated, login } = usePrivy();
   const { wallets } = useWallets();
@@ -52,18 +57,19 @@ export function ChallengeActions({
     );
   }
 
-  if (outcome?.kind === "cleared") {
+  if (outcome?.kind === "charged") {
     return (
-      <div className="mt-8 rounded-xl border border-green-200 bg-green-50 p-4 text-sm text-green-800">
-        <p className="font-medium">
-          {outcome.reason === "human" ? "Verified. That cost you nothing." : "Paid."}
-        </p>
+      <div className="mt-8 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+        <p className="font-medium">Charged, and still not delivered.</p>
         <p className="mt-1">
-          Send your message again and it will arrive. You will not see this page for this
-          recipient again.
+          Paying is the penalty for this tier, not the price of getting through. Nothing was sent.
         </p>
       </div>
     );
+  }
+
+  if (outcome?.kind === "cleared") {
+    return <Deliver token={token} handle={handle} reason={outcome.reason} />;
   }
 
   async function askOnce(): Promise<Outcome> {
@@ -147,6 +153,77 @@ export function ChallengeActions({
         </button>
       )}
       {outcome?.kind === "error" && <p className="text-sm text-red-600">{outcome.message}</p>}
+    </div>
+  );
+}
+
+/// Postage never kept the message that was refused, so the way through is
+/// either to send it again from their mail client or to paste it here. This is
+/// the second, which saves the trip without anyone storing mail.
+function Deliver({ token, handle, reason }: { token: string; handle: string; reason: string }) {
+  const [subject, setSubject] = useState("");
+  const [body, setBody] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function deliver() {
+    setSending(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/challenge/deliver", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, subject, body }),
+      });
+      const result = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(result.error ?? "Could not deliver it");
+      setSent(true);
+    } catch (cause) {
+      setError(asMessage(cause));
+    } finally {
+      setSending(false);
+    }
+  }
+
+  if (sent) {
+    return (
+      <div className="mt-8 rounded-xl border border-green-200 bg-green-50 p-4 text-sm text-green-800">
+        <p className="font-medium">Delivered.</p>
+        <p className="mt-1">It is in their inbox now, and replying comes straight back to you.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-8 space-y-4">
+      <div className="rounded-xl border border-green-200 bg-green-50 p-4 text-sm text-green-800">
+        <p className="font-medium">
+          {reason === "human" ? "Verified. That cost you nothing." : "Paid."}
+        </p>
+        <p className="mt-1">
+          Your message was never stored here, so send it again from your mail client — or paste it
+          below and we will deliver it now.
+        </p>
+      </div>
+
+      <input
+        value={subject}
+        onChange={(event) => setSubject(event.target.value)}
+        placeholder="Subject"
+        className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm"
+      />
+      <textarea
+        value={body}
+        onChange={(event) => setBody(event.target.value)}
+        rows={7}
+        placeholder={`Paste what you wrote to ${handle}@usepostage.com`}
+        className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm"
+      />
+      <button onClick={deliver} disabled={sending || body.trim().length === 0} className={primary}>
+        {sending ? "Delivering" : "Deliver it now"}
+      </button>
+      {error && <p className="text-sm text-red-600">{error}</p>}
     </div>
   );
 }
