@@ -10,14 +10,13 @@ the behaviour, and confirming it is the first task, not fixing it.
 
 ## Blocking a real demo
 
-**`RESEND_API_KEY` is not set in the deployment.** Verified: a signed claim
-against production answers `{"error":"RESEND_API_KEY is not set"}`, which is our
-own `required()` speaking, so the variable is absent rather than wrong. This is
-the only thing left between here and a working signup. `usepostage.com` also has
-to be verified in Resend before it can mail arbitrary recipients, and `MAIL_FROM`
-is unproven for the same reason.
+Nothing in the environment. Every variable is confirmed and signup has been run
+end to end against production: a signed claim returned `200`, the code arrived,
+a wrong code decremented the allowance, the right one promoted the claim to an
+inbox, and the claim row was dropped. What remains below is code, not config.
 
-**World ID is not actually integrated in the browser.** Verified.
+**World ID is not actually integrated in the browser.** This is now the only
+thing standing between the demo and a complete story. Verified.
 `@worldcoin/idkit` is a dependency, `/api/world/context` signs an `rp_context`
 correctly and `/api/world/verify` parses a Selfie Check result correctly, but
 nothing client side ever calls either. `ChallengeActions.verifyHuman` posts a
@@ -71,6 +70,14 @@ attacker chose: mail reaches the victim, while the attacker's wallet holds
 `earnings` and `setFloorPrice`. Creating a claim now needs a wallet signature,
 which makes this awkward rather than easy, but the confirm step should carry the
 same proof.
+
+**A verification code is recoverable from the database in seconds.** Verified:
+holding both `inbox_claims` and `MESSAGE_ID_SECRET`, the six digit code behind a
+stored hash was recovered by exhausting all 10^6 candidates in 3.4 seconds. This
+is not a new way in — anyone with both already owns the system — but it does
+mean the stored hash is not a barrier, and the server side attempt cap is the
+only thing protecting a code. Keep it that way: never expose the hash, and do
+not add a client side check against it.
 
 **Nothing rate limits anything except claim emails.** Verified by reading. The
 three-per-hour throttle added to `POST /api/inbox` covers the email bomb. Every
