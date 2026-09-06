@@ -1,48 +1,44 @@
-import { type Hex, isAddress } from "viem";
-import { publicClient } from "@/lib/client";
-import { POSTAGE_ESCROW, escrowAbi } from "@/lib/contracts";
-import { type HeldMessage, inboxForWallet, inboxMessages } from "@/lib/db";
+import { isAddress } from "viem";
+import { createInbox, inboxByHandle, inboxByWallet } from "@/lib/db";
 
-const STATUS_NAMES = ["None", "Held", "Released", "Claimed", "Expired"] as const;
+const HANDLE = /^[a-z0-9][a-z0-9._-]{1,30}$/;
+const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
-interface InboxMessage extends HeldMessage {
-  stampStatus: (typeof STATUS_NAMES)[number];
-  stampAmount: string;
-}
-
-/// Everything the signed-in owner needs to render their inbox in one call,
-/// including whether each stamp is still sitting in escrow waiting to be
-/// released or claimed.
+/// Where a signed-in user sees their inbox, or nothing if they have not made
+/// one yet.
 export async function GET(request: Request) {
   const wallet = new URL(request.url).searchParams.get("wallet");
   if (!wallet || !isAddress(wallet)) {
     return Response.json({ error: "A valid wallet is required" }, { status: 400 });
   }
-
-  const localPart = await inboxForWallet(wallet);
-  if (!localPart) return Response.json({ localPart: null, messages: [] });
-
-  const messages = await inboxMessages(localPart);
-  const enriched = await Promise.all(messages.map(withStampStatus));
-
-  return Response.json({ localPart, messages: enriched });
+  return Response.json({ inbox: await inboxByWallet(wallet) });
 }
 
-async function withStampStatus(message: HeldMessage): Promise<InboxMessage> {
-  try {
-    const stamp = await publicClient.readContract({
-      address: POSTAGE_ESCROW,
-      abi: escrowAbi,
-      functionName: "stamps",
-      args: [message.message_hash as Hex],
-    });
-    return {
-      ...message,
-      stampStatus: STATUS_NAMES[stamp[4]] ?? "None",
-      stampAmount: stamp[2].toString(),
-    };
-  } catch {
-    // A chain hiccup should grey out one row, not blank the whole inbox.
-    return { ...message, stampStatus: "None", stampAmount: "0" };
+/// Claims handle@usepostage.com and points it at an address the user already
+/// reads. Cloudflare verifies that destination separately before any mail is
+/// forwarded to it, which is also what proves they control it.
+export async function POST(request: Request) {
+  const { handle, destination, wallet } = (await request.json()) as {
+    handle?: string;
+    destination?: string;
+    wallet?: string;
+  };
+
+  if (!handle || !HANDLE.test(handle.toLowerCase())) {
+    return Response.json({ error: "Pick 2-31 characters: letters, digits, dot, dash" }, { status: 400 });
   }
+  if (!destination || !EMAIL.test(destination)) {
+    return Response.json({ error: "A valid destination address is required" }, { status: 400 });
+  }
+  if (!wallet || !isAddress(wallet)) {
+    return Response.json({ error: "A valid wallet is required" }, { status: 400 });
+  }
+
+  const existing = await inboxByHandle(handle);
+  if (existing && existing.wallet !== wallet.toLowerCase()) {
+    return Response.json({ error: "That handle is taken" }, { status: 409 });
+  }
+
+  await createInbox(handle, destination, wallet);
+  return Response.json({ handle: handle.toLowerCase(), destination, address: `${handle.toLowerCase()}@usepostage.com` });
 }

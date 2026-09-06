@@ -6,32 +6,27 @@ import { encodeFunctionData } from "viem";
 import { publicClient } from "@/lib/client";
 import { POSTAGE_ESCROW, escrowAbi } from "@/lib/contracts";
 import { formatUsdc, parseUsdc, shortAddress } from "@/lib/format";
-import { ClaimInbox } from "./ClaimInbox";
-import { type InboxMessage, MessageList } from "./MessageList";
+
+interface Inbox {
+  handle: string;
+  destination: string;
+  floor_price: string;
+}
 
 export default function Home() {
   const { ready, authenticated, login, logout } = usePrivy();
   const { wallets } = useWallets();
   const wallet = wallets[0];
 
-  const [localPart, setLocalPart] = useState<string | null>(null);
-  const [messages, setMessages] = useState<InboxMessage[]>([]);
+  const [inbox, setInbox] = useState<Inbox | null>(null);
   const [loaded, setLoaded] = useState(false);
 
-  const address = wallet?.address;
-
   const refresh = useCallback(async () => {
-    if (!address) return;
-    const response = await fetch(`/api/inbox?wallet=${address}`);
-    if (!response.ok) return;
-    const data = (await response.json()) as {
-      localPart: string | null;
-      messages: InboxMessage[];
-    };
-    setLocalPart(data.localPart);
-    setMessages(data.messages);
+    if (!wallet?.address) return;
+    const response = await fetch(`/api/inbox?wallet=${wallet.address}`);
+    if (response.ok) setInbox(((await response.json()) as { inbox: Inbox | null }).inbox);
     setLoaded(true);
-  }, [address]);
+  }, [wallet?.address]);
 
   useEffect(() => {
     refresh().catch(() => setLoaded(true));
@@ -43,14 +38,15 @@ export default function Home() {
     return (
       <Centered>
         <h1 className="text-2xl font-semibold tracking-tight">Postage</h1>
-        <p className="mt-2 max-w-sm text-neutral-600">
-          An inbox where attention has a price, and being human makes it free.
+        <p className="mt-2 max-w-md text-neutral-600">
+          Keep the inbox you already have. Put a filter in front of it that reads what arrives,
+          lets the real mail through, and charges whoever sends the rest.
         </p>
         <button
           onClick={login}
           className="mt-6 rounded-lg bg-neutral-900 px-5 py-2.5 text-sm font-medium text-white hover:bg-neutral-700"
         >
-          Sign in
+          Get an address
         </button>
       </Centered>
     );
@@ -61,14 +57,7 @@ export default function Home() {
   return (
     <main className="mx-auto w-full max-w-2xl px-6 py-12">
       <header className="flex items-baseline justify-between">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">Postage</h1>
-          {localPart && (
-            <p className="mt-0.5 font-mono text-sm text-neutral-500">
-              {localPart}@usepostage.com
-            </p>
-          )}
-        </div>
+        <h1 className="text-xl font-semibold tracking-tight">Postage</h1>
         <div className="flex items-baseline gap-4 text-sm">
           <a href="/network" className="text-neutral-500 hover:text-neutral-900">
             Network
@@ -79,101 +68,169 @@ export default function Home() {
         </div>
       </header>
 
-      {loaded && !localPart ? (
-        <ClaimInbox wallet={wallet.address} onClaimed={refresh} />
-      ) : (
-        <>
-          <MessageList messages={messages} onSettled={refresh} />
-          <InboxSettings address={wallet.address} />
-        </>
-      )}
+      {loaded && !inbox ? (
+        <CreateInbox wallet={wallet.address} onCreated={refresh} />
+      ) : inbox ? (
+        <InboxPanel inbox={inbox} wallet={wallet.address} />
+      ) : null}
     </main>
   );
 }
 
-function InboxSettings({ address }: { address: string }) {
+function CreateInbox({ wallet, onCreated }: { wallet: string; onCreated: () => void }) {
+  const [handle, setHandle] = useState("");
+  const [destination, setDestination] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  async function create() {
+    setSaving(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/inbox", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ handle: handle.trim().toLowerCase(), destination: destination.trim(), wallet }),
+      });
+      const result = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(result.error ?? "Could not create that inbox");
+      onCreated();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="mt-8 rounded-xl border border-neutral-200 bg-white p-5">
+      <h2 className="text-sm font-medium">Pick an address to hand out</h2>
+      <p className="mt-1 text-sm text-neutral-600">
+        Mail sent here is read, judged, and forwarded to the inbox you actually use. You never
+        change email provider.
+      </p>
+
+      <div className="mt-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <input
+            value={handle}
+            onChange={(event) => setHandle(event.target.value)}
+            placeholder="you"
+            className="w-40 rounded-lg border border-neutral-300 px-3 py-2 text-sm"
+          />
+          <span className="text-sm text-neutral-500">@usepostage.com</span>
+        </div>
+        <input
+          value={destination}
+          onChange={(event) => setDestination(event.target.value)}
+          placeholder="forward it to you@gmail.com"
+          className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm"
+        />
+        <button
+          onClick={create}
+          disabled={saving || handle.trim().length < 2 || !destination.includes("@")}
+          className="rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
+        >
+          {saving ? "Creating" : "Create"}
+        </button>
+      </div>
+      {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+    </section>
+  );
+}
+
+function InboxPanel({ inbox, wallet }: { inbox: Inbox; wallet: string }) {
   const { sendTransaction } = useSendTransaction();
-  const [price, setPrice] = useState<bigint | null>(null);
-  const [balance, setBalance] = useState<bigint | null>(null);
+  const [earnings, setEarnings] = useState<bigint | null>(null);
   const [draft, setDraft] = useState("0.01");
-  const [pending, setPending] = useState(false);
+  const [busy, setBusy] = useState<"price" | "claim" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const read = useCallback(async () => {
-    const [onchainPrice, onchainBalance] = await Promise.all([
-      publicClient.readContract({
+    setEarnings(
+      await publicClient.readContract({
         address: POSTAGE_ESCROW,
         abi: escrowAbi,
-        functionName: "price",
-        args: [address as `0x${string}`],
-      }),
-      publicClient.getBalance({ address: address as `0x${string}` }),
-    ]);
-    setPrice(onchainPrice);
-    setBalance(onchainBalance);
-  }, [address]);
+        functionName: "earnings",
+        args: [wallet as `0x${string}`],
+      })
+    );
+  }, [wallet]);
 
   useEffect(() => {
     read().catch((cause: unknown) => setError(String(cause)));
   }, [read]);
 
-  async function save() {
-    setPending(true);
+  async function send(action: "price" | "claim") {
+    setBusy(action);
     setError(null);
     try {
-      await sendTransaction({
-        to: POSTAGE_ESCROW,
-        data: encodeFunctionData({
-          abi: escrowAbi,
-          functionName: "setPrice",
-          args: [parseUsdc(draft)],
-        }),
-      });
+      const data =
+        action === "price"
+          ? encodeFunctionData({ abi: escrowAbi, functionName: "setFloorPrice", args: [parseUsdc(draft)] })
+          : encodeFunctionData({ abi: escrowAbi, functionName: "claimEarnings", args: [wallet as `0x${string}`] });
+      await sendTransaction({ to: POSTAGE_ESCROW, data });
       await read();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      setPending(false);
+      setBusy(null);
     }
   }
 
   return (
-    <section className="mt-10 rounded-xl border border-neutral-200 bg-white p-5">
-      <div className="flex justify-between text-sm">
-        <span className="text-neutral-500">Wallet</span>
-        <span className="font-mono">{shortAddress(address)}</span>
-      </div>
-      <div className="mt-2 flex justify-between text-sm">
-        <span className="text-neutral-500">Balance</span>
-        <span className="font-mono">
-          {balance === null ? "..." : `${formatUsdc(balance)} USDC`}
-        </span>
-      </div>
-      <div className="mt-2 flex justify-between text-sm">
-        <span className="text-neutral-500">Postage from strangers</span>
-        <span className="font-mono">{price === null ? "..." : formatUsdc(price)}</span>
+    <section className="mt-8 space-y-6">
+      <div className="rounded-xl border border-neutral-200 bg-white p-5">
+        <p className="font-mono text-lg">{inbox.handle}@usepostage.com</p>
+        <p className="mt-1 text-sm text-neutral-500">forwards to {inbox.destination}</p>
       </div>
 
-      <div className="mt-4 flex gap-2 border-t border-neutral-100 pt-4">
-        <input
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          inputMode="decimal"
-          className="w-28 rounded-lg border border-neutral-300 px-3 py-2 text-sm"
-        />
+      <div className="rounded-xl border border-neutral-200 bg-white p-5">
+        <div className="flex items-baseline justify-between">
+          <span className="text-sm text-neutral-500">Earned from senders</span>
+          <span className="font-mono text-lg">
+            {earnings === null ? "..." : formatUsdc(earnings)}
+          </span>
+        </div>
         <button
-          onClick={save}
-          disabled={pending}
-          className="rounded-lg border border-neutral-300 px-4 py-2 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
+          onClick={() => send("claim")}
+          disabled={busy !== null || earnings === null || earnings === 0n}
+          className="mt-4 w-full rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
         >
-          {pending ? "Saving" : "Update price"}
+          {busy === "claim" ? "Claiming" : "Claim to my wallet"}
         </button>
+        <p className="mt-2 text-xs text-neutral-500">
+          Wallet {shortAddress(wallet)}. Verified people and anything urgent reach you free; this
+          is what the rest paid.
+        </p>
       </div>
-      <p className="mt-2 text-xs text-neutral-500">
-        Verified people always send free. Reputation decides what everyone else pays, from this
-        price up to five times it.
-      </p>
-      {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+
+      <div className="rounded-xl border border-neutral-200 bg-white p-5">
+        <label htmlFor="floor" className="text-sm font-medium">
+          Minimum a stranger pays
+        </label>
+        <div className="mt-3 flex gap-2">
+          <input
+            id="floor"
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            inputMode="decimal"
+            className="w-28 rounded-lg border border-neutral-300 px-3 py-2 text-sm"
+          />
+          <button
+            onClick={() => send("price")}
+            disabled={busy !== null}
+            className="rounded-lg border border-neutral-300 px-4 py-2 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
+          >
+            {busy === "price" ? "Saving" : "Update"}
+          </button>
+        </div>
+        <p className="mt-2 text-xs text-neutral-500">
+          Marketing pays this. Anything trying to deceive you pays ten times it, and still does not
+          arrive.
+        </p>
+        {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+      </div>
     </section>
   );
 }

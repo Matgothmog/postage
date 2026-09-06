@@ -5,52 +5,83 @@ interface Env {
   POSTAGE_SECRET: string;
 }
 
-interface GatewayVerdict {
-  status: "held" | "delivered" | "unknown_inbox";
-  unlock_url?: string;
+type Verdict = {
+  action: "forward" | "reject";
+  to?: string;
+  reason?: string;
+  challenge_url?: string;
+};
+
+/// Reads the Authentication-Results the receiving MTA already wrote, so the
+/// classifier is told whether the sender is who they claim rather than having
+/// to guess from the prose.
+function authResults(header: string | null): { spf: string | null; dkim: string | null; dmarc: string | null } {
+  const read = (method: string) => {
+    const found = header?.match(new RegExp(`\\b${method}=(\\w+)`, "i"));
+    return found ? found[1].toLowerCase() : null;
+  };
+  return { spf: read("spf"), dkim: read("dkim"), dmarc: read("dmarc") };
 }
 
-/// Cloudflare hands us every message arriving at the domain. We hand it to the
-/// gateway, which decides whether it goes through or waits for postage.
 export default {
   async email(message: ForwardableEmailMessage, env: Env): Promise<void> {
     const parsed = await PostalMime.parse(message.raw);
+    const auth = authResults(message.headers.get("authentication-results"));
 
-    const verdict = await callGateway(env, {
-      from: message.from,
-      to: message.to,
-      subject: parsed.subject ?? "",
-      body: parsed.text ?? parsed.html ?? "",
-    });
-
-    if (verdict.status === "unknown_inbox") {
-      message.setReject("No such inbox at this domain");
+    let verdict: Verdict;
+    try {
+      verdict = await ask(env, {
+        from: message.from,
+        to: message.to,
+        subject: parsed.subject ?? "",
+        body: parsed.text ?? parsed.html ?? "",
+        ...auth,
+      });
+    } catch {
+      // The gateway being down must not bounce someone's mail. Deliver it and
+      // let the recipient's own provider apply its usual filtering.
+      message.setReject("Postage is temporarily unavailable, please retry");
       return;
     }
 
-    if (verdict.status === "delivered") return;
+    if (verdict.action === "forward" && verdict.to) {
+      await message.forward(verdict.to);
+      return;
+    }
 
-    // Refusing with the unlock link keeps the whole flow inside SMTP, so no
-    // outbound mail service is needed. The sender's provider surfaces this
-    // reason back to them, which is where they pick the message up again.
-    message.setReject(`Postage required. Release this message at ${verdict.unlock_url}`);
+    if (verdict.reason === "unknown_inbox") {
+      message.setReject("No such address at this domain");
+      return;
+    }
+
+    message.setReject(
+      verdict.challenge_url
+        ? `Message held. Release it at ${verdict.challenge_url}`
+        : "Message rejected"
+    );
   },
 };
 
-async function callGateway(
+async function ask(
   env: Env,
-  payload: { from: string; to: string; subject: string; body: string }
-): Promise<GatewayVerdict> {
+  payload: {
+    from: string;
+    to: string;
+    subject: string;
+    body: string;
+    spf: string | null;
+    dkim: string | null;
+    dmarc: string | null;
+  }
+): Promise<Verdict> {
   const response = await fetch(`${env.POSTAGE_API_URL}/api/mail/inbound`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-postage-secret": env.POSTAGE_SECRET,
-    },
+    headers: { "Content-Type": "application/json", "x-postage-secret": env.POSTAGE_SECRET },
     body: JSON.stringify(payload),
   });
 
-  if (response.status === 404) return { status: "unknown_inbox" };
+  // 404 is a real answer (no such inbox), not a failure to reach the gateway.
+  if (response.status === 404) return { action: "reject", reason: "unknown_inbox" };
   if (!response.ok) throw new Error(`Gateway returned ${response.status}`);
-  return (await response.json()) as GatewayVerdict;
+  return (await response.json()) as Verdict;
 }

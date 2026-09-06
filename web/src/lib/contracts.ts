@@ -2,9 +2,10 @@ import { arcTestnet } from "viem/chains";
 
 export const chain = arcTestnet;
 
-export const POSTAGE_ESCROW = "0x164f432fd08dd4611172aa077882859b7c3ead7f" as const;
-export const HUMAN_REGISTRY = "0x1b83c30c4138ca29a942f1a14237881daa7320d9" as const;
-export const POSTAGE_VAULT = "0x771f3da6d0d05f904fd28a782bfafdf18393aa90" as const;
+export const POSTAGE_ESCROW = "0x5dcf371c3959de729ca637628dc574133ab42795" as const;
+export const HUMAN_REGISTRY = "0x0f9a1c7e971df81adc1b0335a527b30b6f136d05" as const;
+export const POSTAGE_VAULT = "0xd488a385529e9eec44a17b686f3b9372071f22dc" as const;
+export const ENCLAVE_REGISTRY = "0xf6afced17443571c79036f9d543ddbc2c5a645f9" as const;
 
 /// Arc's native USDC is 18 decimals. The ERC-20 view of the same balance is 6,
 /// and mixing them silently misprices everything, so the app only ever touches
@@ -12,19 +13,6 @@ export const POSTAGE_VAULT = "0x771f3da6d0d05f904fd28a782bfafdf18393aa90" as con
 export const USDC_DECIMALS = 18;
 
 export const escrowAbi = [
-  {
-    "type": "function",
-    "name": "EXPIRY",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint64",
-        "internalType": "uint64"
-      }
-    ],
-    "stateMutability": "view"
-  },
   {
     "type": "function",
     "name": "VAULT_BPS",
@@ -40,51 +28,20 @@ export const escrowAbi = [
   },
   {
     "type": "function",
-    "name": "claim",
+    "name": "claimEarnings",
     "inputs": [
       {
-        "name": "messageId",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "expire",
-    "inputs": [
-      {
-        "name": "messageId",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "postStamp",
-    "inputs": [
-      {
-        "name": "messageId",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      },
-      {
-        "name": "recipient",
+        "name": "to",
         "type": "address",
         "internalType": "address"
       }
     ],
     "outputs": [],
-    "stateMutability": "payable"
+    "stateMutability": "nonpayable"
   },
   {
     "type": "function",
-    "name": "price",
+    "name": "earnings",
     "inputs": [
       {
         "name": "inbox",
@@ -103,12 +60,169 @@ export const escrowAbi = [
   },
   {
     "type": "function",
-    "name": "release",
+    "name": "eip712Domain",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "fields",
+        "type": "bytes1",
+        "internalType": "bytes1"
+      },
+      {
+        "name": "name",
+        "type": "string",
+        "internalType": "string"
+      },
+      {
+        "name": "version",
+        "type": "string",
+        "internalType": "string"
+      },
+      {
+        "name": "chainId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "verifyingContract",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "salt",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "extensions",
+        "type": "uint256[]",
+        "internalType": "uint256[]"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "floorPrice",
+    "inputs": [
+      {
+        "name": "inbox",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "payToSend",
     "inputs": [
       {
         "name": "messageId",
         "type": "bytes32",
         "internalType": "bytes32"
+      },
+      {
+        "name": "inbox",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "tier",
+        "type": "uint8",
+        "internalType": "enum PostageEscrow.Tier"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "expiresAt",
+        "type": "uint40",
+        "internalType": "uint40"
+      },
+      {
+        "name": "enclaveSignature",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "payable"
+  },
+  {
+    "type": "function",
+    "name": "quoteDigest",
+    "inputs": [
+      {
+        "name": "messageId",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "inbox",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "tier",
+        "type": "uint8",
+        "internalType": "enum PostageEscrow.Tier"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "expiresAt",
+        "type": "uint40",
+        "internalType": "uint40"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "registry",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "contract EnclaveRegistry"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "reportSpam",
+    "inputs": [
+      {
+        "name": "messageId",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "sender",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "outputs": [],
@@ -116,7 +230,7 @@ export const escrowAbi = [
   },
   {
     "type": "function",
-    "name": "setPrice",
+    "name": "setFloorPrice",
     "inputs": [
       {
         "name": "amount",
@@ -129,7 +243,7 @@ export const escrowAbi = [
   },
   {
     "type": "function",
-    "name": "stamps",
+    "name": "settled",
     "inputs": [
       {
         "name": "messageId",
@@ -139,29 +253,9 @@ export const escrowAbi = [
     ],
     "outputs": [
       {
-        "name": "sender",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "recipient",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "amount",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "postedAt",
-        "type": "uint64",
-        "internalType": "uint64"
-      },
-      {
-        "name": "status",
-        "type": "uint8",
-        "internalType": "enum PostageEscrow.Status"
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
       }
     ],
     "stateMutability": "view"
@@ -181,7 +275,38 @@ export const escrowAbi = [
   },
   {
     "type": "event",
-    "name": "PriceSet",
+    "name": "EIP712DomainChanged",
+    "inputs": [],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "EarningsClaimed",
+    "inputs": [
+      {
+        "name": "inbox",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "to",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "FloorPriceSet",
     "inputs": [
       {
         "name": "inbox",
@@ -200,7 +325,7 @@ export const escrowAbi = [
   },
   {
     "type": "event",
-    "name": "StampClaimed",
+    "name": "Paid",
     "inputs": [
       {
         "name": "messageId",
@@ -209,10 +334,22 @@ export const escrowAbi = [
         "internalType": "bytes32"
       },
       {
-        "name": "recipient",
+        "name": "sender",
         "type": "address",
         "indexed": true,
         "internalType": "address"
+      },
+      {
+        "name": "inbox",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "tier",
+        "type": "uint8",
+        "indexed": false,
+        "internalType": "enum PostageEscrow.Tier"
       },
       {
         "name": "amount",
@@ -231,7 +368,7 @@ export const escrowAbi = [
   },
   {
     "type": "event",
-    "name": "StampExpired",
+    "name": "SpamReported",
     "inputs": [
       {
         "name": "messageId",
@@ -240,97 +377,110 @@ export const escrowAbi = [
         "internalType": "bytes32"
       },
       {
-        "name": "sender",
+        "name": "inbox",
         "type": "address",
         "indexed": true,
         "internalType": "address"
-      },
-      {
-        "name": "amount",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "StampPosted",
-    "inputs": [
-      {
-        "name": "messageId",
-        "type": "bytes32",
-        "indexed": true,
-        "internalType": "bytes32"
       },
       {
         "name": "sender",
         "type": "address",
         "indexed": true,
         "internalType": "address"
-      },
-      {
-        "name": "recipient",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "amount",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "StampReleased",
-    "inputs": [
-      {
-        "name": "messageId",
-        "type": "bytes32",
-        "indexed": true,
-        "internalType": "bytes32"
-      },
-      {
-        "name": "sender",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "amount",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
       }
     ],
     "anonymous": false
   },
   {
     "type": "error",
-    "name": "InvalidRecipient",
+    "name": "AlreadySettled",
     "inputs": []
   },
   {
     "type": "error",
-    "name": "NotRecipient",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "NotYetExpired",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "PostageTooLow",
+    "name": "BelowFloor",
     "inputs": [
       {
         "name": "required",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "quoted",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "ECDSAInvalidSignature",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ECDSAInvalidSignatureLength",
+    "inputs": [
+      {
+        "name": "length",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "ECDSAInvalidSignatureS",
+    "inputs": [
+      {
+        "name": "s",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "InvalidShortString",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NotSettled",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NothingToClaim",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "QuoteExpired",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "StringTooLong",
+    "inputs": [
+      {
+        "name": "str",
+        "type": "string",
+        "internalType": "string"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "TransferFailed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "Underpaid",
+    "inputs": [
+      {
+        "name": "quoted",
         "type": "uint256",
         "internalType": "uint256"
       },
@@ -343,18 +493,14 @@ export const escrowAbi = [
   },
   {
     "type": "error",
-    "name": "StampAlreadyExists",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "StampNotHeld",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "TransferFailed",
-    "inputs": []
+    "name": "UnknownEnclave",
+    "inputs": [
+      {
+        "name": "signer",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
   },
   {
     "type": "error",
@@ -804,6 +950,177 @@ export const vaultAbi = [
   {
     "type": "error",
     "name": "TransferFailed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ZeroAddress",
+    "inputs": []
+  }
+] as const;
+
+export const enclaveRegistryAbi = [
+  {
+    "type": "function",
+    "name": "expectedMeasurement",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "isRegistered",
+    "inputs": [
+      {
+        "name": "signer",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "allowed",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "measurementOf",
+    "inputs": [
+      {
+        "name": "signer",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "measurement",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "owner",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "register",
+    "inputs": [
+      {
+        "name": "signer",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "revoke",
+    "inputs": [
+      {
+        "name": "signer",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setMeasurement",
+    "inputs": [
+      {
+        "name": "measurement",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "event",
+    "name": "EnclaveRegistered",
+    "inputs": [
+      {
+        "name": "signer",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "measurement",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "EnclaveRevoked",
+    "inputs": [
+      {
+        "name": "signer",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "MeasurementSet",
+    "inputs": [
+      {
+        "name": "measurement",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "error",
+    "name": "AlreadyRegistered",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NoMeasurementSet",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NotOwner",
     "inputs": []
   },
   {

@@ -1,71 +1,103 @@
 import { randomUUID } from "node:crypto";
-import { keccak256, stringToBytes } from "viem";
-import {
-  deliver,
-  insertMessage,
-  isKnownSender,
-  walletForInbox,
-} from "@/lib/db";
+import type { Hex } from "viem";
+import { classify, extractUrls, type MailFacts } from "@/lib/classify";
+import { allowlist, createChallenge, inboxByHandle, isAllowlisted } from "@/lib/db";
 import { required } from "@/lib/env";
+import { quote } from "@/lib/pricing";
+import { messageIdFor, signQuote } from "@/lib/quote";
+import { gatherSignals } from "@/lib/reputation";
 
 interface InboundPayload {
   from: string;
   to: string;
   subject: string;
   body: string;
+  spf?: string;
+  dkim?: string;
+  dmarc?: string;
+  /// Wallet the sender has previously paid from, when the gateway knows one.
+  senderWallet?: string;
 }
 
-/// Called by the Cloudflare Email Worker for every message arriving at the
-/// domain. Decides whether the message goes straight through or gets held
-/// until the sender proves they are human or attaches postage.
+/// Called by the mail worker for every inbound message. Decides whether it is
+/// forwarded, and if not, what it would cost to change that.
+///
+/// Nothing about the message is stored. The challenge row records who wrote to
+/// whom and the price, never the subject or the body.
 export async function POST(request: Request) {
   if (request.headers.get("x-postage-secret") !== required("MAIL_WEBHOOK_SECRET")) {
     return Response.json({ error: "Bad secret" }, { status: 401 });
   }
 
-  // Read the config before touching the database. Discovering a missing
-  // variable after the insert leaves a message stored that nobody can ever be
-  // told how to unlock.
   const appUrl = required("APP_URL");
-
   const payload = (await request.json()) as Partial<InboundPayload>;
-  const { from, to, subject, body } = payload;
-  if (!from || !to) {
-    return Response.json({ error: "from and to are required" }, { status: 400 });
+  const { from, to } = payload;
+  if (!from || !to) return Response.json({ error: "from and to are required" }, { status: 400 });
+
+  const handle = to.split("@")[0]?.toLowerCase() ?? "";
+  const inbox = await inboxByHandle(handle);
+  if (!inbox) return Response.json({ action: "reject", reason: "unknown_inbox" }, { status: 404 });
+
+  const sender = from.toLowerCase();
+
+  // Someone who already cleared the gate never sees it again.
+  if (await isAllowlisted(handle, sender)) {
+    return Response.json({ action: "forward", to: inbox.destination, reason: "known_sender" });
   }
 
-  const localPart = to.split("@")[0]?.toLowerCase() ?? "";
-  if (!(await walletForInbox(localPart))) {
-    return Response.json({ status: "unknown_inbox" }, { status: 404 });
+  const facts: MailFacts = {
+    from: sender,
+    to,
+    subject: payload.subject ?? "",
+    body: payload.body ?? "",
+    spf: payload.spf ?? null,
+    dkim: payload.dkim ?? null,
+    dmarc: payload.dmarc ?? null,
+    urls: extractUrls(payload.body ?? ""),
+  };
+
+  const verdict = await classify(facts);
+
+  if (verdict.tier === "human" || verdict.tier === "important") {
+    // A person who wrote once will write again; an OTP sender likewise. Both
+    // skip the gate from here on.
+    await allowlist(handle, sender, verdict.tier);
+    return Response.json({
+      action: "forward",
+      to: inbox.destination,
+      reason: verdict.tier,
+      verdict,
+    });
   }
+
+  const signals = payload.senderWallet ? await gatherSignals(payload.senderWallet) : null;
+  const priced = quote(BigInt(inbox.floor_price), verdict.tier, signals, verdict.degraded);
 
   const token = randomUUID().replaceAll("-", "");
   const receivedAt = Math.floor(Date.now() / 1000);
-  const sender = from.toLowerCase();
+  const messageId = messageIdFor(sender, handle, facts.subject, receivedAt);
+  const signed = await signQuote(messageId, inbox.wallet as Hex, verdict.tier, priced.amount);
 
-  await insertMessage({
-    id: randomUUID(),
-    // The id the sender will pay against onchain. Derived from the message so
-    // one stamp can only ever unlock the message it was bought for.
-    message_hash: keccak256(stringToBytes(`${sender}|${localPart}|${subject ?? ""}|${receivedAt}`)),
+  await createChallenge({
+    token,
+    handle,
     sender,
-    recipient_local: localPart,
-    subject: subject ?? "(no subject)",
-    body: body ?? "",
-    status: "held",
-    unlock_token: token,
-    received_at: receivedAt,
+    message_id: messageId,
+    tier: verdict.tier,
+    amount: priced.amount.toString(),
+    quote_json: JSON.stringify({ ...signed, reasons: priced.reasons }),
+    created_at: receivedAt,
   });
 
-  // Someone the recipient has already corresponded with never pays again.
-  // Without this every first reply from a friend would be held too.
-  if (await isKnownSender(localPart, sender)) {
-    await deliver(token, "known");
-    return Response.json({ status: "delivered", reason: "known_sender" });
-  }
-
   return Response.json({
-    status: "held",
-    unlock_url: `${appUrl}/u/${token}`,
+    // Dangerous mail is refused whether or not anyone pays. The link is still
+    // offered so a misclassified sender has a route back.
+    action: "reject",
+    reason: verdict.tier,
+    verdict,
+    price: priced.amount.toString(),
+    reasons: priced.reasons,
+    challenge_url: `${appUrl}/c/${token}`,
+    quote: signed,
   });
 }

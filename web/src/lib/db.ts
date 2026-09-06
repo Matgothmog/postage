@@ -1,57 +1,51 @@
 import { type Client, createClient } from "@libsql/client";
 
-export type MessageStatus = "held" | "delivered";
-export type ReleaseReason = "human" | "stamp" | "known";
-
-export interface HeldMessage {
-  id: string;
-  message_hash: string;
-  sender: string;
-  recipient_local: string;
-  subject: string;
-  body: string;
-  status: MessageStatus;
-  unlock_token: string;
-  received_at: number;
-  delivered_at: number | null;
-  released_by: ReleaseReason | null;
+export interface Inbox {
+  handle: string;
+  /// Where mail is forwarded. Verified with Cloudflare before anything is sent.
+  destination: string;
+  /// Wallet that earnings accrue to and that can claim them.
+  wallet: string | null;
+  floor_price: string;
+  created_at: number;
 }
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS inboxes (
-     local_part TEXT PRIMARY KEY,
-     wallet TEXT NOT NULL,
+     handle TEXT PRIMARY KEY,
+     destination TEXT NOT NULL,
+     wallet TEXT,
+     floor_price TEXT NOT NULL DEFAULT '10000000000000000',
      created_at INTEGER NOT NULL
    )`,
-  `CREATE TABLE IF NOT EXISTS messages (
-     id TEXT PRIMARY KEY,
-     message_hash TEXT NOT NULL,
+  `CREATE INDEX IF NOT EXISTS inboxes_by_wallet ON inboxes (wallet)`,
+  /// Senders that cleared the gate once for this inbox and never see it again.
+  `CREATE TABLE IF NOT EXISTS allowlist (
+     handle TEXT NOT NULL,
      sender TEXT NOT NULL,
-     recipient_local TEXT NOT NULL,
-     subject TEXT NOT NULL,
-     body TEXT NOT NULL,
-     status TEXT NOT NULL,
-     unlock_token TEXT NOT NULL UNIQUE,
-     received_at INTEGER NOT NULL,
-     delivered_at INTEGER,
-     released_by TEXT
+     reason TEXT NOT NULL,
+     added_at INTEGER NOT NULL,
+     PRIMARY KEY (handle, sender)
    )`,
-  `CREATE INDEX IF NOT EXISTS messages_by_recipient ON messages (recipient_local, status)`,
-  `CREATE TABLE IF NOT EXISTS known_senders (
-     recipient_local TEXT NOT NULL,
+  /// Challenges are the only thing resembling a message we keep, and they hold
+  /// no content: just who was writing to whom, and what it would cost.
+  `CREATE TABLE IF NOT EXISTS challenges (
+     token TEXT PRIMARY KEY,
+     handle TEXT NOT NULL,
      sender TEXT NOT NULL,
-     PRIMARY KEY (recipient_local, sender)
+     message_id TEXT NOT NULL,
+     tier TEXT NOT NULL,
+     amount TEXT NOT NULL,
+     quote_json TEXT NOT NULL,
+     created_at INTEGER NOT NULL,
+     resolved_at INTEGER
    )`,
 ];
 
-/// libsql speaks both `file:` and `libsql://`, so local development and the
-/// deployed app run the same queries against the same engine. Only the URL
-/// changes.
 let ready: Promise<Client> | null = null;
 
 function db(): Promise<Client> {
   if (ready) return ready;
-
   ready = (async () => {
     const client = createClient({
       url: process.env.DATABASE_URL ?? "file:.data/postage.db",
@@ -60,7 +54,6 @@ function db(): Promise<Client> {
     for (const statement of SCHEMA) await client.execute(statement);
     return client;
   })();
-
   return ready;
 }
 
@@ -75,82 +68,82 @@ async function run(sql: string, args: unknown[] = []): Promise<void> {
   await client.execute({ sql, args: args as never });
 }
 
-export async function claimInbox(localPart: string, wallet: string): Promise<void> {
+export async function createInbox(
+  handle: string,
+  destination: string,
+  wallet: string | null
+): Promise<void> {
   await run(
-    `INSERT INTO inboxes (local_part, wallet, created_at) VALUES (?, ?, ?)
-     ON CONFLICT (local_part) DO UPDATE SET wallet = excluded.wallet`,
-    [localPart.toLowerCase(), wallet.toLowerCase(), Math.floor(Date.now() / 1000)]
+    `INSERT INTO inboxes (handle, destination, wallet, created_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT (handle) DO UPDATE SET destination = excluded.destination, wallet = excluded.wallet`,
+    [handle.toLowerCase(), destination.toLowerCase(), wallet?.toLowerCase() ?? null, Math.floor(Date.now() / 1000)]
   );
 }
 
-export async function walletForInbox(localPart: string): Promise<string | null> {
-  const rows = await all<{ wallet: string }>(
-    `SELECT wallet FROM inboxes WHERE local_part = ?`,
-    [localPart.toLowerCase()]
-  );
-  return rows[0]?.wallet ?? null;
+export async function inboxByHandle(handle: string): Promise<Inbox | null> {
+  const rows = await all<Inbox>(`SELECT * FROM inboxes WHERE handle = ?`, [handle.toLowerCase()]);
+  return rows[0] ?? null;
 }
 
-export async function inboxForWallet(wallet: string): Promise<string | null> {
-  const rows = await all<{ local_part: string }>(
-    `SELECT local_part FROM inboxes WHERE wallet = ?`,
-    [wallet.toLowerCase()]
-  );
-  return rows[0]?.local_part ?? null;
+export async function inboxByWallet(wallet: string): Promise<Inbox | null> {
+  const rows = await all<Inbox>(`SELECT * FROM inboxes WHERE wallet = ?`, [wallet.toLowerCase()]);
+  return rows[0] ?? null;
 }
 
-export async function isKnownSender(localPart: string, sender: string): Promise<boolean> {
-  const rows = await all(
-    `SELECT 1 FROM known_senders WHERE recipient_local = ? AND sender = ?`,
-    [localPart.toLowerCase(), sender.toLowerCase()]
-  );
+export async function isAllowlisted(handle: string, sender: string): Promise<boolean> {
+  const rows = await all(`SELECT 1 FROM allowlist WHERE handle = ? AND sender = ?`, [
+    handle.toLowerCase(),
+    sender.toLowerCase(),
+  ]);
   return rows.length > 0;
 }
 
-export async function rememberSender(localPart: string, sender: string): Promise<void> {
-  await run(`INSERT OR IGNORE INTO known_senders (recipient_local, sender) VALUES (?, ?)`, [
-    localPart.toLowerCase(),
-    sender.toLowerCase(),
-  ]);
+export async function allowlist(handle: string, sender: string, reason: string): Promise<void> {
+  await run(
+    `INSERT OR IGNORE INTO allowlist (handle, sender, reason, added_at) VALUES (?, ?, ?, ?)`,
+    [handle.toLowerCase(), sender.toLowerCase(), reason, Math.floor(Date.now() / 1000)]
+  );
 }
 
-export async function insertMessage(
-  message: Omit<HeldMessage, "delivered_at" | "released_by">
-): Promise<void> {
+export interface Challenge {
+  token: string;
+  handle: string;
+  sender: string;
+  message_id: string;
+  tier: string;
+  amount: string;
+  /// The enclave-signed quote, kept so the sender can pay it from the
+  /// challenge page without us re-pricing the message we no longer hold.
+  quote_json: string;
+  created_at: number;
+  resolved_at: number | null;
+}
+
+export async function createChallenge(challenge: Omit<Challenge, "resolved_at">): Promise<void> {
   await run(
-    `INSERT INTO messages
-       (id, message_hash, sender, recipient_local, subject, body, status, unlock_token, received_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO challenges (token, handle, sender, message_id, tier, amount, quote_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      message.id,
-      message.message_hash,
-      message.sender,
-      message.recipient_local,
-      message.subject,
-      message.body,
-      message.status,
-      message.unlock_token,
-      message.received_at,
+      challenge.token,
+      challenge.handle,
+      challenge.sender,
+      challenge.message_id,
+      challenge.tier,
+      challenge.amount,
+      challenge.quote_json,
+      challenge.created_at,
     ]
   );
 }
 
-export async function messageByToken(token: string): Promise<HeldMessage | null> {
-  const rows = await all<HeldMessage>(`SELECT * FROM messages WHERE unlock_token = ?`, [token]);
+export async function challengeByToken(token: string): Promise<Challenge | null> {
+  const rows = await all<Challenge>(`SELECT * FROM challenges WHERE token = ?`, [token]);
   return rows[0] ?? null;
 }
 
-export async function deliver(token: string, reason: ReleaseReason): Promise<void> {
-  await run(
-    `UPDATE messages SET status = 'delivered', delivered_at = ?, released_by = ?
-     WHERE unlock_token = ? AND status = 'held'`,
-    [Math.floor(Date.now() / 1000), reason, token]
-  );
-}
-
-export async function inboxMessages(localPart: string): Promise<HeldMessage[]> {
-  return all<HeldMessage>(
-    `SELECT * FROM messages WHERE recipient_local = ? ORDER BY received_at DESC`,
-    [localPart.toLowerCase()]
-  );
+export async function resolveChallenge(token: string): Promise<void> {
+  await run(`UPDATE challenges SET resolved_at = ? WHERE token = ? AND resolved_at IS NULL`, [
+    Math.floor(Date.now() / 1000),
+    token,
+  ]);
 }

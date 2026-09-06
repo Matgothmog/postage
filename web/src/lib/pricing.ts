@@ -1,75 +1,96 @@
+import type { Tier } from "./classify";
 import type { SenderSignals } from "./reputation";
 
 export interface Quote {
-  price: bigint;
-  basePrice: bigint;
+  amount: bigint;
+  floor: bigint;
   multiplierBps: number;
   free: boolean;
   reasons: string[];
 }
 
 const ONE = 10_000;
-/// The inbox price is a floor the contract enforces, so a quote can never go
-/// under it however good the sender looks. Reputation earns its way down to
-/// the floor and no further; the way to pay nothing is to verify.
-const FLOOR = ONE;
-const CEILING = 50_000;
+const CEILING = 100_000;
 const YEAR_SECONDS = 365 * 24 * 60 * 60;
 
-/// Turns what The Graph knows about a sender into what they pay. The inbox
-/// owner sets the base; reputation moves it between a quarter of that and five
-/// times it. Every adjustment carries the sentence that explains it, because a
-/// price nobody can interpret just reads as arbitrary.
-export function quote(basePrice: bigint, signals: SenderSignals): Quote {
-  if (signals.isHuman) {
+/// What each verdict costs before reputation is considered, in basis points of
+/// the inbox's floor price.
+const TIER_BPS: Record<Tier, number> = {
+  human: 0,
+  important: 0,
+  commercial: ONE,
+  /// Deliberately punitive. Dangerous mail is blocked either way; this is what
+  /// a sender pays if they have a wallet attached, not a price for delivery.
+  dangerous: 10 * ONE,
+};
+
+/// Turns a verdict and what The Graph knows about a sender into a price.
+///
+/// The tier sets the base and reputation moves it. A quote can never fall below
+/// the inbox's floor, because the escrow enforces that and would revert.
+export function quote(
+  floor: bigint,
+  tier: Tier,
+  signals: SenderSignals | null,
+  degraded: boolean
+): Quote {
+  if (tier === "human") {
+    return { amount: 0n, floor, multiplierBps: 0, free: true, reasons: ["Written by a verified person"] };
+  }
+  if (tier === "important") {
     return {
-      price: 0n,
-      basePrice,
+      amount: 0n,
+      floor,
       multiplierBps: 0,
       free: true,
-      reasons: ["Verified as a person, so postage is waived"],
+      reasons: ["Something the recipient is waiting for, so it goes through free"],
     };
   }
 
   const reasons: string[] = [];
-  let bps = ONE;
+  let bps = TIER_BPS[tier];
 
-  if (signals.settledCount > 0 && signals.spamRate > 0) {
-    bps += Math.round(signals.spamRate * 4 * ONE);
-    reasons.push(
-      `Marked as spam on ${signals.claimedCount} of ${signals.settledCount} settled messages`
-    );
+  if (tier === "dangerous") {
+    reasons.push("Classified as an attempt to deceive the recipient");
+  } else {
+    reasons.push("Automated mail the recipient did not ask for");
   }
 
-  if (signals.settledCount >= 3 && signals.spamRate < 0.2) {
-    bps = Math.round(bps * 0.5);
-    reasons.push(`Well received here across ${signals.settledCount} messages`);
+  // A header-only verdict is not confident enough to charge punitively.
+  if (degraded && tier === "dangerous") {
+    bps = 2 * ONE;
+    reasons.push("Priced down because the classifier was unavailable and this came from headers alone");
   }
 
-  if (signals.ensNames > 0) {
-    bps = Math.round(bps * 0.7);
-    reasons.push(`Holds ${signals.ensNames} ENS name${signals.ensNames === 1 ? "" : "s"}`);
+  if (signals) {
+    if (signals.settledCount > 0 && signals.spamRate > 0) {
+      bps += Math.round(signals.spamRate * 4 * ONE);
+      reasons.push(`Reported as spam on ${signals.claimedCount} of ${signals.settledCount} past messages`);
+    }
+    if (signals.settledCount >= 3 && signals.spamRate < 0.2) {
+      bps = Math.round(bps * 0.5);
+      reasons.push(`Well received here across ${signals.settledCount} messages`);
+    }
+    if (signals.ensNames > 0) {
+      bps = Math.round(bps * 0.7);
+      reasons.push(`Sender wallet holds ${signals.ensNames} ENS name${signals.ensNames === 1 ? "" : "s"}`);
 
-    const age = signals.oldestEnsAt ? Math.floor(Date.now() / 1000) - signals.oldestEnsAt : 0;
-    if (age > YEAR_SECONDS) {
-      bps = Math.round(bps * 0.8);
-      reasons.push(`Oldest of them registered ${Math.floor(age / YEAR_SECONDS)} years ago`);
+      const age = signals.oldestEnsAt ? Math.floor(Date.now() / 1000) - signals.oldestEnsAt : 0;
+      if (age > YEAR_SECONDS) {
+        bps = Math.round(bps * 0.8);
+        reasons.push(`Oldest registered ${Math.floor(age / YEAR_SECONDS)} years ago`);
+      }
     }
   }
 
-  if (signals.ensNames === 0 && signals.stampsPosted === 0) {
-    bps *= 2;
-    reasons.push("No onchain history to go on, so this is priced as a stranger");
-  }
-
-  if (bps < FLOOR) {
+  if (bps < ONE) {
     reasons.push("Already at this inbox's minimum, so the discount stops here");
   }
-  bps = Math.min(Math.max(bps, FLOOR), CEILING);
+  bps = Math.min(Math.max(bps, ONE), CEILING);
 
   return {
-    price: (basePrice * BigInt(bps)) / BigInt(ONE),
-    basePrice,
+    amount: (floor * BigInt(bps)) / BigInt(ONE),
+    floor,
     multiplierBps: bps,
     free: false,
     reasons,
