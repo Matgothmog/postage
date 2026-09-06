@@ -52,10 +52,10 @@ two verifications.
 
 Studio: https://thegraph.com/studio/subgraph/usepostage
 
-    https://api.studio.thegraph.com/query/1758667/usepostage/v0.2.0
+    https://api.studio.thegraph.com/query/1758667/usepostage/v0.3.0
 
-Currently indexes the previous contracts; repointing at the addresses above is
-day 2 work.
+Indexes all four contracts above, including which signing keys are allowed to
+price mail and under what measurement.
 
 ## Arc Mainnet (5042)
 

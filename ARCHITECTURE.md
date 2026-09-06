@@ -1,245 +1,198 @@
 # Architecture
 
-Postage is an email gateway that puts a price on unsolicited mail and waives it
-for anyone who proves they are a person. This describes how the pieces fit and,
-more usefully, why each one is there rather than something else.
+Postage is a filter in front of an inbox you already own. This describes how the
+pieces fit and, more usefully, why each one is there rather than something else.
 
 ## The shape of it
 
 ```mermaid
 flowchart TB
-    G["Sender's mail provider<br/>(Gmail, etc.)"]
+    S["Sender's mail provider"]
     CF["Cloudflare Email Routing<br/>MX for usepostage.com"]
-    W["Email Worker<br/>postage-mail"]
-    V["Next.js app on Vercel<br/>postage-seven.vercel.app"]
-    T[("Turso / libSQL<br/>messages, inboxes,<br/>known senders")]
+    W["Email Worker"]
+    V["Next.js on Vercel"]
+    T[("Turso / libSQL<br/>inboxes, allowlist,<br/>challenges — no mail")]
+    C["Claude<br/>four-tier classifier"]
+    A["Arc testnet<br/>Escrow · EnclaveRegistry<br/>HumanRegistry · Vault"]
+    G["The Graph<br/>own subgraph + gateway"]
     P["Privy<br/>embedded wallets"]
-    WO["World ID<br/>Developer Portal"]
-    A["Arc testnet 5042002<br/>Escrow · Registry · Vault"]
-    TG["The Graph<br/>own subgraph + gateway"]
+    WO["World ID"]
 
-    G -->|SMTP| CF --> W
-    W -->|"POST /api/mail/inbound<br/>shared secret"| V
-    W -->|"refuse with unlock link"| G
+    S -->|SMTP| CF --> W
+    W -->|"classify, shared secret"| V
+    W -->|"forward"| S
+    V --> C
     V <--> T
-    V <-->|"auth, wallets, signing"| P
-    V -->|"verify proof"| WO
-    V -->|"read state, relay attestation"| A
-    V -->|"reputation queries"| TG
-    A -->|"events"| TG
+    V -->|"sign the price"| A
+    V -->|"reputation"| G
+    A -->|"events"| G
+    V <--> P
+    V --> WO
 ```
 
-Everything the user touches is the Next.js app. Everything that must be true
-independent of us is on Arc.
+## The four tiers
+
+The classifier reads the whole message plus the SPF, DKIM and DMARC results the
+receiving MTA already computed, and returns one verdict.
+
+| Verdict | Delivered | Charged |
+| --- | --- | --- |
+| `human` | yes, free | no |
+| `important` | yes, free | no |
+| `commercial` | once paid | inbox floor × reputation |
+| `dangerous` | **never** | 10× floor, if a wallet is attached |
+
+Two consequences worth being explicit about:
+
+**Dangerous mail is blocked whether or not anyone pays.** Charging a connected
+wallet is a penalty, not a price for delivery. Real phishing attaches no wallet
+and simply gets blocked — blocking is the product, not a revenue line. The
+revenue is the commercial tier: senders who want to reach an inbox and are
+willing to pay for it.
+
+**A degraded verdict can never charge the top tier.** If the model is
+unreachable, the gateway falls back to SPF/DKIM/DMARC, sender domain and subject
+heuristics, and that path is barred from returning `dangerous` — a wrong verdict
+there both blocks real mail and charges punitively for it.
+
+## The price cannot be invented
+
+```
+classifier reads the message
+        │
+        ▼
+  verdict + price
+        │
+        ▼
+  EIP-712 signature from a key in EnclaveRegistry
+        │
+        ▼
+  payToSend()  ── reverts if the signer is not registered
+```
+
+`PostageEscrow.payToSend` recovers the signer from the quote and reverts with
+`UnknownEnclave` unless that key is registered. So a price cannot exist unless
+code whose identity is public produced it — not as a promise, as a precondition
+the chain enforces. Quotes are single-use and expire, so a cheap one cannot be
+banked or replayed onto another message.
+
+**Where this stands today.** The registered key belongs to an ordinary server
+process, and the measurement recorded against it says exactly that:
+`keccak256("stage1-plain-classifier-not-attested")`. The contracts are built for
+a Nitro enclave, where that measurement becomes a hash of the running image and
+the attestation is verified on Arc; swapping it in changes who may sign, not the
+interface. Claiming hardware attestation today would be false, so the
+measurement names itself.
 
 ## Why each piece
 
 ### Arc — where the money is
 
-Postage is denominated in cents, and Arc is the only chain where that is not
-absurd: **USDC is the native gas token**, so a $0.01 stamp and the ~$0.005 of
-gas that moves it are quoted in the same unit. On a chain with a volatile gas
-token you cannot promise someone a one cent stamp.
+Prices are in cents, and Arc is the only chain where that is not absurd: **USDC
+is the native gas token**, so a $0.01 price and the ~$0.003 of gas that moves it
+are quoted in the same unit.
 
-Three contracts, deployed at block 60568030:
+| Contract | Role |
+| --- | --- |
+| `PostageEscrow` | Takes payment against a signed quote, accrues it to the inbox |
+| `EnclaveRegistry` | Which signing keys the protocol accepts prices from |
+| `HumanRegistry` | Records that a wallet belongs to a verified person |
+| `PostageVault` | Takes a share of each payment and spends it making verification free |
 
-| Contract | Address | Role |
-| --- | --- | --- |
-| `PostageEscrow` | `0x164f432fd08dd4611172aa077882859b7c3ead7f` | Holds a stamp until the recipient judges the message |
-| `HumanRegistry` | `0x1b83c30c4138ca29a942f1a14237881daa7320d9` | Records that a wallet belongs to a verified person |
-| `PostageVault` | `0x771f3da6d0d05f904fd28a782bfafdf18393aa90` | Collects a share of claimed spam, spends it on verification |
-
-One Arc quirk shapes the whole codebase: **native USDC is 18 decimals, but the
-ERC-20 interface over the same balance is 6.** Mixing them misprices everything
-silently, so postage is taken as native `msg.value` throughout and the 6-decimal
-view is never touched. That also removes an `approve` step, which matters
-because the person paying is a cold sender who has never used the app.
+One Arc quirk shapes the code: **native USDC is 18 decimals, but the ERC-20 view
+of the same balance is 6.** Mixing them misprices everything silently, so
+amounts are native `msg.value` throughout and the 6-decimal view is never
+touched. That also removes an `approve` step, which matters because the person
+paying is a stranger who has never used the app.
 
 ### World ID — who gets in free
 
-The free lane is the whole product, and Selfie Check is the credential that fits
-it: a liveness and uniqueness signal built for sign-up and bot defence, where
-speed matters more than strict one-person-one-account.
+Proofs are verified off-chain against the Developer Portal, because the World ID
+router is on World Chain and settlement is on Arc. The backend signs an EIP-712
+attestation of `(wallet, nullifierHash, expiresAt)` and that goes on-chain.
 
-Proofs are verified **off-chain** against the Developer Portal, because the
-World ID router lives on World Chain and settlement is on Arc. Bridging a proof
-across chains was not worth it. Instead the backend signs an EIP-712 attestation
-of `(wallet, nullifierHash, expiresAt)` and that goes onchain.
+The per-action nullifier is pinned to one wallet, so one person cannot mint
+unlimited free senders. Selfie Check lasts 90 days, which becomes `expiresAt` —
+the free pass lapses with the credential rather than outliving it.
 
-Two details carry weight:
+`attest()` is callable by anyone, since the signature names the wallet it
+belongs to. That is what lets a relayer post it, which is what makes verifying
+cost the user nothing at all.
 
-- the **per-action nullifier** is pinned to one wallet in `HumanRegistry`, so
-  one person cannot mint themselves an unlimited supply of free senders
-- Selfie Check lasts **90 days**, which becomes the attestation's `expiresAt`,
-  so the free pass lapses with the credential rather than outliving it
+### The Graph — what a sender pays
 
-`attest()` is deliberately callable by anyone, since the signature names the
-wallet it belongs to. That is what makes gas sponsorship possible without
-weakening self-custody.
+Two sources compose into one number:
 
-### The Graph — what a stranger costs
+1. **Our subgraph** — payments, verdicts, and every time a recipient reported a
+   message the classifier let through
+2. **Public subgraphs via the gateway** — ENS ownership and age, for a wallet
+   with no history here
 
-Every message is priced by composing two sources:
-
-1. **Our subgraph** (`usepostage`, indexing all three contracts on arc-testnet)
-   — has this sender been marked as spam here before?
-2. **Public subgraphs via the decentralized gateway** — does this address have a
-   footprint anywhere else? ENS ownership and age are the current signals.
-
-```
-price = inbox floor x risk(in-network history, cross-protocol footprint)
-```
-
-Clamped to `[1x, 5x]`, because the escrow enforces the inbox price as a minimum
-and a discount below it would simply revert. Reputation earns you down to the
-floor; the way to pay nothing is to verify.
-
-The spread this produces on real wallets:
-
-| Sender | Pays | Why |
-| --- | --- | --- |
-| Verified person | free | attestation on Arc |
-| 4 messages, none flagged | 1.0x | well received here |
-| ENS since 2017, new here | 1.0x | established elsewhere |
-| No history anywhere | 2.0x | priced as a stranger |
-| 3 of 3 marked spam | 5.0x | earned it |
-
-Two different senders reach the floor for two different reasons, one from
-in-network behaviour and one from nine years of ENS history. That is the case
-for composing both rather than either alone.
-
-Delete The Graph and every row above becomes the same number.
+The tier sets the base; reputation moves it, clamped so a quote never falls
+below the inbox floor the escrow enforces.
 
 ### Privy — wallets for people who have none
 
-The person who lands on an unlock link is a cold sender who has no wallet, no
-extension, and no reason to install one. Email or passkey login mints an
-embedded wallet on Arc, and the whole payment path works for someone who has
-never heard of any of this. Without it the inbound flow is dead on arrival.
+The person clicking an unlock link is a stranger with no wallet and no reason to
+install one. Email or passkey login mints an embedded wallet on Arc, and the
+whole payment path works for someone who has never heard of any of this.
 
-### Cloudflare — holding the mail
+### Cloudflare — receiving and forwarding
 
-MX for `usepostage.com` points at Email Routing, and a catch-all rule sends
-every message to the `postage-mail` Worker. Catch-all matters: the app's own
-inbox table decides which addresses exist, so a new user works the moment they
-claim a name, with no DNS change.
+MX points at Email Routing; a catch-all rule sends every message to the worker.
+Catch-all matters because the app's own table decides which handles exist, so a
+new user works the moment they sign up with no DNS change.
 
-The Worker refuses held mail **inside SMTP**, with the unlock link in the
-rejection reason. That removes the need for any outbound mail service, and with
-it SPF/DKIM setup and deliverability risk — the sender's own provider surfaces
-the link back to them.
+Delivery is `message.forward()`, which passes the message through **untouched**.
+That is deliberate: DKIM signs headers and body, so any footer, subject tag or
+MIME re-encode would invalidate it and DMARC would have nothing to align on. The
+original sender therefore displays correctly in the recipient's client.
 
-### Vercel and Turso — the app and its memory
+The pitch — *tired of this, want to get paid for it?* — goes in the **challenge
+page** the sender lands on, never appended to forwarded mail.
 
-The Next.js app is both the UI and the backend; the mail webhook, the pricing
-engine and the attestation signer are all route handlers, so there is one
-deployable rather than a service mesh.
-
-Storage started as `node:sqlite`, which is a file on disk and therefore loses
-data on any host with an ephemeral filesystem — silently. `@libsql/client`
-speaks both `file:` and `libsql://`, so local development and production run
-identical queries against the same engine and only the URL changes.
-
-## Request flows
-
-### A stranger emails you
+## The vault closes the loop
 
 ```
-Gmail ──SMTP──▶ Cloudflare MX ──▶ Email Worker
-                                       │ POST /api/mail/inbound  (shared secret)
-                                       ▼
-                            look up inbox, store as HELD
-                                       │
-                     known sender? ──yes──▶ DELIVERED
-                                       │ no
-                                       ▼
-                        Worker refuses: "Postage required, unlock at <link>"
+commercial mail pays ──▶ PostageVault ──┬── 30% treasury
+                                        └── 70% sponsorship
+                                                  │
+                                    refillRelayer()│
+                                                  ▼
+                                     relayer pays gas for attest()
+                                                  ▼
+                              a wallet holding nothing verifies free
 ```
 
-### They unlock it
-
-```
-/u/<token> ──▶ Privy login ──▶ GET /api/price
-                                  ├── our subgraph      (spam history)
-                                  └── Graph gateway     (ENS footprint)
-                                          │
-        ┌─────────────────────────────────┴──────────────────────┐
-        ▼                                                        ▼
-  verify as a person                                    attach postage
-  POST /api/world/verify                                postStamp{value}
-  ├─ check proof with World                             from the Privy wallet
-  ├─ sign EIP-712 attestation                                   │
-  └─ relayer posts it to Arc  ◀── gas paid by the vault         │
-        │                                                        │
-        └────────────────▶ POST /api/mail/unlock ◀───────────────┘
-                     reads Arc: isHuman() or stamp in escrow
-                                    │
-                                 DELIVERED
-```
-
-Unlocking is **never trusted from the browser.** The server checks either a live
-attestation or a stamp actually sitting in escrow for that exact message hash,
-which is derived from the message itself so a stamp cannot be reused elsewhere.
-
-### You judge the message
-
-```
-release ──▶ sender refunded in full
-claim   ──▶ 80% to you, 20% to the vault
-expire  ──▶ after 14 days, sender refunded in full
-```
-
-The vault split applies to **claimed stamps only.** Refunds and expiries are
-untouched, because a bond you do not get back whole is just a fee. Two tests pin
-that invariant.
-
-### The vault closes the loop
-
-```
-claimed spam ──▶ PostageVault ──┬── 30% treasury
-                                └── 70% sponsorship pool
-                                          │
-                                          ▼
-                              refillRelayer() ──▶ relayer wallet
-                                          │
-                                          ▼
-                          pays gas for attest() on Arc
-                                          │
-                                          ▼
-                        a wallet holding nothing verifies for free
-```
-
-Sponsoring one attestation costs 0.00188 USDC. A spam stamp priced at 5x base
-yields about 0.007 to the pool, so **one claimed spam funds roughly 3.7
-verifications.** The pricing engine and the vault feed each other: riskier
-senders both pay more and fund more.
-
-`refillRelayer()` is callable by anyone, because the funds can only ever move to
-the relayer. That lets a keeper top it up without anyone holding the ability to
-move money elsewhere.
+Sponsoring one attestation costs 0.00188 USDC. `refillRelayer()` is callable by
+anyone, because the funds can only ever move to the relayer — a keeper can top
+it up without anyone gaining the ability to move money elsewhere.
 
 ## Trust boundaries
 
 | Secret | Lives in | Protects |
 | --- | --- | --- |
-| `WORLD_RP_SIGNING_KEY` | Vercel env | Signs `rp_context`; a leak lets anyone forge proof requests as this app |
-| `ATTESTER_PRIVATE_KEY` | Vercel env | Signs attestations the registry accepts |
+| `CLASSIFIER_PRIVATE_KEY` | Vercel env | Signs prices the escrow will accept |
+| `ATTESTER_PRIVATE_KEY` | Vercel env | Signs personhood attestations |
 | `RELAYER_PRIVATE_KEY` | Vercel env | Holds sponsorship funds only |
-| `MAIL_WEBHOOK_SECRET` | Vercel env + Worker secret | Stops anyone injecting mail into the gateway |
-| `DATABASE_AUTH_TOKEN` | Vercel env | Turso access |
-| `GRAPH_API_KEY` | Vercel env | Gateway queries |
+| `WORLD_RP_SIGNING_KEY` | Vercel env | Signs `rp_context`; a leak lets anyone forge proof requests as this app |
+| `MAIL_WEBHOOK_SECRET` | Vercel + worker secret | Stops anyone injecting mail into the gateway |
+| `ANTHROPIC_API_KEY` | Vercel env | Classifier access |
+| `DATABASE_AUTH_TOKEN`, `GRAPH_API_KEY` | Vercel env | Turso and gateway queries |
 
 Only `NEXT_PUBLIC_PRIVY_APP_ID` reaches the browser, and Privy app ids are
-public by design. Everything else is server-side, because `NEXT_PUBLIC_` is a
-broadcast rather than a permission.
+public by design. `NEXT_PUBLIC_` is a broadcast, not a permission — everything
+else is server-side.
 
-The **attester** and the **relayer** are separate keys on purpose: one authorises
-attestations, the other only spends gas. Compromising the relayer drains a few
-cents of sponsorship and nothing else.
+The attester, relayer and classifier are separate keys on purpose. Compromising
+the relayer drains a few cents of sponsorship and nothing else; compromising the
+classifier lets someone set prices but not mint personhood.
 
-## What is deliberately not onchain
+## What is deliberately not stored
 
-Message bodies live in Turso, not on Arc. Only the hash of a message is used
-onchain, as the id a stamp is bought against. Putting mail on a public ledger
-would be a poor idea for an email product, and the escrow does not need to read
-the message to hold a bond against it.
+Message bodies are never written anywhere. A held message leaves a challenge row
+recording sender, recipient and price — never the subject or the body. The mail
+is refused at the door and lives only in the sender's outbox until they resend.
+
+Only the message *hash* goes on-chain, as the id a payment is bound to. The
+escrow does not need to read a message to charge for it.
