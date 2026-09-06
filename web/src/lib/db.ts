@@ -25,8 +25,21 @@ const SCHEMA = [
      added_at INTEGER NOT NULL,
      PRIMARY KEY (handle, sender)
    )`,
-  /// Challenges are the only thing resembling a message we keep, and they hold
-  /// no content: just who was writing to whom, and what it would cost.
+  /// A handle someone is part way through claiming. It becomes a row in
+  /// `inboxes` only once they have proved they can read the address they are
+  /// pointing it at, so an unfinished claim forwards nothing.
+  `CREATE TABLE IF NOT EXISTS inbox_claims (
+     handle TEXT PRIMARY KEY,
+     destination TEXT NOT NULL,
+     wallet TEXT NOT NULL,
+     code_hash TEXT NOT NULL,
+     expires_at INTEGER NOT NULL,
+     attempts INTEGER NOT NULL DEFAULT 0,
+     code_verified_at INTEGER,
+     cf_address_id TEXT,
+     cf_verified_at INTEGER,
+     created_at INTEGER NOT NULL
+   )`,
   /// The wallet a sender last paid from, so the next message they write can be
   /// priced on what The Graph knows about them rather than as a stranger.
   `CREATE TABLE IF NOT EXISTS sender_wallets (
@@ -34,6 +47,8 @@ const SCHEMA = [
      wallet TEXT NOT NULL,
      linked_at INTEGER NOT NULL
    )`,
+  /// Challenges are the only thing resembling a message we keep, and they hold
+  /// no content: just who was writing to whom, and what it would cost.
   `CREATE TABLE IF NOT EXISTS challenges (
      token TEXT PRIMARY KEY,
      handle TEXT NOT NULL,
@@ -108,6 +123,81 @@ export async function allowlist(handle: string, sender: string, reason: string):
     `INSERT OR IGNORE INTO allowlist (handle, sender, reason, added_at) VALUES (?, ?, ?, ?)`,
     [handle.toLowerCase(), sender.toLowerCase(), reason, Math.floor(Date.now() / 1000)]
   );
+}
+
+export interface InboxClaim {
+  handle: string;
+  destination: string;
+  wallet: string;
+  code_hash: string;
+  expires_at: number;
+  attempts: number;
+  code_verified_at: number | null;
+  cf_address_id: string | null;
+  cf_verified_at: number | null;
+  created_at: number;
+}
+
+export async function startClaim(
+  claim: Pick<InboxClaim, "handle" | "destination" | "wallet" | "code_hash" | "expires_at" | "cf_address_id" | "cf_verified_at">
+): Promise<void> {
+  await run(
+    `INSERT INTO inbox_claims
+       (handle, destination, wallet, code_hash, expires_at, attempts, code_verified_at,
+        cf_address_id, cf_verified_at, created_at)
+     VALUES (?, ?, ?, ?, ?, 0, NULL, ?, ?, ?)
+     ON CONFLICT (handle) DO UPDATE SET
+       destination = excluded.destination,
+       wallet = excluded.wallet,
+       code_hash = excluded.code_hash,
+       expires_at = excluded.expires_at,
+       attempts = 0,
+       code_verified_at = NULL,
+       cf_address_id = excluded.cf_address_id,
+       cf_verified_at = excluded.cf_verified_at`,
+    [
+      claim.handle.toLowerCase(),
+      claim.destination.toLowerCase(),
+      claim.wallet.toLowerCase(),
+      claim.code_hash,
+      claim.expires_at,
+      claim.cf_address_id,
+      claim.cf_verified_at,
+      Math.floor(Date.now() / 1000),
+    ]
+  );
+}
+
+export async function claimByHandle(handle: string): Promise<InboxClaim | null> {
+  const rows = await all<InboxClaim>(`SELECT * FROM inbox_claims WHERE handle = ?`, [
+    handle.toLowerCase(),
+  ]);
+  return rows[0] ?? null;
+}
+
+export async function countClaimAttempt(handle: string): Promise<void> {
+  await run(`UPDATE inbox_claims SET attempts = attempts + 1 WHERE handle = ?`, [
+    handle.toLowerCase(),
+  ]);
+}
+
+export async function markCodeVerified(handle: string): Promise<void> {
+  await run(`UPDATE inbox_claims SET code_verified_at = ? WHERE handle = ? AND code_verified_at IS NULL`, [
+    Math.floor(Date.now() / 1000),
+    handle.toLowerCase(),
+  ]);
+}
+
+export async function markCloudflareVerified(handle: string, verifiedAt: number): Promise<void> {
+  await run(`UPDATE inbox_claims SET cf_verified_at = ? WHERE handle = ?`, [
+    verifiedAt,
+    handle.toLowerCase(),
+  ]);
+}
+
+/// Dropped once the handle is a real inbox, so a used code hash is not kept.
+export async function clearClaim(handle: string): Promise<void> {
+  await run(`DELETE FROM inbox_claims WHERE handle = ?`, [handle.toLowerCase()]);
 }
 
 export async function linkSenderWallet(sender: string, wallet: string): Promise<void> {
