@@ -167,7 +167,52 @@ contract PostageEscrowTest is Test {
     function test_spamReportNeedsASettledMessage() public {
         vm.prank(alice);
         vm.expectRevert(PostageEscrow.NotSettled.selector);
-        escrow.reportSpam(MESSAGE, sender);
+        escrow.reportSpam(MESSAGE);
+    }
+
+    function test_onlyTheRecipientCanReportSpam() public {
+        _settle(MESSAGE);
+
+        vm.prank(sender);
+        vm.expectRevert(abi.encodeWithSelector(PostageEscrow.NotTheRecipient.selector, alice));
+        escrow.reportSpam(MESSAGE);
+    }
+
+    function test_spamIsReportedAgainstThePayerAndOnlyOnce() public {
+        _settle(MESSAGE);
+
+        vm.expectEmit(true, true, true, false);
+        emit PostageEscrow.SpamReported(MESSAGE, alice, sender);
+        vm.prank(alice);
+        escrow.reportSpam(MESSAGE);
+
+        vm.prank(alice);
+        vm.expectRevert(PostageEscrow.AlreadyReported.selector);
+        escrow.reportSpam(MESSAGE);
+    }
+
+    function test_anInboxWithNoChosenPriceStillChargesTheDefault() public {
+        address bob = makeAddr("bob");
+        assertEq(escrow.floorPrice(bob), 0);
+        assertEq(escrow.effectiveFloor(bob), escrow.DEFAULT_FLOOR());
+
+        uint40 expiry = _expiry();
+        bytes32 digest = escrow.quoteDigest(MESSAGE, bob, PostageEscrow.Tier.Commercial, 1, expiry);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(enclaveKey, digest);
+
+        vm.prank(sender);
+        vm.expectRevert(abi.encodeWithSelector(PostageEscrow.BelowFloor.selector, escrow.DEFAULT_FLOOR(), 1));
+        escrow.payToSend{value: 1}(
+            MESSAGE, bob, PostageEscrow.Tier.Commercial, 1, expiry, abi.encodePacked(r, s, v)
+        );
+    }
+
+    function _settle(bytes32 messageId) private {
+        uint40 expiry = _expiry();
+        bytes memory quote = _sign(enclaveKey, messageId, PostageEscrow.Tier.Commercial, CENT, expiry);
+
+        vm.prank(sender);
+        escrow.payToSend{value: CENT}(messageId, alice, PostageEscrow.Tier.Commercial, CENT, expiry, quote);
     }
 
     function testFuzz_vaultAndInboxAlwaysSplitTheWholePayment(uint96 paid) public {

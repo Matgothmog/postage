@@ -5,7 +5,7 @@
   "scripts": {
     "codegen": "graph codegen",
     "build": "graph build",
-    "deploy": "graph deploy usepostage"
+    "deploy": "graph deploy usepostage --node https://api.studio.thegraph.com/deploy/"
   },
   "devDependencies": {
     "@graphprotocol/graph-cli": "0.97.1",

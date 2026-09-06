@@ -17,6 +17,19 @@
   },
   {
     "type": "function",
+    "name": "DEFAULT_FLOOR",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "VAULT_BPS",
     "inputs": [],
     "outputs": [
@@ -54,6 +67,25 @@
     "outputs": [
       {
         "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "effectiveFloor",
+    "inputs": [
+      {
+        "name": "inbox",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -220,11 +252,6 @@
         "name": "messageId",
         "type": "bytes32",
         "internalType": "bytes32"
-      },
-      {
-        "name": "sender",
-        "type": "address",
-        "internalType": "address"
       }
     ],
     "outputs": [],
@@ -258,6 +285,35 @@
         "name": "",
         "type": "bool",
         "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "settlementOf",
+    "inputs": [
+      {
+        "name": "messageId",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "inbox",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "reported",
+        "type": "bool",
+        "internalType": "bool"
+      },
+      {
+        "name": "payer",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "stateMutability": "view"
@@ -395,6 +451,11 @@
   },
   {
     "type": "error",
+    "name": "AlreadyReported",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "AlreadySettled",
     "inputs": []
   },
@@ -450,6 +511,17 @@
     "type": "error",
     "name": "NotSettled",
     "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NotTheRecipient",
+    "inputs": [
+      {
+        "name": "inbox",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
   },
   {
     "type": "error",

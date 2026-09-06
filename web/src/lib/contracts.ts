@@ -2,7 +2,7 @@ import { arcTestnet } from "viem/chains";
 
 export const chain = arcTestnet;
 
-export const POSTAGE_ESCROW = "0x5dcf371c3959de729ca637628dc574133ab42795" as const;
+export const POSTAGE_ESCROW = "0x4469e869433cf6cc08dd54afc6ac7e288b9a38f7" as const;
 export const HUMAN_REGISTRY = "0x0f9a1c7e971df81adc1b0335a527b30b6f136d05" as const;
 export const POSTAGE_VAULT = "0xd488a385529e9eec44a17b686f3b9372071f22dc" as const;
 export const ENCLAVE_REGISTRY = "0xf6afced17443571c79036f9d543ddbc2c5a645f9" as const;
@@ -13,6 +13,35 @@ export const ENCLAVE_REGISTRY = "0xf6afced17443571c79036f9d543ddbc2c5a645f9" as 
 export const USDC_DECIMALS = 18;
 
 export const escrowAbi = [
+  {
+    "type": "constructor",
+    "inputs": [
+      {
+        "name": "registry_",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "vault_",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "DEFAULT_FLOOR",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
   {
     "type": "function",
     "name": "VAULT_BPS",
@@ -52,6 +81,25 @@ export const escrowAbi = [
     "outputs": [
       {
         "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "effectiveFloor",
+    "inputs": [
+      {
+        "name": "inbox",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -218,11 +266,6 @@ export const escrowAbi = [
         "name": "messageId",
         "type": "bytes32",
         "internalType": "bytes32"
-      },
-      {
-        "name": "sender",
-        "type": "address",
-        "internalType": "address"
       }
     ],
     "outputs": [],
@@ -256,6 +299,35 @@ export const escrowAbi = [
         "name": "",
         "type": "bool",
         "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "settlementOf",
+    "inputs": [
+      {
+        "name": "messageId",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "inbox",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "reported",
+        "type": "bool",
+        "internalType": "bool"
+      },
+      {
+        "name": "payer",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "stateMutability": "view"
@@ -393,6 +465,11 @@ export const escrowAbi = [
   },
   {
     "type": "error",
+    "name": "AlreadyReported",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "AlreadySettled",
     "inputs": []
   },
@@ -448,6 +525,17 @@ export const escrowAbi = [
     "type": "error",
     "name": "NotSettled",
     "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NotTheRecipient",
+    "inputs": [
+      {
+        "name": "inbox",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
   },
   {
     "type": "error",

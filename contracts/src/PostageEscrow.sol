@@ -34,17 +34,33 @@ contract PostageEscrow is EIP712 {
     uint16 public constant VAULT_BPS = 2_000;
     uint16 private constant ONE = 10_000;
 
+    /// @notice What an inbox charges before its owner has said otherwise. A
+    /// wallet that has only ever claimed a handle is protected from the first
+    /// message onward, so setting a price is a preference rather than a step
+    /// in signing up. Native USDC is 18 decimals here, so this is one cent.
+    uint256 public constant DEFAULT_FLOOR = 0.01 ether;
+
     EnclaveRegistry public immutable registry;
     address public immutable vault;
 
-    /// @notice Floor an inbox owner will accept. The enclave may quote above it
-    /// for a risky sender, never below.
+    /// @notice Floor an inbox owner will accept, or zero while they have not
+    /// chosen one. Read `effectiveFloor` rather than this. The enclave may
+    /// quote above the floor for a risky sender, never below.
     mapping(address inbox => uint256 amount) public floorPrice;
 
     mapping(address inbox => uint256 amount) public earnings;
 
+    /// @notice What a settled message was: who received it and who paid.
+    /// Recorded so a spam report can be checked against the payment rather
+    /// than taken on the caller's word.
+    struct Settlement {
+        address inbox;
+        bool reported;
+        address payer;
+    }
+
     /// @notice One payment per message, so a quote cannot be replayed.
-    mapping(bytes32 messageId => bool) public settled;
+    mapping(bytes32 messageId => Settlement) public settlementOf;
 
     event FloorPriceSet(address indexed inbox, uint256 amount);
     event Paid(
@@ -62,6 +78,8 @@ contract PostageEscrow is EIP712 {
 
     error AlreadySettled();
     error NotSettled();
+    error AlreadyReported();
+    error NotTheRecipient(address inbox);
     error QuoteExpired();
     error UnknownEnclave(address signer);
     error BelowFloor(uint256 required, uint256 quoted);
@@ -81,6 +99,18 @@ contract PostageEscrow is EIP712 {
         emit FloorPriceSet(msg.sender, amount);
     }
 
+    /// @notice What this inbox actually charges. Zero means the owner never
+    /// picked a price, not that mail to them is free.
+    function effectiveFloor(address inbox) public view returns (uint256) {
+        uint256 chosen = floorPrice[inbox];
+        return chosen == 0 ? DEFAULT_FLOOR : chosen;
+    }
+
+    /// @notice Whether this message has already been paid for.
+    function settled(bytes32 messageId) public view returns (bool) {
+        return settlementOf[messageId].inbox != address(0);
+    }
+
     /// @param enclaveSignature EIP-712 signature over the quote, from a key
     /// registered in EnclaveRegistry.
     function payToSend(
@@ -91,17 +121,18 @@ contract PostageEscrow is EIP712 {
         uint40 expiresAt,
         bytes calldata enclaveSignature
     ) external payable {
-        if (settled[messageId]) revert AlreadySettled();
+        if (inbox == address(0)) revert ZeroAddress();
+        if (settled(messageId)) revert AlreadySettled();
         if (block.timestamp >= expiresAt) revert QuoteExpired();
 
-        uint256 floor = floorPrice[inbox];
+        uint256 floor = effectiveFloor(inbox);
         if (amount < floor) revert BelowFloor(floor, amount);
         if (msg.value < amount) revert Underpaid(amount, msg.value);
 
         address signer = _recoverQuoteSigner(messageId, inbox, tier, amount, expiresAt, enclaveSignature);
         if (!registry.isRegistered(signer)) revert UnknownEnclave(signer);
 
-        settled[messageId] = true;
+        settlementOf[messageId] = Settlement({inbox: inbox, reported: false, payer: msg.sender});
 
         uint256 toVault = (msg.value * VAULT_BPS) / ONE;
         earnings[inbox] += msg.value - toVault;
@@ -113,9 +144,17 @@ contract PostageEscrow is EIP712 {
     /// @notice The classifier let something through that should not have been.
     /// Recorded rather than refunded: the money has already accrued, and what
     /// matters is that this sender is priced worse next time.
-    function reportSpam(bytes32 messageId, address sender) external {
-        if (!settled[messageId]) revert NotSettled();
-        emit SpamReported(messageId, msg.sender, sender);
+    ///
+    /// Only the inbox that received the message may report it, and only once.
+    /// Reputation that anyone could write to would price nobody correctly.
+    function reportSpam(bytes32 messageId) external {
+        Settlement storage settlement = settlementOf[messageId];
+        if (settlement.inbox == address(0)) revert NotSettled();
+        if (settlement.inbox != msg.sender) revert NotTheRecipient(settlement.inbox);
+        if (settlement.reported) revert AlreadyReported();
+
+        settlement.reported = true;
+        emit SpamReported(messageId, msg.sender, settlement.payer);
     }
 
     function claimEarnings(address to) external {

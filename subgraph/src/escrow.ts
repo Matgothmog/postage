@@ -42,10 +42,12 @@ export function handlePaid(event: Paid): void {
 /// moves; this is the signal that prices the sender worse next time.
 export function handleSpamReported(event: SpamReported): void {
   const payment = Payment.load(event.params.messageId);
-  if (payment != null) {
-    payment.reportedAsSpam = true;
-    payment.save();
-  }
+  // The escrow allows one report per message, and counting a replayed event
+  // twice would move a price on nothing.
+  if (payment == null || payment.reportedAsSpam) return;
+
+  payment.reportedAsSpam = true;
+  payment.save();
 
   const sender = loadSender(event.params.sender, event.block.timestamp);
   sender.spamReports += 1;
