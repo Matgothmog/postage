@@ -5,75 +5,39 @@ export const dynamic = "force-dynamic";
 
 const OVERVIEW = `
   query Overview {
-    vaults(first: 1) {
-      totalFunded
-      toTreasury
-      toSponsorship
-      refilledToRelayer
-      fundingEvents
+    vaults(first: 1) { totalFunded toSponsorship refilledToRelayer fundingEvents }
+    enclaves(first: 5) { id measurement revoked registeredAt }
+    humanAttestations(first: 100) { id }
+    inboxes(first: 10, orderBy: earned, orderDirection: desc) {
+      id floorPrice receivedCount earned claimed
     }
-    humanAttestations(first: 50, orderBy: attestedAt, orderDirection: desc) {
-      id
-      expiresAt
-      attestedAt
+    senders(first: 25, orderBy: paidCount, orderDirection: desc) {
+      id paidCount totalPaid spamReports spamRate humanUntil
     }
-    senders(first: 25, orderBy: stampsPosted, orderDirection: desc) {
-      id
-      stampsPosted
-      totalEscrowed
-      releasedCount
-      claimedCount
-      settledCount
-      spamRate
-      humanUntil
-    }
-    stamps(first: 15, orderBy: postedAt, orderDirection: desc) {
-      id
-      amount
-      status
-      postedAt
-      sender { id }
-    }
-    inboxes(first: 10) {
-      id
-      price
-      receivedCount
-      claimedCount
+    payments(first: 15, orderBy: paidAt, orderDirection: desc) {
+      id tier amount reportedAsSpam sender { id }
     }
   }
 `;
 
 interface Overview {
-  vaults: {
-    totalFunded: string;
-    toTreasury: string;
-    toSponsorship: string;
-    refilledToRelayer: string;
-    fundingEvents: number;
-  }[];
-  humanAttestations: { id: string; expiresAt: string; attestedAt: string }[];
+  vaults: { totalFunded: string; toSponsorship: string; refilledToRelayer: string; fundingEvents: number }[];
+  enclaves: { id: string; measurement: string; revoked: boolean; registeredAt: string }[];
+  humanAttestations: { id: string }[];
+  inboxes: { id: string; floorPrice: string; receivedCount: number; earned: string; claimed: string }[];
   senders: {
     id: string;
-    stampsPosted: number;
-    totalEscrowed: string;
-    releasedCount: number;
-    claimedCount: number;
-    settledCount: number;
+    paidCount: number;
+    totalPaid: string;
+    spamReports: number;
     spamRate: string;
     humanUntil: string | null;
   }[];
-  stamps: {
-    id: string;
-    amount: string;
-    status: string;
-    postedAt: string;
-    sender: { id: string };
-  }[];
-  inboxes: { id: string; price: string; receivedCount: number; claimedCount: number }[];
+  payments: { id: string; tier: string; amount: string; reportedAsSpam: boolean; sender: { id: string } }[];
 }
 
-/// Gas a single attestation costs on Arc, measured at 25 gwei. Used to express
-/// the vault balance in the unit that actually matters: people onboarded.
+/// Gas one attestation costs on Arc at 25 gwei, measured. Used to state the
+/// sponsorship pool in the unit that means something: people onboarded.
 const ATTESTATION_COST = 75_395n * 25_000_000_000n;
 
 export default async function NetworkPage() {
@@ -97,93 +61,120 @@ export default async function NetworkPage() {
   }
 
   const vault = data.vaults[0];
-  const sponsored = vault ? BigInt(vault.toSponsorship) / ATTESTATION_COST : 0n;
-  const verified = data.humanAttestations.length;
+  const sponsors = vault ? BigInt(vault.toSponsorship) / ATTESTATION_COST : 0n;
+  const earned = data.inboxes.reduce((total, inbox) => total + BigInt(inbox.earned), 0n);
 
   return (
     <Shell>
       <header>
         <h1 className="text-xl font-semibold tracking-tight">The network</h1>
         <p className="mt-1 text-sm text-neutral-600">
-          Every stamp, settlement and verification, read from the subgraph indexing Arc.
+          Every price paid, who paid it, and which code decided it. Read from the subgraph
+          indexing Arc.
         </p>
       </header>
 
       <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Stat label="People verified" value={String(verified)} note="free to send" />
-        <Stat
-          label="Spam collected"
-          value={vault ? formatUsdc(BigInt(vault.totalFunded)) : "0"}
-          note={vault ? `over ${vault.fundingEvents} claims` : "no claims yet"}
-        />
+        <Stat label="People verified" value={String(data.humanAttestations.length)} note="send free" />
+        <Stat label="Earned by inboxes" value={formatUsdc(earned)} note="paid by senders" />
         <Stat
           label="Funds verification"
           value={vault ? formatUsdc(BigInt(vault.toSponsorship)) : "0"}
-          note={`pays for ~${sponsored} more`}
+          note={`pays for ~${sponsors} more`}
         />
         <Stat
-          label="Kept for the protocol"
-          value={vault ? formatUsdc(BigInt(vault.toTreasury)) : "0"}
-          note="30% of the vault"
+          label="Priced by"
+          value={data.enclaves.filter((e) => !e.revoked).length ? "attested code" : "none"}
+          note={data.enclaves.length ? shortAddress(data.enclaves[0].id) : "no signer yet"}
         />
       </div>
 
-      <Section title="Senders" hint="Reputation is what decides the price a stranger pays.">
-        <table className="w-full text-sm">
-          <thead className="text-left text-xs uppercase tracking-wide text-neutral-500">
-            <tr>
-              <th className="pb-2 font-medium">Address</th>
-              <th className="pb-2 font-medium">Sent</th>
-              <th className="pb-2 font-medium">Refunded</th>
-              <th className="pb-2 font-medium">Spam</th>
-              <th className="pb-2 text-right font-medium">Standing</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.senders.map((sender) => {
-              const human =
-                sender.humanUntil !== null &&
-                Number(sender.humanUntil) > Math.floor(Date.now() / 1000);
-              const rate = Number(sender.spamRate);
-              return (
-                <tr key={sender.id} className="border-t border-neutral-100">
-                  <td className="py-2 font-mono">{shortAddress(sender.id)}</td>
-                  <td className="py-2">{sender.stampsPosted}</td>
-                  <td className="py-2">{sender.releasedCount}</td>
-                  <td className="py-2">{sender.claimedCount}</td>
-                  <td className="py-2 text-right">
-                    {human ? (
-                      <Tag tone="good">verified person</Tag>
-                    ) : sender.settledCount === 0 ? (
-                      <Tag tone="quiet">no history</Tag>
-                    ) : rate >= 0.5 ? (
-                      <Tag tone="bad">{Math.round(rate * 100)}% spam</Tag>
-                    ) : (
-                      <Tag tone="quiet">{Math.round(rate * 100)}% spam</Tag>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+      {data.enclaves.length > 0 && (
+        <Section
+          title="Who is allowed to set a price"
+          hint="The escrow rejects any price not signed by one of these keys."
+        >
+          <ul className="space-y-2 text-sm">
+            {data.enclaves.map((enclave) => (
+              <li key={enclave.id} className="flex items-baseline justify-between gap-3">
+                <span className="font-mono">{shortAddress(enclave.id)}</span>
+                <span className="truncate font-mono text-xs text-neutral-500">
+                  {enclave.measurement.slice(0, 18)}…
+                </span>
+                <span className={enclave.revoked ? "text-neutral-400" : "text-green-700"}>
+                  {enclave.revoked ? "revoked" : "active"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
+
+      <Section title="Senders" hint="What a sender pays next time depends on this.">
+        {data.senders.length === 0 ? (
+          <p className="text-sm text-neutral-500">Nobody has paid yet.</p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead className="text-left text-xs uppercase tracking-wide text-neutral-500">
+              <tr>
+                <th className="pb-2 font-medium">Wallet</th>
+                <th className="pb-2 font-medium">Paid</th>
+                <th className="pb-2 font-medium">Reported</th>
+                <th className="pb-2 text-right font-medium">Standing</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.senders.map((sender) => {
+                const human =
+                  sender.humanUntil !== null &&
+                  Number(sender.humanUntil) > Math.floor(Date.now() / 1000);
+                const rate = Number(sender.spamRate);
+                return (
+                  <tr key={sender.id} className="border-t border-neutral-100">
+                    <td className="py-2 font-mono">{shortAddress(sender.id)}</td>
+                    <td className="py-2">{sender.paidCount}</td>
+                    <td className="py-2">{sender.spamReports}</td>
+                    <td className="py-2 text-right">
+                      {human ? (
+                        <Tag tone="good">verified person</Tag>
+                      ) : rate >= 0.5 ? (
+                        <Tag tone="bad">{Math.round(rate * 100)}% reported</Tag>
+                      ) : (
+                        <Tag tone="quiet">{Math.round(rate * 100)}% reported</Tag>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
       </Section>
 
-      <Section title="Recent stamps">
-        <ul className="space-y-1 text-sm">
-          {data.stamps.map((stamp) => (
-            <li key={stamp.id} className="flex justify-between border-t border-neutral-100 py-2">
-              <span className="font-mono text-neutral-600">{shortAddress(stamp.sender.id)}</span>
-              <span className="font-mono">{formatUsdc(BigInt(stamp.amount))}</span>
-              <span className="w-20 text-right text-neutral-500">{stamp.status}</span>
-            </li>
-          ))}
-        </ul>
+      <Section title="Recent mail that paid">
+        {data.payments.length === 0 ? (
+          <p className="text-sm text-neutral-500">Nothing yet.</p>
+        ) : (
+          <ul className="space-y-1 text-sm">
+            {data.payments.map((payment) => (
+              <li
+                key={payment.id}
+                className="flex justify-between border-t border-neutral-100 py-2"
+              >
+                <span className="font-mono text-neutral-600">
+                  {shortAddress(payment.sender.id)}
+                </span>
+                <span className="text-neutral-500">{payment.tier.toLowerCase()}</span>
+                <span className="font-mono">{formatUsdc(BigInt(payment.amount))}</span>
+              </li>
+            ))}
+          </ul>
+        )}
       </Section>
 
       <p className="mt-10 text-xs text-neutral-500">
-        Served by a subgraph indexing PostageEscrow, HumanRegistry and PostageVault on Arc
-        testnet. The same data prices every message.
+        Verified people and anything urgent are delivered free and never appear here, because
+        nothing is charged and nothing is written to a chain.
       </p>
     </Shell>
   );
@@ -199,15 +190,7 @@ function Stat({ label, value, note }: { label: string; value: string; note: stri
   );
 }
 
-function Section({
-  title,
-  hint,
-  children,
-}: {
-  title: string;
-  hint?: string;
-  children: React.ReactNode;
-}) {
+function Section({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
   return (
     <section className="mt-10">
       <h2 className="text-sm font-medium">{title}</h2>

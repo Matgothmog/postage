@@ -6,11 +6,9 @@ export function loadSender(address: Bytes, timestamp: BigInt): Sender {
   if (sender != null) return sender;
 
   sender = new Sender(address);
-  sender.stampsPosted = 0;
-  sender.totalEscrowed = BigInt.zero();
-  sender.releasedCount = 0;
-  sender.claimedCount = 0;
-  sender.settledCount = 0;
+  sender.paidCount = 0;
+  sender.totalPaid = BigInt.zero();
+  sender.spamReports = 0;
   sender.spamRate = BigDecimal.zero();
   sender.firstSeenAt = timestamp;
   return sender;
@@ -21,22 +19,29 @@ export function loadInbox(address: Bytes): Inbox {
   if (inbox != null) return inbox;
 
   inbox = new Inbox(address);
-  inbox.price = BigInt.zero();
+  inbox.floorPrice = BigInt.zero();
   inbox.receivedCount = 0;
-  inbox.releasedCount = 0;
-  inbox.claimedCount = 0;
-  inbox.claimedTotal = BigInt.zero();
+  inbox.earned = BigInt.zero();
+  inbox.claimed = BigInt.zero();
   return inbox;
 }
 
-/// Only meaningful once something has actually been settled, so an unsettled
-/// sender reads as zero rather than as trustworthy.
+/// Only meaningful once something has been paid for, so a sender with no
+/// history reads as zero rather than as trustworthy.
 export function refreshSpamRate(sender: Sender): void {
-  if (sender.settledCount == 0) {
+  if (sender.paidCount == 0) {
     sender.spamRate = BigDecimal.zero();
     return;
   }
-  sender.spamRate = BigDecimal.fromString(sender.claimedCount.toString()).div(
-    BigDecimal.fromString(sender.settledCount.toString())
+  sender.spamRate = BigDecimal.fromString(sender.spamReports.toString()).div(
+    BigDecimal.fromString(sender.paidCount.toString())
   );
+}
+
+/// Matches the Tier enum in PostageEscrow.
+export function tierName(index: i32): string {
+  if (index == 0) return "Human";
+  if (index == 1) return "Important";
+  if (index == 2) return "Commercial";
+  return "Dangerous";
 }

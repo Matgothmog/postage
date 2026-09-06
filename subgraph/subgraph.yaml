@@ -1,5 +1,5 @@
 specVersion: 1.0.0
-description: Postage — stamps, settlements and verified-human attestations on Arc
+description: Postage — what mail costs, who paid, and which code priced it
 schema:
   file: ./schema.graphql
 dataSources:
@@ -7,47 +7,61 @@ dataSources:
     name: PostageEscrow
     network: arc-testnet
     source:
-      address: "0x164f432fd08dd4611172aa077882859b7c3ead7f"
+      address: "0x5dcf371c3959de729ca637628dc574133ab42795"
       abi: PostageEscrow
-      startBlock: 60568030
+      startBlock: 60731753
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.9
       language: wasm/assemblyscript
       file: ./src/escrow.ts
-      entities:
-        - Sender
-        - Inbox
-        - Stamp
+      entities: [Sender, Inbox, Payment]
       abis:
         - name: PostageEscrow
           file: ./abis/PostageEscrow.json
       eventHandlers:
-        - event: PriceSet(indexed address,uint256)
-          handler: handlePriceSet
-        - event: StampPosted(indexed bytes32,indexed address,indexed address,uint256)
-          handler: handleStampPosted
-        - event: StampReleased(indexed bytes32,indexed address,uint256)
-          handler: handleStampReleased
-        - event: StampClaimed(indexed bytes32,indexed address,uint256,uint256)
-          handler: handleStampClaimed
-        - event: StampExpired(indexed bytes32,indexed address,uint256)
-          handler: handleStampExpired
+        - event: FloorPriceSet(indexed address,uint256)
+          handler: handleFloorPriceSet
+        - event: Paid(indexed bytes32,indexed address,indexed address,uint8,uint256,uint256)
+          handler: handlePaid
+        - event: SpamReported(indexed bytes32,indexed address,indexed address)
+          handler: handleSpamReported
+        - event: EarningsClaimed(indexed address,indexed address,uint256)
+          handler: handleEarningsClaimed
+  - kind: ethereum
+    name: EnclaveRegistry
+    network: arc-testnet
+    source:
+      address: "0xf6afced17443571c79036f9d543ddbc2c5a645f9"
+      abi: EnclaveRegistry
+      startBlock: 60731753
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      file: ./src/enclave.ts
+      entities: [Enclave]
+      abis:
+        - name: EnclaveRegistry
+          file: ./abis/EnclaveRegistry.json
+      eventHandlers:
+        - event: EnclaveRegistered(indexed address,bytes32)
+          handler: handleEnclaveRegistered
+        - event: EnclaveRevoked(indexed address)
+          handler: handleEnclaveRevoked
   - kind: ethereum
     name: HumanRegistry
     network: arc-testnet
     source:
-      address: "0x1b83c30c4138ca29a942f1a14237881daa7320d9"
+      address: "0x0f9a1c7e971df81adc1b0335a527b30b6f136d05"
       abi: HumanRegistry
-      startBlock: 60568030
+      startBlock: 60731753
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.9
       language: wasm/assemblyscript
       file: ./src/registry.ts
-      entities:
-        - HumanAttestation
-        - Sender
+      entities: [HumanAttestation, Sender]
       abis:
         - name: HumanRegistry
           file: ./abis/HumanRegistry.json
@@ -58,16 +72,15 @@ dataSources:
     name: PostageVault
     network: arc-testnet
     source:
-      address: "0x771f3da6d0d05f904fd28a782bfafdf18393aa90"
+      address: "0xd488a385529e9eec44a17b686f3b9372071f22dc"
       abi: PostageVault
-      startBlock: 60568030
+      startBlock: 60731753
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.9
       language: wasm/assemblyscript
       file: ./src/vault.ts
-      entities:
-        - Vault
+      entities: [Vault]
       abis:
         - name: PostageVault
           file: ./abis/PostageVault.json

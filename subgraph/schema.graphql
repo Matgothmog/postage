@@ -1,55 +1,68 @@
 """
-A wallet that has sent stamped mail. This is the reputation record: how often
-someone's mail was worth receiving, and how often it was spam.
+A wallet that has paid to reach an inbox. This is the reputation record the
+pricing engine reads back: what a sender has sent, and how often the recipient
+disagreed with the classifier afterwards.
 """
 type Sender @entity(immutable: false) {
   id: Bytes!
-  stampsPosted: Int!
-  totalEscrowed: BigInt!
-  releasedCount: Int!
-  claimedCount: Int!
+  paidCount: Int!
+  totalPaid: BigInt!
+  spamReports: Int!
   """
-  claimed / (claimed + released). Undefined until a stamp is settled, so it
-  starts at zero and only means something once settledCount > 0.
+  spamReports / paidCount. Only meaningful once something has been paid, so it
+  reads as zero rather than as trustworthy for a sender with no history.
   """
   spamRate: BigDecimal!
-  settledCount: Int!
-  humanUntil: BigInt
   firstSeenAt: BigInt!
-  stamps: [Stamp!]! @derivedFrom(field: "sender")
+  humanUntil: BigInt
+  payments: [Payment!]! @derivedFrom(field: "sender")
 }
 
-"""An inbox and the postage it demands from strangers."""
+"""An inbox, what it charges, and what it has earned."""
 type Inbox @entity(immutable: false) {
   id: Bytes!
-  price: BigInt!
+  floorPrice: BigInt!
   receivedCount: Int!
-  releasedCount: Int!
-  claimedCount: Int!
-  claimedTotal: BigInt!
-  stamps: [Stamp!]! @derivedFrom(field: "recipient")
+  earned: BigInt!
+  claimed: BigInt!
+  payments: [Payment!]! @derivedFrom(field: "inbox")
 }
 
-type Stamp @entity(immutable: false) {
+"""
+One message paid for. The tier is the classifier's verdict, which is what the
+enclave signed and the escrow refused to price without.
+"""
+type Payment @entity(immutable: false) {
   id: Bytes!
   sender: Sender!
-  recipient: Inbox!
+  inbox: Inbox!
+  tier: Tier!
   amount: BigInt!
-  status: StampStatus!
-  postedAt: BigInt!
-  postedTx: Bytes!
-  settledAt: BigInt
-  settledTx: Bytes
+  toVault: BigInt!
+  paidAt: BigInt!
+  tx: Bytes!
+  reportedAsSpam: Boolean!
 }
 
-enum StampStatus {
-  Held
-  Released
-  Claimed
-  Expired
+enum Tier {
+  Human
+  Important
+  Commercial
+  Dangerous
 }
 
-"""A World ID Selfie Check result, recorded on Arc."""
+"""
+A signing key the protocol accepts prices from, and the image measurement it
+was allowed under. Anyone can recompute that measurement from source.
+"""
+type Enclave @entity(immutable: false) {
+  id: Bytes!
+  measurement: Bytes!
+  registeredAt: BigInt!
+  revoked: Boolean!
+}
+
+"""A World ID result, recorded on Arc."""
 type HumanAttestation @entity(immutable: false) {
   id: Bytes!
   wallet: Bytes!
@@ -60,8 +73,8 @@ type HumanAttestation @entity(immutable: false) {
 }
 
 """
-Where the protocol's share of claimed spam goes. There is one of these, id
-"vault", so a single query answers how much spam has paid for verification.
+Where the protocol's share goes. One row, id "vault", so a single query answers
+how much paid mail has funded free verification.
 """
 type Vault @entity(immutable: false) {
   id: Bytes!

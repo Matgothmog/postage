@@ -3,25 +3,17 @@
     "type": "constructor",
     "inputs": [
       {
+        "name": "registry_",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
         "name": "vault_",
         "type": "address",
         "internalType": "address"
       }
     ],
     "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "EXPIRY",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint64",
-        "internalType": "uint64"
-      }
-    ],
-    "stateMutability": "view"
   },
   {
     "type": "function",
@@ -38,51 +30,20 @@
   },
   {
     "type": "function",
-    "name": "claim",
+    "name": "claimEarnings",
     "inputs": [
       {
-        "name": "messageId",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "expire",
-    "inputs": [
-      {
-        "name": "messageId",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "postStamp",
-    "inputs": [
-      {
-        "name": "messageId",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      },
-      {
-        "name": "recipient",
+        "name": "to",
         "type": "address",
         "internalType": "address"
       }
     ],
     "outputs": [],
-    "stateMutability": "payable"
+    "stateMutability": "nonpayable"
   },
   {
     "type": "function",
-    "name": "price",
+    "name": "earnings",
     "inputs": [
       {
         "name": "inbox",
@@ -101,12 +62,169 @@
   },
   {
     "type": "function",
-    "name": "release",
+    "name": "eip712Domain",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "fields",
+        "type": "bytes1",
+        "internalType": "bytes1"
+      },
+      {
+        "name": "name",
+        "type": "string",
+        "internalType": "string"
+      },
+      {
+        "name": "version",
+        "type": "string",
+        "internalType": "string"
+      },
+      {
+        "name": "chainId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "verifyingContract",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "salt",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "extensions",
+        "type": "uint256[]",
+        "internalType": "uint256[]"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "floorPrice",
+    "inputs": [
+      {
+        "name": "inbox",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "payToSend",
     "inputs": [
       {
         "name": "messageId",
         "type": "bytes32",
         "internalType": "bytes32"
+      },
+      {
+        "name": "inbox",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "tier",
+        "type": "uint8",
+        "internalType": "enum PostageEscrow.Tier"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "expiresAt",
+        "type": "uint40",
+        "internalType": "uint40"
+      },
+      {
+        "name": "enclaveSignature",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "payable"
+  },
+  {
+    "type": "function",
+    "name": "quoteDigest",
+    "inputs": [
+      {
+        "name": "messageId",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "inbox",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "tier",
+        "type": "uint8",
+        "internalType": "enum PostageEscrow.Tier"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "expiresAt",
+        "type": "uint40",
+        "internalType": "uint40"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "registry",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "contract EnclaveRegistry"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "reportSpam",
+    "inputs": [
+      {
+        "name": "messageId",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "sender",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "outputs": [],
@@ -114,7 +232,7 @@
   },
   {
     "type": "function",
-    "name": "setPrice",
+    "name": "setFloorPrice",
     "inputs": [
       {
         "name": "amount",
@@ -127,7 +245,7 @@
   },
   {
     "type": "function",
-    "name": "stamps",
+    "name": "settled",
     "inputs": [
       {
         "name": "messageId",
@@ -137,29 +255,9 @@
     ],
     "outputs": [
       {
-        "name": "sender",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "recipient",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "amount",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "postedAt",
-        "type": "uint64",
-        "internalType": "uint64"
-      },
-      {
-        "name": "status",
-        "type": "uint8",
-        "internalType": "enum PostageEscrow.Status"
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
       }
     ],
     "stateMutability": "view"
@@ -179,7 +277,38 @@
   },
   {
     "type": "event",
-    "name": "PriceSet",
+    "name": "EIP712DomainChanged",
+    "inputs": [],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "EarningsClaimed",
+    "inputs": [
+      {
+        "name": "inbox",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "to",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "FloorPriceSet",
     "inputs": [
       {
         "name": "inbox",
@@ -198,7 +327,7 @@
   },
   {
     "type": "event",
-    "name": "StampClaimed",
+    "name": "Paid",
     "inputs": [
       {
         "name": "messageId",
@@ -207,10 +336,22 @@
         "internalType": "bytes32"
       },
       {
-        "name": "recipient",
+        "name": "sender",
         "type": "address",
         "indexed": true,
         "internalType": "address"
+      },
+      {
+        "name": "inbox",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "tier",
+        "type": "uint8",
+        "indexed": false,
+        "internalType": "enum PostageEscrow.Tier"
       },
       {
         "name": "amount",
@@ -229,7 +370,7 @@
   },
   {
     "type": "event",
-    "name": "StampExpired",
+    "name": "SpamReported",
     "inputs": [
       {
         "name": "messageId",
@@ -238,97 +379,110 @@
         "internalType": "bytes32"
       },
       {
-        "name": "sender",
+        "name": "inbox",
         "type": "address",
         "indexed": true,
         "internalType": "address"
-      },
-      {
-        "name": "amount",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "StampPosted",
-    "inputs": [
-      {
-        "name": "messageId",
-        "type": "bytes32",
-        "indexed": true,
-        "internalType": "bytes32"
       },
       {
         "name": "sender",
         "type": "address",
         "indexed": true,
         "internalType": "address"
-      },
-      {
-        "name": "recipient",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "amount",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "StampReleased",
-    "inputs": [
-      {
-        "name": "messageId",
-        "type": "bytes32",
-        "indexed": true,
-        "internalType": "bytes32"
-      },
-      {
-        "name": "sender",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "amount",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
       }
     ],
     "anonymous": false
   },
   {
     "type": "error",
-    "name": "InvalidRecipient",
+    "name": "AlreadySettled",
     "inputs": []
   },
   {
     "type": "error",
-    "name": "NotRecipient",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "NotYetExpired",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "PostageTooLow",
+    "name": "BelowFloor",
     "inputs": [
       {
         "name": "required",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "quoted",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "ECDSAInvalidSignature",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ECDSAInvalidSignatureLength",
+    "inputs": [
+      {
+        "name": "length",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "ECDSAInvalidSignatureS",
+    "inputs": [
+      {
+        "name": "s",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "InvalidShortString",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NotSettled",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NothingToClaim",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "QuoteExpired",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "StringTooLong",
+    "inputs": [
+      {
+        "name": "str",
+        "type": "string",
+        "internalType": "string"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "TransferFailed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "Underpaid",
+    "inputs": [
+      {
+        "name": "quoted",
         "type": "uint256",
         "internalType": "uint256"
       },
@@ -341,18 +495,14 @@
   },
   {
     "type": "error",
-    "name": "StampAlreadyExists",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "StampNotHeld",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "TransferFailed",
-    "inputs": []
+    "name": "UnknownEnclave",
+    "inputs": [
+      {
+        "name": "signer",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
   },
   {
     "type": "error",
