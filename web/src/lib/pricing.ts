@@ -63,13 +63,13 @@ export function quote(
   }
 
   if (signals) {
-    if (signals.settledCount > 0 && signals.spamRate > 0) {
+    if (signals.paidCount > 0 && signals.spamRate > 0) {
       bps += Math.round(signals.spamRate * 4 * ONE);
-      reasons.push(`Reported as spam on ${signals.claimedCount} of ${signals.settledCount} past messages`);
+      reasons.push(`Reported as spam on ${signals.spamReports} of ${signals.paidCount} past messages`);
     }
-    if (signals.settledCount >= 3 && signals.spamRate < 0.2) {
+    if (signals.paidCount >= 3 && signals.spamRate < 0.2) {
       bps = Math.round(bps * 0.5);
-      reasons.push(`Well received here across ${signals.settledCount} messages`);
+      reasons.push(`Well received here across ${signals.paidCount} messages`);
     }
     if (signals.ensNames > 0) {
       bps = Math.round(bps * 0.7);

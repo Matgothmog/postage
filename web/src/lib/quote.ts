@@ -1,4 +1,5 @@
-import { type Hex, keccak256, stringToBytes } from "viem";
+import { createHmac } from "node:crypto";
+import type { Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { POSTAGE_ESCROW, chain } from "./contracts";
 import { TIER_INDEX, type Tier } from "./classify";
@@ -28,10 +29,19 @@ export interface SignedQuote {
   signature: Hex;
 }
 
-/// Derived from the message rather than random, so a quote is bound to the mail
-/// it was issued for and cannot be spent on a different one.
+/// Derived from the message, so a quote is bound to the mail it was issued for
+/// and cannot be spent on a different one.
+///
+/// Keyed rather than hashed plainly, because this id is published onchain and
+/// every part of the message it names is guessable: the handle is public by
+/// design, the sender is a short list, the subject of paid mail is templated,
+/// and the second it arrived is bounded by the block. A bare keccak of those
+/// is a preimage anyone can search, which would turn the ledger into a record
+/// of who writes to whom. Under HMAC it is a commitment instead.
 export function messageIdFor(sender: string, handle: string, subject: string, receivedAt: number): Hex {
-  return keccak256(stringToBytes(`${sender.toLowerCase()}|${handle.toLowerCase()}|${subject}|${receivedAt}`));
+  const preimage = `${sender.toLowerCase()}|${handle.toLowerCase()}|${subject}|${receivedAt}`;
+  const digest = createHmac("sha256", required("MESSAGE_ID_SECRET")).update(preimage).digest("hex");
+  return `0x${digest}`;
 }
 
 export async function signQuote(

@@ -27,6 +27,13 @@ const SCHEMA = [
    )`,
   /// Challenges are the only thing resembling a message we keep, and they hold
   /// no content: just who was writing to whom, and what it would cost.
+  /// The wallet a sender last paid from, so the next message they write can be
+  /// priced on what The Graph knows about them rather than as a stranger.
+  `CREATE TABLE IF NOT EXISTS sender_wallets (
+     sender TEXT PRIMARY KEY,
+     wallet TEXT NOT NULL,
+     linked_at INTEGER NOT NULL
+   )`,
   `CREATE TABLE IF NOT EXISTS challenges (
      token TEXT PRIMARY KEY,
      handle TEXT NOT NULL,
@@ -101,6 +108,21 @@ export async function allowlist(handle: string, sender: string, reason: string):
     `INSERT OR IGNORE INTO allowlist (handle, sender, reason, added_at) VALUES (?, ?, ?, ?)`,
     [handle.toLowerCase(), sender.toLowerCase(), reason, Math.floor(Date.now() / 1000)]
   );
+}
+
+export async function linkSenderWallet(sender: string, wallet: string): Promise<void> {
+  await run(
+    `INSERT INTO sender_wallets (sender, wallet, linked_at) VALUES (?, ?, ?)
+     ON CONFLICT (sender) DO UPDATE SET wallet = excluded.wallet, linked_at = excluded.linked_at`,
+    [sender.toLowerCase(), wallet.toLowerCase(), Math.floor(Date.now() / 1000)]
+  );
+}
+
+export async function walletForSender(sender: string): Promise<string | null> {
+  const rows = await all<{ wallet: string }>(`SELECT wallet FROM sender_wallets WHERE sender = ?`, [
+    sender.toLowerCase(),
+  ]);
+  return rows[0]?.wallet ?? null;
 }
 
 export interface Challenge {

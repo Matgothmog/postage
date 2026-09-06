@@ -38,8 +38,8 @@ export default {
         ...auth,
       });
     } catch {
-      // The gateway being down must not bounce someone's mail. Deliver it and
-      // let the recipient's own provider apply its usual filtering.
+      // Refused rather than forwarded unfiltered, so the sending MTA holds the
+      // message and retries rather than the recipient losing the gate.
       message.setReject("Postage is temporarily unavailable, please retry");
       return;
     }

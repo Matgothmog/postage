@@ -4,9 +4,8 @@ export interface SenderSignals {
   wallet: string;
   /// From our Subgraph, mirrored off the onchain World ID attestation.
   isHuman: boolean;
-  stampsPosted: number;
-  settledCount: number;
-  claimedCount: number;
+  paidCount: number;
+  spamReports: number;
   spamRate: number;
   /// From public Subgraphs on the network.
   ensNames: number;
@@ -16,9 +15,8 @@ export interface SenderSignals {
 const POSTAGE_HISTORY = `
   query SenderHistory($wallet: ID!) {
     sender(id: $wallet) {
-      stampsPosted
-      settledCount
-      claimedCount
+      paidCount
+      spamReports
       spamRate
       humanUntil
     }
@@ -36,9 +34,8 @@ const ENS_OWNED = `
 
 interface PostageResult {
   sender: {
-    stampsPosted: number;
-    settledCount: number;
-    claimedCount: number;
+    paidCount: number;
+    spamReports: number;
     spamRate: string;
     humanUntil: string | null;
   } | null;
@@ -66,9 +63,8 @@ export async function gatherSignals(wallet: string): Promise<SenderSignals> {
   return {
     wallet: id,
     isHuman: humanUntil > Math.floor(Date.now() / 1000),
-    stampsPosted: sender?.stampsPosted ?? 0,
-    settledCount: sender?.settledCount ?? 0,
-    claimedCount: sender?.claimedCount ?? 0,
+    paidCount: sender?.paidCount ?? 0,
+    spamReports: sender?.spamReports ?? 0,
     spamRate: sender ? Number(sender.spamRate) : 0,
     ensNames: domains.length,
     oldestEnsAt: domains.length

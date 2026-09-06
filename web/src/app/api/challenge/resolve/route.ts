@@ -1,7 +1,7 @@
 import { type Hex, isAddress } from "viem";
 import { publicClient } from "@/lib/client";
 import { HUMAN_REGISTRY, POSTAGE_ESCROW, escrowAbi, registryAbi } from "@/lib/contracts";
-import { allowlist, challengeByToken, resolveChallenge } from "@/lib/db";
+import { allowlist, challengeByToken, linkSenderWallet, resolveChallenge } from "@/lib/db";
 
 /// A sender clears the gate one of two ways, and both are checked against the
 /// chain rather than taken on the browser's word: they hold a live proof of
@@ -23,6 +23,9 @@ export async function POST(request: Request) {
 
   if (await hasPaid(challenge.message_id as Hex)) {
     await allowlist(challenge.handle, challenge.sender, "paid");
+    // Remembering which wallet paid is what lets the next message from this
+    // sender be priced on their record instead of from scratch.
+    await linkSenderWallet(challenge.sender, wallet);
     await resolveChallenge(token);
     return Response.json({ status: "cleared", reason: "paid" });
   }
