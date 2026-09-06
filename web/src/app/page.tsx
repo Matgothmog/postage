@@ -2,9 +2,9 @@
 
 import { usePrivy, useSendTransaction, useWallets } from "@privy-io/react-auth";
 import { useCallback, useEffect, useState } from "react";
-import { encodeFunctionData } from "viem";
+import { encodeFunctionData, formatUnits } from "viem";
 import { publicClient } from "@/lib/client";
-import { POSTAGE_ESCROW, escrowAbi } from "@/lib/contracts";
+import { POSTAGE_ESCROW, USDC_DECIMALS, escrowAbi } from "@/lib/contracts";
 import { formatUsdc, parseUsdc, shortAddress } from "@/lib/format";
 
 interface Inbox {
@@ -141,19 +141,37 @@ function CreateInbox({ wallet, onCreated }: { wallet: string; onCreated: () => v
 function InboxPanel({ inbox, wallet }: { inbox: Inbox; wallet: string }) {
   const { sendTransaction } = useSendTransaction();
   const [earnings, setEarnings] = useState<bigint | null>(null);
-  const [draft, setDraft] = useState("0.01");
+  const [floor, setFloor] = useState<{ amount: bigint; chosen: boolean } | null>(null);
+  const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState<"price" | "claim" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const read = useCallback(async () => {
-    setEarnings(
-      await publicClient.readContract({
+    const inboxAddress = wallet as `0x${string}`;
+    const [earned, chosen, effective] = await Promise.all([
+      publicClient.readContract({
         address: POSTAGE_ESCROW,
         abi: escrowAbi,
         functionName: "earnings",
-        args: [wallet as `0x${string}`],
-      })
-    );
+        args: [inboxAddress],
+      }),
+      publicClient.readContract({
+        address: POSTAGE_ESCROW,
+        abi: escrowAbi,
+        functionName: "floorPrice",
+        args: [inboxAddress],
+      }),
+      publicClient.readContract({
+        address: POSTAGE_ESCROW,
+        abi: escrowAbi,
+        functionName: "effectiveFloor",
+        args: [inboxAddress],
+      }),
+    ]);
+
+    setEarnings(earned);
+    setFloor({ amount: effective, chosen: chosen !== 0n });
+    setDraft(formatUnits(effective, USDC_DECIMALS));
   }, [wallet]);
 
   useEffect(() => {
@@ -214,19 +232,21 @@ function InboxPanel({ inbox, wallet }: { inbox: Inbox; wallet: string }) {
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             inputMode="decimal"
+            placeholder="0.01"
             className="w-28 rounded-lg border border-neutral-300 px-3 py-2 text-sm"
           />
           <button
             onClick={() => send("price")}
-            disabled={busy !== null}
+            disabled={busy !== null || draft.trim().length === 0}
             className="rounded-lg border border-neutral-300 px-4 py-2 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
           >
             {busy === "price" ? "Saving" : "Update"}
           </button>
         </div>
         <p className="mt-2 text-xs text-neutral-500">
-          Marketing pays this. Anything trying to deceive you pays ten times it, and still does not
-          arrive.
+          {floor && !floor.chosen
+            ? `Already charging ${formatUsdc(floor.amount)} by default, so there is nothing you have to do here.`
+            : "Marketing pays this. Anything trying to deceive you pays ten times it, and still does not arrive."}
         </p>
         {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
       </div>
