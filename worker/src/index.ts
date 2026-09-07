@@ -77,7 +77,14 @@ export default {
         body: parsed.text ?? parsed.html ?? "",
         ...auth,
       });
-    } catch {
+    } catch (cause) {
+      // Say which way it broke. A refusal the sender can read but nobody can
+      // explain is the worst of both - they retry into the same wall, and the
+      // only record of why is a status code nobody wrote down.
+      console.error("classify failed", {
+        gateway: safeHost(env.POSTAGE_API_URL),
+        cause: cause instanceof Error ? cause.message : String(cause),
+      });
       // Refused rather than forwarded unfiltered, so the sending MTA holds the
       // message and retries rather than the recipient losing the gate.
       message.setReject("Postage is temporarily unavailable, please retry");
@@ -226,6 +233,18 @@ async function ask(
 
   // 404 is a real answer (no such inbox), not a failure to reach the gateway.
   if (response.status === 404) return { action: "reject", reason: "unknown_inbox" };
-  if (!response.ok) throw new Error(`Gateway returned ${response.status}`);
+  if (!response.ok) {
+    throw new Error(`Gateway returned ${response.status}: ${(await response.text()).slice(0, 300)}`);
+  }
   return (await response.json()) as Verdict;
+}
+
+/// The host on its own. Enough to tell a misconfigured gateway from an
+/// unreachable one, without writing a configured URL into the logs whole.
+function safeHost(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "unparseable POSTAGE_API_URL";
+  }
 }

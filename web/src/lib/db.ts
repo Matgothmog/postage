@@ -67,8 +67,6 @@ const SCHEMA = [
   /// worker that received it, so that releasing it can put the original bytes
   /// on the wire; `held_until` is only this side's record that it still exists.
   ///
-  /// `subject` and `body` remain so that rows written before the message moved
-  /// out of here are still emptied by `purgeExpiredHolds`. Nothing writes them.
   `CREATE TABLE IF NOT EXISTS challenges (
      token TEXT PRIMARY KEY,
      handle TEXT NOT NULL,
@@ -77,13 +75,31 @@ const SCHEMA = [
      tier TEXT NOT NULL,
      amount TEXT NOT NULL,
      quote_json TEXT NOT NULL,
-     subject TEXT,
-     body TEXT,
      held_until INTEGER,
      created_at INTEGER NOT NULL,
      resolved_at INTEGER
    )`,
 ];
+
+/// Columns added to a table that already existed somewhere.
+///
+/// `CREATE TABLE IF NOT EXISTS` does nothing at all to a table that is already
+/// there, so every column added after a database was first created is a column
+/// that database never gets. `held_until` is the one that bit: a deployment whose
+/// `challenges` table predates holding kept answering every held message with a
+/// 500, because the statement meant to erase expired holds named a column it did
+/// not have. Adding a column is not optional work to be done by hand later.
+const ADDED_COLUMNS: { table: string; column: string; type: string }[] = [
+  { table: "challenges", column: "held_until", type: "INTEGER" },
+];
+
+async function addMissingColumns(client: Client): Promise<void> {
+  for (const { table, column, type } of ADDED_COLUMNS) {
+    const existing = await client.execute(`PRAGMA table_info(${table})`);
+    if (existing.rows.some((row) => row.name === column)) continue;
+    await client.execute(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  }
+}
 
 let ready: Promise<Client> | null = null;
 
@@ -95,6 +111,7 @@ function db(): Promise<Client> {
       authToken: process.env.DATABASE_AUTH_TOKEN,
     });
     for (const statement of SCHEMA) await client.execute(statement);
+    await addMissingColumns(client);
     return client;
   })();
   return ready;
@@ -373,15 +390,13 @@ export async function claimHold(token: string): Promise<boolean> {
   return result.rowsAffected > 0;
 }
 
-/// Drops every hold that ran out. Called on the way past rather than on a timer,
-/// because a message nobody released should not outlive its window just because
-/// nothing happened to wake us. The worker erases its own copy the same way; this
-/// only forgets that there was one, and empties the two columns rows written
-/// before the move still carry.
+/// Forgets every hold that ran out. The message itself is dropped by the worker
+/// at its deadline whatever happens here; this only clears our record that one
+/// was outstanding, so a challenge page stops offering to release something that
+/// is already gone.
 export async function purgeExpiredHolds(): Promise<void> {
   await run(
-    `UPDATE challenges SET subject = NULL, body = NULL, held_until = NULL
-     WHERE held_until IS NOT NULL AND held_until <= ?`,
+    `UPDATE challenges SET held_until = NULL WHERE held_until IS NOT NULL AND held_until <= ?`,
     [Math.floor(Date.now() / 1000)]
   );
 }
