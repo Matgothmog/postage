@@ -10,6 +10,9 @@ the behaviour, and confirming it is the first task, not fixing it.
 
 ## Blocking a real demo
 
+Nothing in the mail path. A message from Gmail to a live handle has been held,
+answered, released and delivered against the deployed stack.
+
 Nothing in the environment. Every variable is confirmed and signup has been run
 end to end against production: a signed claim returned `200`, the code arrived,
 a wrong code decremented the allowance, the right one promoted the claim to an
@@ -102,11 +105,16 @@ open, so the risk is a signup that quietly takes the long way rather than one
 that lets a stranger through. Establish first that the short path actually
 fires.
 
-**`message.reply()` has only been run against local workerd.** It answered
-correctly there, threaded to the original by `In-Reply-To` and `References` —
-but the DMARC precondition Cloudflare enforces is not enforced locally, so how
-many real senders qualify is unmeasured. Every one that does not gets the bounce
-instead, which still carries the link.
+**`message.reply()` and the release both work in production.** Run end to end
+against a real message from Gmail: held, replied to in the same session, and on
+answering, released through Mailgun and delivered. The worker logged the inbound
+and the `POST /release` thirty-three seconds apart, the hold was gone from KV
+afterwards, and the challenge row read resolved with `held_until` null.
+
+What is still unmeasured is how many senders clear Cloudflare's DMARC
+precondition for a reply. One provider qualifying does not say much about the
+rest, and every sender who does not gets the bounce instead, which still carries
+the link.
 
 ## Correctness
 
