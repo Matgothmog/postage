@@ -98,13 +98,15 @@ export default function Home() {
 interface ClaimState {
   handle: string;
   destination: string;
+  codeVerified: boolean;
+  cloudflareVerified: boolean;
 }
 
 function CreateInbox({ wallet, onCreated }: { wallet: string; onCreated: () => void }) {
   const [claim, setClaim] = useState<ClaimState | null>(null);
 
   if (!claim) return <StartClaim wallet={wallet} onStarted={setClaim} />;
-  return <ConfirmClaim claim={claim} onLive={onCreated} />;
+  return <ConfirmClaim claim={claim} onClaim={setClaim} onLive={onCreated} />;
 }
 
 function StartClaim({ wallet, onStarted }: { wallet: string; onStarted: (claim: ClaimState) => void }) {
@@ -145,7 +147,7 @@ function StartClaim({ wallet, onStarted }: { wallet: string; onStarted: (claim: 
     <section className="mt-8 rounded-xl border border-neutral-200 bg-white p-5">
       <h2 className="text-sm font-medium">Pick an address to hand out</h2>
       <p className="mt-1 text-sm text-neutral-600">
-        Mail sent here is read, judged, and delivered to the inbox you actually use. You never
+        Mail sent here is read, judged, and forwarded to the inbox you actually use. You never
         change email provider.
       </p>
 
@@ -162,7 +164,7 @@ function StartClaim({ wallet, onStarted }: { wallet: string; onStarted: (claim: 
         <input
           value={destination}
           onChange={(event) => setDestination(event.target.value)}
-          placeholder="deliver it to you@gmail.com"
+          placeholder="forward it to you@gmail.com"
           className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm"
         />
         <button
@@ -173,7 +175,8 @@ function StartClaim({ wallet, onStarted }: { wallet: string; onStarted: (claim: 
           {saving ? "Sending" : "Create"}
         </button>
         <p className="text-xs text-neutral-500">
-          We will send that address a code, to check you can read it. One email, one step.
+          We will email that address to check you can read it. Nothing is forwarded anywhere until
+          you confirm.
         </p>
       </div>
       {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
@@ -181,13 +184,48 @@ function StartClaim({ wallet, onStarted }: { wallet: string; onStarted: (claim: 
   );
 }
 
-/// The whole of signing up. Reading the code proves the claimer can read the
-/// address they are pointing the handle at, and because Postage delivers the
-/// mail itself there is nothing else anyone has to be told.
-function ConfirmClaim({ claim, onLive }: { claim: ClaimState; onLive: () => void }) {
+/// Both confirmations are real and neither substitutes for the other.
+/// Cloudflare will not forward to an address it has not verified; our own code
+/// is what ties this claim to whoever is making it, because a Cloudflare
+/// destination someone else verified already reads as verified to us.
+function ConfirmClaim({
+  claim,
+  onClaim,
+  onLive,
+}: {
+  claim: ClaimState;
+  onClaim: (claim: ClaimState) => void;
+  onLive: () => void;
+}) {
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  const apply = useCallback(
+    (next: { codeVerified: boolean; cloudflareVerified: boolean; live: boolean }) => {
+      if (next.live) {
+        onLive();
+        return;
+      }
+      onClaim({
+        ...claim,
+        codeVerified: claim.codeVerified || next.codeVerified,
+        cloudflareVerified: claim.cloudflareVerified || next.cloudflareVerified,
+      });
+    },
+    [claim, onClaim, onLive]
+  );
+
+  // Cloudflare's half turns green when the user clicks the link in its email,
+  // which happens outside this page, so it has to be asked for.
+  useEffect(() => {
+    if (claim.cloudflareVerified) return;
+    const poll = setInterval(async () => {
+      const response = await fetch(`/api/inbox/verify?handle=${claim.handle}`);
+      if (response.ok) apply(await response.json());
+    }, 4000);
+    return () => clearInterval(poll);
+  }, [claim.handle, claim.cloudflareVerified, apply]);
 
   async function submit() {
     setBusy(true);
@@ -198,9 +236,9 @@ function ConfirmClaim({ claim, onLive }: { claim: ClaimState; onLive: () => void
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ handle: claim.handle, code: code.trim() }),
       });
-      const result = (await response.json()) as { live?: boolean; error?: string };
+      const result = await response.json();
       if (!response.ok) throw new Error(result.error ?? "Could not check that code");
-      if (result.live) onLive();
+      apply(result);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -212,28 +250,80 @@ function ConfirmClaim({ claim, onLive }: { claim: ClaimState; onLive: () => void
     <section className="mt-8 rounded-xl border border-neutral-200 bg-white p-5">
       <h2 className="text-sm font-medium">Check {claim.destination}</h2>
       <p className="mt-1 text-sm text-neutral-600">
-        Enter the code we just sent and {claim.handle}@usepostage.com is live.
+        {claim.codeVerified
+          ? "Cloudflare carries the mail and has just sent you a link of its own. Click it and you are done — often it is already sorted and this finishes on its own."
+          : `Enter the code we sent, and ${claim.handle}@usepostage.com is nearly yours.`}
       </p>
 
-      <div className="mt-4 flex gap-2">
-        <input
-          value={code}
-          onChange={(event) => setCode(event.target.value)}
-          inputMode="numeric"
-          maxLength={6}
-          placeholder="000000"
-          className="w-32 rounded-lg border border-neutral-300 px-3 py-2 font-mono text-sm tracking-widest"
-        />
-        <button
-          onClick={submit}
-          disabled={busy || code.trim().length !== 6}
-          className="rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
-        >
-          {busy ? "Checking" : "Confirm"}
-        </button>
+      <div className="mt-5 space-y-5">
+        <Step done={claim.codeVerified} n={1} label="Enter the code from Postage">
+          {claim.codeVerified ? null : (
+            <div className="mt-2 flex gap-2">
+              <input
+                value={code}
+                onChange={(event) => setCode(event.target.value)}
+                inputMode="numeric"
+                maxLength={6}
+                placeholder="000000"
+                className="w-32 rounded-lg border border-neutral-300 px-3 py-2 font-mono text-sm tracking-widest"
+              />
+              <button
+                onClick={submit}
+                disabled={busy || code.trim().length !== 6}
+                className="rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
+              >
+                {busy ? "Checking" : "Confirm"}
+              </button>
+            </div>
+          )}
+        </Step>
+
+        <Step done={claim.cloudflareVerified} n={2} label="Click the link from Cloudflare">
+          {claim.cloudflareVerified ? null : claim.codeVerified ? (
+            <p className="mt-1 text-xs text-neutral-500">
+              Waiting. Cloudflare will not carry mail to an address it has not checked itself, and
+              only the person reading that mailbox can answer it. Sent from cloudflare.com, so look
+              in spam if it is not there.
+            </p>
+          ) : (
+            <p className="mt-1 text-xs text-neutral-400">
+              Nothing to do yet. We ask Cloudflare for this the moment your code goes in, so you
+              only ever deal with one email at a time.
+            </p>
+          )}
+        </Step>
       </div>
-      {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+
+      {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
     </section>
+  );
+}
+
+function Step({
+  done,
+  n,
+  label,
+  children,
+}: {
+  done: boolean;
+  n: number;
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex gap-3">
+      <span
+        className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs ${
+          done ? "bg-green-600 text-white" : "border border-neutral-300 text-neutral-500"
+        }`}
+      >
+        {done ? "\u2713" : n}
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className={`text-sm ${done ? "text-neutral-400 line-through" : "text-neutral-800"}`}>{label}</p>
+        {children}
+      </div>
+    </div>
   );
 }
 

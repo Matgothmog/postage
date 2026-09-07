@@ -195,31 +195,16 @@ The person clicking an unlock link is a stranger with no wallet and no reason to
 install one. Email or passkey login mints an embedded wallet on Arc, and the
 whole payment path works for someone who has never heard of any of this.
 
-### Cloudflare — receiving only
+### Cloudflare — receiving and forwarding
 
 MX points at Email Routing; a catch-all rule sends every message to the worker.
 Catch-all matters because the app's own table decides which handles exist, so a
 new user works the moment they sign up with no DNS change.
 
-**Cloudflare never delivers.** `message.forward()` is not called at all: the
-gateway sends every message itself, through Resend. That is a deliberate trade
-and it costs something real.
-
-`message.forward()` passes a message through untouched, so the sender's DKIM
-signature survives and their name displays correctly in the recipient's client.
-Relaying loses that. The message is genuinely from us, signed by us, with the
-sender's name leading the From line and their address in `Reply-To` rather than
-either being forged into `From`.
-
-What it buys is the whole of signing up. Cloudflare will only forward to an
-address someone has confirmed by clicking a link it emails them, and no API can
-answer that link on their behalf. Every user would have had to confirm the same
-address twice, to two strangers, in two emails. Not forwarding means Cloudflare
-never needs to know the address exists.
-
-The bet is that authentication carries mail, and it is now ours to earn rather
-than the sender's to lend: SPF and DKIM pass for `usepostage.com`, and DMARC is
-the leg still missing.
+Delivery is `message.forward()`, which passes the message through **untouched**.
+That is deliberate: DKIM signs headers and body, so any footer, subject tag or
+MIME re-encode would invalidate it and DMARC would have nothing to align on. The
+original sender therefore displays correctly in the recipient's client.
 
 The pitch — *tired of this, want to get paid for it?* — goes in the **challenge
 page** the sender lands on, never appended to forwarded mail.
@@ -241,16 +226,19 @@ Sponsoring one attestation costs 0.00188 USDC. `refillRelayer()` is callable by
 anyone, because the funds can only ever move to the relayer — a keeper can top
 it up without anyone gaining the ability to move money elsewhere.
 
-## Signing up is one code
+## One email at a time
 
-Claiming a handle sends one email and asks one thing: read the code at the
-address you are pointing it at. That proves the claimer can read that mailbox,
-which is what owning an inbox means here, and it is the only confirmation there
-is.
+Claiming a handle needs two confirmations that cannot stand in for each other:
+our code, which ties the claim to whoever made it, and Cloudflare's, without
+which it will not carry mail to that address at all. Cloudflare's cannot be
+automated — the link it sends is answerable only by the person reading that
+mailbox, and no API accepts it on their behalf.
 
-It is one only because Postage delivers mail itself. A gateway that asked
-Cloudflare to forward would need every address confirmed with Cloudflare too, by
-a link only the mailbox owner can answer — the same fact established twice.
+What can be removed is the collision. Cloudflare is not told about the address
+until the code comes back, so the claimer deals with one message at a time and
+never presses anything to summon the second. An address the account already
+knows returns verified on the spot, and signing up was the code and nothing
+else.
 
 ## Setup a new user does not have to do
 

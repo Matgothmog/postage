@@ -12,7 +12,6 @@ import {
   walletForSender,
 } from "@/lib/db";
 import { required } from "@/lib/env";
-import { deliverMessage } from "@/lib/mail";
 import { quote } from "@/lib/pricing";
 import { messageIdFor, signQuote } from "@/lib/quote";
 import { gatherSignals } from "@/lib/reputation";
@@ -25,36 +24,6 @@ interface InboundPayload {
   spf?: string;
   dkim?: string;
   dmarc?: string;
-  html?: string;
-}
-
-/// Postage delivers every message itself rather than asking Cloudflare to
-/// forward it. Cloudflare only receives. That is what removes the second
-/// confirmation from signing up: a destination Cloudflare never sends to is a
-/// destination it never has to have verified.
-async function deliver(
-  destination: string,
-  handle: string,
-  sender: string,
-  payload: Partial<InboundPayload>,
-  reason: string,
-  verdict?: unknown
-) {
-  try {
-    await deliverMessage({
-      to: destination,
-      from: sender,
-      handle,
-      subject: payload.subject ?? "(no subject)",
-      text: payload.body ?? "",
-      html: payload.html,
-    });
-  } catch {
-    // Refused rather than silently dropped, so the sending server keeps it and
-    // the message is not lost to an outage on our side.
-    return Response.json({ action: "reject", reason: "delivery_failed" }, { status: 503 });
-  }
-  return Response.json({ action: "delivered", reason, verdict });
 }
 
 /// Whether the receiving MTA could confirm the envelope sender is who it says.
@@ -105,7 +74,9 @@ export async function POST(request: Request) {
   // is a sender who cleared the gate minutes ago rather than ever.
   if (senderIsAuthenticated(payload)) {
     const pass = await spendPass(handle, sender);
-    if (pass) return deliver(inbox.destination, handle, sender, payload, pass.reason);
+    if (pass) {
+      return Response.json({ action: "forward", to: inbox.destination, reason: pass.reason });
+    }
   }
 
   const facts: MailFacts = {
@@ -124,7 +95,12 @@ export async function POST(request: Request) {
   // The only tier that is never held. It grants no pass, because the next
   // message from the same sender has to earn its own way through.
   if (verdict.tier === "important") {
-    return deliver(inbox.destination, handle, sender, payload, verdict.tier, verdict);
+    return Response.json({
+      action: "forward",
+      to: inbox.destination,
+      reason: verdict.tier,
+      verdict,
+    });
   }
 
   // A sender who has paid before is priced on that history rather than as a

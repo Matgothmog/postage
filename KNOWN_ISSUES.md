@@ -153,18 +153,11 @@ instead. The window is fifteen minutes, `dangerous` mail is never held, and the
 body is erased as it is read. It is a real retention claim where there used to
 be none — see [ARCHITECTURE.md](ARCHITECTURE.md#held-means-held).
 
-**Every message loses the sender's DKIM.** Nothing is forwarded any more, so no
-message keeps the sender's signature. Each is relayed as
-`Sarah (via Postage) <hello@usepostage.com>` with the real address in
-`Reply-To`. Deliverability is now `usepostage.com`'s reputation to earn, and it
-is a young domain relaying strangers' words to inboxes — the shape spam filters
-exist to distrust. Low volume is forgiving; this is a scale problem waiting.
-
-**`_dmarc.usepostage.com` does not exist.** Checked against DNS: DKIM is
-published and SPF passes on Resend's return-path, but no DMARC record exists at
-all. Now that every message is ours rather than the sender's, this is the
-remaining leg of authentication and it is missing. Add
-`"v=DMARC1; p=none; rua=mailto:..."` and read the reports before tightening it.
+**Released mail loses DKIM alignment.** A held message is relayed under our name
+with the sender in `Reply-To`, because `message.forward()` can only be called
+during the worker execution that received it. So a released message displays as
+from Postage rather than from the sender. Mail that is never held still gets the
+untouched forward.
 
 **Privacy inside the server.** The destination address and the allowlist are
 stored in plaintext, and five parties read every message. This was a decision,

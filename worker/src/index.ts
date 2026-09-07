@@ -6,10 +6,8 @@ interface Env {
 }
 
 type Verdict = {
-  /// `delivered` means the gateway has already sent it on. Cloudflare never
-  /// forwards, so no destination address has to be verified with it, and
-  /// claiming a handle needs nothing but the code we email.
-  action: "delivered" | "reject";
+  action: "forward" | "reject";
+  to?: string;
   reason?: string;
   challenge_url?: string;
   /// True when the gateway is holding the message, so clearing the gate
@@ -39,10 +37,7 @@ export default {
         from: message.from,
         to: message.to,
         subject: parsed.subject ?? "",
-        body: parsed.text ?? "",
-        // Most commercial mail is HTML only, and it is the tier that pays, so
-        // it should not arrive as a wall of markup.
-        html: parsed.html ?? undefined,
+        body: parsed.text ?? parsed.html ?? "",
         ...auth,
       });
     } catch {
@@ -52,8 +47,10 @@ export default {
       return;
     }
 
-    // Accepted with no further action: the gateway has already delivered it.
-    if (verdict.action === "delivered") return;
+    if (verdict.action === "forward" && verdict.to) {
+      await message.forward(verdict.to);
+      return;
+    }
 
     if (verdict.reason === "unknown_inbox") {
       message.setReject("No such address at this domain");
@@ -69,9 +66,6 @@ export default {
 
 function rejection(verdict: Verdict): string {
   if (!verdict.challenge_url) return "Not delivered.";
-  if (verdict.reason === "delivery_failed") {
-    return "Postage could not deliver this right now, please retry";
-  }
   if (verdict.reason === "dangerous") {
     return `Not delivered: this looks like an attempt to deceive the recipient, and paying will not change that. If it is a mistake, say so at ${verdict.challenge_url}`;
   }
@@ -88,7 +82,6 @@ async function ask(
     to: string;
     subject: string;
     body: string;
-    html?: string;
     spf: string | null;
     dkim: string | null;
     dmarc: string | null;

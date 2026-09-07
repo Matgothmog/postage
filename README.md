@@ -60,10 +60,6 @@ every time a recipient contradicted the classifier is indexed, and that history
 prices the next message. A sender who has never been reported pays the minimum;
 one who has pays several times it.
 
-**Resend** carries every message out. Cloudflare receives the mail and hands it
-to the gateway, which judges it and then delivers it. Nothing is forwarded, so
-no address is ever confirmed twice and claiming a handle is one code.
-
 **Privy** gives a wallet to people who do not have one. The person clicking the
 unlock link is a stranger with no wallet and no reason to install one.
 

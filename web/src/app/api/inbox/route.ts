@@ -57,10 +57,9 @@ export async function GET(request: Request) {
 /// naming its owner's wallet.
 ///
 /// The emailed code proves the claimer can read the address they are pointing
-/// the handle at, and it is the only confirmation there is. Postage delivers
-/// every message itself rather than asking Cloudflare to forward it, so no
-/// address ever has to be registered with Cloudflare and nobody is asked to
-/// confirm the same thing twice.
+/// the handle at. Cloudflare's own verification cannot stand in for it, because
+/// destinations are shared across the whole account: an address someone else
+/// verified already reads as verified to us.
 export async function POST(request: Request) {
   const { handle, destination, wallet, issuedAt, signature } = (await request.json()) as {
     handle?: string;
@@ -108,6 +107,9 @@ export async function POST(request: Request) {
     wallet: wallet!,
     code_hash: hashCode(name, code),
     expires_at: Math.floor(Date.now() / 1000) + CODE_TTL_SECONDS,
+    // Cloudflare is not told about this address until the code comes back.
+    // Registering now would make it send its own mail at the same moment as
+    // ours, so the claimer would face two emails and two instructions at once.
     cf_address_id: null,
     cf_verified_at: null,
   });
@@ -117,6 +119,7 @@ export async function POST(request: Request) {
     handle: name,
     destination: address,
     codeVerified: false,
+    cloudflareVerified: false,
     expiresIn: CODE_TTL_SECONDS,
   });
 }
