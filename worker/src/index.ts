@@ -3,16 +3,12 @@ import PostalMime from "postal-mime";
 interface Env {
   POSTAGE_API_URL: string;
   POSTAGE_SECRET: string;
-  /// Messages waiting for their sender to answer, as the exact bytes that
-  /// arrived. Nothing else in the system has a copy.
+  /// Held mail, as the exact bytes that arrived. Nothing else has a copy.
   ///
-  /// KV rather than a bucket, for the one property that matters here: it drops
-  /// a value at a time we set when we write it. A hold nobody answers is erased
-  /// by Cloudflare at its deadline rather than by us noticing later, so there is
-  /// no sweep to fall behind and no window in which a message outlives the
-  /// promise made about it. The gap between writing and reading is however long
-  /// a person takes to open their mail, so KV's consistency window does not come
-  /// into it.
+  /// Each value carries its own expiry, so a hold nobody answers is dropped by
+  /// Cloudflare at its deadline rather than by us noticing later. Reads happen
+  /// however long a person takes to open their mail, so KV's consistency window
+  /// does not come into it.
   HELD: KVNamespace;
   /// Carries a released message out again. Cloudflare cannot: `send_email`
   /// refuses raw MIME whose `From:` is not a domain on this account, and
@@ -22,7 +18,6 @@ interface Env {
   MAILGUN_API_KEY: string;
 }
 
-/// What the sender is shown when we can write back to them.
 interface Notice {
   subject: string;
   html: string;
@@ -49,9 +44,6 @@ interface Verdict {
 /// a floor under it, so nothing can be stored indefinitely by omission.
 const FALLBACK_HOLD_SECONDS = 24 * 60 * 60;
 
-/// Reads the Authentication-Results the receiving MTA already wrote, so the
-/// classifier is told whether the sender is who they claim rather than having
-/// to guess from the prose.
 function authResults(header: string | null): { spf: string | null; dkim: string | null; dmarc: string | null } {
   const read = (method: string) => {
     const found = header?.match(new RegExp(`\\b${method}=(\\w+)`, "i"));
@@ -78,9 +70,7 @@ export default {
         ...auth,
       });
     } catch (cause) {
-      // Say which way it broke. A refusal the sender can read but nobody can
-      // explain is the worst of both - they retry into the same wall, and the
-      // only record of why is a status code nobody wrote down.
+      // Without this the sender retries into a wall nobody can explain.
       console.error("classify failed", {
         gateway: safeHost(env.POSTAGE_API_URL),
         cause: cause instanceof Error ? cause.message : String(cause),
@@ -105,16 +95,9 @@ export default {
     }
 
     if (verdict.action === "hold" && verdict.token) {
-      // The gateway sets the deadline; this only guards the case where it did
-      // not. A value written with no expiry is kept until something deletes it,
-      // and a held message nobody ever deletes is the one thing the promise made
-      // about holding cannot survive.
       const heldUntil = verdict.held_until ?? Math.floor(Date.now() / 1000) + FALLBACK_HOLD_SECONDS;
       await env.HELD.put(verdict.token, raw, { expiration: heldUntil });
 
-      // Answering in the same session is the whole point: the sender is told
-      // their message is waiting rather than that it bounced, and one click
-      // sends the copy we are holding.
       if (verdict.notice && (await replied(message, verdict.notice))) return;
 
       message.setReject(verdict.bounce ?? "Held. See the link in this message to release it");
@@ -129,8 +112,7 @@ export default {
     message.setReject(verdict.bounce ?? "Not delivered.");
   },
 
-  /// Releases a held message. Called by the gateway once the sender has said who
-  /// wrote it, and reachable by nothing else.
+  /// The one route. Everything else here answers 404.
   async fetch(request: Request, env: Env): Promise<Response> {
     const { pathname } = new URL(request.url);
     if (request.method !== "POST" || pathname !== "/release") {

@@ -4,7 +4,6 @@ export interface Inbox {
   handle: string;
   /// Where mail is forwarded. Verified with Cloudflare before anything is sent.
   destination: string;
-  /// Wallet that earnings accrue to and that can claim them.
   wallet: string | null;
   created_at: number;
 }
@@ -283,8 +282,6 @@ export async function markCodeVerified(handle: string): Promise<void> {
   ]);
 }
 
-/// Records which Cloudflare destination a claim is waiting on, once the code
-/// has come back and we have asked Cloudflare for one.
 export async function attachDestination(
   handle: string,
   addressId: string,
@@ -332,14 +329,10 @@ export async function walletForSender(sender: string): Promise<string | null> {
   return rows[0]?.wallet ?? null;
 }
 
-/// How long a held message is kept before it is erased unread.
-///
-/// Longer than the pass window on purpose. A pass is about how recently someone
-/// proved they were there; a hold is about how long a person reasonably takes to
-/// read the mail asking them, and nobody answers their inbox inside fifteen
-/// minutes. Making them shorter than a day would mean a sender who replies over
-/// lunch finds their message gone and has to write it again, which is the one
-/// thing holding it exists to prevent.
+/// Longer than the pass window on purpose. A pass measures how recently someone
+/// proved they were there; a hold measures how long a person takes to read the
+/// mail asking them. Anything shorter and a sender who answers over lunch finds
+/// their message gone and has to write it again.
 export const HOLD_SECONDS = 24 * 60 * 60;
 
 export interface Challenge {

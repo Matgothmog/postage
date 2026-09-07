@@ -59,9 +59,8 @@ function decode(segment: string): unknown {
 ///
 /// Its claims carry the accounts Privy verified - the address someone proved
 /// they could read when they signed in, and the wallet minted for them - signed
-/// by a key only Privy holds. That is the same fact our own emailed code
-/// establishes, already established, which is why the short signup does not ask
-/// for one.
+/// by a key only Privy holds. That is the fact our emailed code exists to
+/// establish, already established, which is why the short signup skips it.
 ///
 /// Returns null rather than throwing on anything malformed, because an absent or
 /// stale token is an ordinary state that falls back to the longer path.

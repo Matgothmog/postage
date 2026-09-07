@@ -7,17 +7,19 @@ Give out `you@usepostage.com`. Mail sent there is read, judged, and forwarded to
 the address you actually use. You do not change email provider, and you do not
 learn a new inbox.
 
-## What Postage is for
+## The idea
 
-Spam is cheap to send and expensive to receive, and every filter ever built has
-tried to fix that by getting better at guessing. Postage does something else:
-it makes the sender carry the cost. Marketing that wants your attention pays
-for it, and the money is yours.
+Spam is cheap to send and expensive to receive. Every filter ever built has tried
+to fix that by guessing better. Postage does something else: it makes the sender
+carry the cost. Marketing that wants your attention pays for it, and the money is
+yours.
 
-That is the whole idea. Everything below is in service of making a one-cent
-charge on a stranger's email actually work.
+Everything below exists to make a one-cent charge on a stranger's email actually
+work.
 
-Every stranger is held. The classifier does not decide whether to hold you, it
+## What happens to a message
+
+Every stranger is held. The classifier does not decide whether to hold you — it
 decides **who pays to get through**.
 
 | What it is | What happens |
@@ -27,47 +29,54 @@ decides **who pays to get through**.
 | Ordinary automated mail — newsletters, marketing | Held. Nobody proved a person is behind it, so it pays. |
 | Trying to deceive you | Never delivered. Being a person does not clear it, and paying is a penalty. |
 
-A stranger's message is **held for a day** rather than thrown away, and they get
-a reply to it asking one question: did a person write this, or a machine? Two
-links, one answer. They do not write the message again — we still have it.
+A held sender gets a **reply to the message they just sent**, threaded to it,
+asking one question: did a person write this, or a machine? Two links, one
+answer. Nothing asks them to write the message again, because it is still here.
 
-A person proves it with World ID and the message is delivered. **No wallet, no
-account, nothing to sign up for**; the free lane should not charge a toll in
-setup. A machine pays instead, and only then is there anything to create an
-account for, because only then is there money to move.
+A person proves it with World ID and the message goes. **No wallet, no account,
+nothing to sign up for** — the free lane should not charge a toll in setup. A
+machine pays instead, and only then is there anything to create an account for,
+because only then is there money to move.
 
-**What is delivered is what was sent.** A released message goes out as the exact
-bytes that arrived — the sender's own DKIM signature still covers it, their
-address is still in `From:`, and nothing of ours has been added to it.
+## What arrives is what was sent
 
-**A pass runs out.** Proving personhood opens a fifteen minute window; paying
-buys one delivery. Writing again tomorrow means proving it again. World ID is a
-check that someone was there a moment ago, not a badge an address keeps, and
-until liveness detection is good enough to say otherwise this treats it that
-way. The hold outlasts the pass on purpose: the pass is about how recently
-someone proved they were there, the hold about how long a person takes to read
-their mail.
+A released message is the bytes that arrived. The sender's own DKIM signature
+still covers it, their address is still in `From:`, and nothing of ours has been
+added — no footer, no subject tag, no rewritten links.
 
-## Why it needs all of this
+That is harder than it sounds, and it is the constraint that shaped the
+architecture. See [ARCHITECTURE.md](ARCHITECTURE.md#carrying-a-release).
+
+## A pass runs out
+
+Proving personhood opens a fifteen minute window; paying buys one delivery.
+Writing again tomorrow means answering again. World ID is a check that someone
+was there a moment ago, not a badge an address keeps.
+
+The hold outlives the pass on purpose. A pass measures how recently somebody
+proved they were there. A hold measures how long a person takes to read their
+mail, so it lasts a day.
+
+## Why it needs each piece
 
 **Arc** is where the money is. USDC is its native gas token, so a one-cent price
-and the half-cent of gas that moves it are quoted in the same unit. On a chain
-with a volatile gas token, a one-cent price is not a coherent idea.
+and the fraction of a cent of gas that moves it are quoted in the same unit. On a
+chain with a volatile gas token, a one-cent price is not a coherent idea.
 
-**World ID** is the free lane, and it is asked every time and of nobody's
-wallet. The attestation goes onchain against an address derived from the
-nullifier — an identity nobody holds a key to, which is all the registry needs
-it to be. A liveness and uniqueness check built for exactly
-this — bot defence where speed matters — and its per-action nullifier means one
-person cannot mint themselves unlimited free senders.
+**World ID** is the free lane, asked every time and of nobody's wallet. The
+attestation goes onchain against an address derived from the nullifier — an
+identity nobody holds a key to. Its per-action nullifier means one person cannot
+mint themselves unlimited free senders.
 
-**The Graph** decides what a sender pays. Every payment, every verdict, and
-every time a recipient contradicted the classifier is indexed, and that history
-prices the next message. A sender who has never been reported pays the minimum;
-one who has pays several times it.
+**The Graph** decides what a sender pays. Every payment, every verdict, and every
+time a recipient contradicted the classifier is indexed, and that history prices
+the next message.
 
-**Privy** gives a wallet to people who do not have one. The person clicking the
-unlock link is a stranger with no wallet and no reason to install one.
+**Privy** gives a wallet to people who do not have one, and its identity token is
+what makes signing up a single click.
+
+**Mailgun** carries a released message without touching it, which is the one
+thing Cloudflare's own sending cannot do.
 
 ## The price cannot be made up
 
@@ -76,53 +85,46 @@ A price is only valid if it carries a signature from a key listed in
 what it decided; the chain refuses to charge you on anyone else's say-so.
 
 Today that key belongs to an ordinary server process, and the registered
-measurement says so:
+measurement says exactly that:
 `keccak256("stage1-plain-classifier-not-attested")`. The next step is a Nitro
-enclave, where the measurement becomes a hash of the running image that anyone
-can recompute from source — the interface does not change, only who is allowed
-to sign.
+enclave, where the measurement becomes a hash of the running image anyone can
+recompute from source. The interface does not change, only who may sign.
 
-## Nothing to set up
+## Signing up
 
-Sign in, pick a handle, click the link Cloudflare mails you. That is the whole
-of it. Signing in already proves you can read the address the handle points at,
-so nothing asks you to prove it twice, and an inbox charges one cent before its
-owner has picked a price — the first message is charged for without a
-transaction, a balance, or a decision about pricing. Changing the price later is
-one call.
+Sign in, pick a handle, click the link Cloudflare emails you. That is all of it.
+
+Signing in already proves you can read the address the handle points at, so
+nothing asks you to prove it twice. An inbox charges one cent before its owner
+has picked a price, so the first message is charged for correctly without a
+transaction, a balance, or a decision.
 
 ## This is a proof of concept
 
-It runs, it charges real testnet USDC, and the parts do what this README says
-they do. It is not a service you should point your real mail at yet.
+It runs, it charges real testnet USDC, and the parts do what this file says they
+do. It is not a service to point your real mail at yet.
 
-**A held message is kept, and that is a real cost.** For a sender to prove they
-are a person and have their mail arrive without writing it twice, Postage has to
-still have it. So a held message is stored for at most a day, in the worker that
-received it and nowhere else, and erased the moment it is released or the hold
-runs out. Releasing it deletes it, and a second release finds nothing. Mail
-judged `dangerous` is never held at all, and mail that goes straight through is
-never stored in the first place.
-
-A day of held mail from strangers is the honest price of not asking a person to
-send the same message twice. Anything shorter and a sender who answers after
-lunch finds their message gone.
+**A held message is kept, and that is a real cost.** For a sender to answer one
+question and have their mail arrive without writing it twice, Postage has to
+still have it. So it is stored for at most a day, in the worker that received it
+and nowhere else, and deleted the moment it is released or its deadline passes.
 
 **Not stored is not the same as not seen.** Cloudflare receives the message, the
-gateway parses it, and the classifier reads it. That is not a gap in the
-implementation; it is what SMTP is. Mail arrives in plaintext, so whatever
-terminates the connection holds it. Closing that properly means running the MTA
-itself inside an enclave — see [ARCHITECTURE.md](ARCHITECTURE.md#what-privacy-would-actually-take).
+worker parses it, the gateway is handed the parsed fields, and the classifier
+reads them. That is not a gap in the implementation, it is what SMTP is — mail
+arrives in plaintext, so whatever terminates the connection holds it. Closing
+that properly means running the MTA itself inside an enclave. See
+[what privacy would take](ARCHITECTURE.md#what-privacy-would-actually-take).
 
 ## Layout
 
     contracts/   escrow, enclave registry, identity registry, vault
     subgraph/    indexes all four on Arc
-    web/         signup, challenge page, and the API behind them
+    web/         signup, dashboard, challenge page, and the API behind them
     worker/      the Cloudflare mail worker
 
-[ARCHITECTURE.md](ARCHITECTURE.md) explains how the parts fit together and why
-each is there. Addresses are in [DEPLOYMENTS.md](DEPLOYMENTS.md). What is known
-to be wrong with it is in [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
+[ARCHITECTURE.md](ARCHITECTURE.md) explains how the parts fit and why each is
+there. Addresses and endpoints are in [DEPLOYMENTS.md](DEPLOYMENTS.md). What is
+known to be wrong is in [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
 
 Built for ETHOnline 2026.

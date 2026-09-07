@@ -8,12 +8,9 @@ export type Release =
 /// Sends the message that was held, so answering the question is the whole of
 /// what a sender does.
 ///
-/// The message never passes through here. The worker holds the original bytes
-/// and hands them straight to the relay that carries them, so this says "send
-/// it" and learns whether it went. One fewer party sees the plaintext than if
-/// the gateway fetched it back, and the bytes are never rewritten on the way -
-/// which is what keeps a released message identical to the one that was sent,
-/// down to the signature over it.
+/// The message never passes through here. The worker holds the bytes and hands
+/// them straight to the relay, so this says "send it" and learns whether it
+/// went - which is what keeps a released message identical to the one sent.
 ///
 /// The hold is claimed first, and claiming is one conditional update. Two clicks
 /// a second apart cannot both come away believing they may send it, so a message

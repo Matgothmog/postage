@@ -13,28 +13,25 @@ Explorer: https://testnet.arcscan.app
 
 ### The escrow was redeployed
 
-The escrow moved from `0x5dcf371c3959de729ca637628dc574133ab42795` in
+It moved from `0x5dcf371c3959de729ca637628dc574133ab42795` in
 [`0x94882e9a`](https://testnet.arcscan.app/tx/0x94882e9aa3dc066fc0cf6249ef4f4be74a96923bea1a555285db4379e38e7d20).
-Three things changed, all of them ABI-breaking:
+Three ABI-breaking changes:
 
 - `effectiveFloor(address)` — an inbox that never set a price charges
-  `DEFAULT_FLOOR`, one cent, rather than nothing. `payToSend` enforces this, so
-  claiming a handle is the whole of signing up.
+  `DEFAULT_FLOOR`, one cent, rather than nothing, and `payToSend` enforces it.
 - `reportSpam(bytes32)` — takes only the message id. The escrow records who paid
   in `settlementOf`, so a report is checked against the payment rather than
-  trusting an address the caller passed. Only the receiving inbox may report,
-  and only once.
-- `settled(bytes32)` is now a view over `settlementOf` rather than its own
-  mapping. Same signature, same meaning.
+  trusting an address the caller passed. Only the receiving inbox may report, and
+  only once.
+- `settled(bytes32)` is a view over `settlementOf` rather than its own mapping.
+  Same signature, same meaning.
 
 `script/DeployEscrow.s.sol` deploys the escrow alone against the registry and
 vault already live, which `Deploy.s.sol` would have replaced — orphaning the
 registered signing key and the vault's balance. Nothing was stranded: the old
 escrow held a zero balance, because earnings are claimed to the inbox owner
-rather than accumulated.
-
-The old address is dead. Anything still pointing at it will revert on
-`effectiveFloor`.
+rather than accumulated. The old address is dead; anything still pointing at it
+reverts on `effectiveFloor`.
 
 ### Registered signer
 
@@ -43,14 +40,14 @@ measurement currently registered is
 
     keccak256("stage1-plain-classifier-not-attested")
 
-which names what it is: **Stage 1 runs the classifier as an ordinary process,
-so this is not a hardware measurement.** Stage 2 replaces it with a real PCR0
-from a Nitro enclave and revokes this key. The contract interface does not
-change between the two — only who is allowed to sign.
+which names what it is: **the classifier runs as an ordinary process, so this is
+not a hardware measurement.** Stage 2 replaces it with a real PCR0 from a Nitro
+enclave and revokes this key. The interface does not change between the two, only
+who is allowed to sign.
 
 ### Verified onchain
 
-Run against `0x4469e8` after deploying, in
+Run against `0x4469e8` in
 [`0xd6a36eae`](https://testnet.arcscan.app/tx/0xd6a36eae30aafc30d13a0d8c80563077c875c25e4a9bfcf8e32ed2ec2149b7b5)
 and the calls around it.
 
@@ -74,16 +71,15 @@ and the calls around it.
 | reportSpam | 31,425 | 0.0008 USDC |
 | attest (HumanRegistry) | 75,395 | 0.0019 USDC |
 
-`payToSend` costs more than the old escrow's ~120,000 because it now records who
-paid rather than a single bit. That is the storage a spam report is checked
-against, and it is what stops reputation being writable by anyone.
+`payToSend` costs more than the old escrow's ~120,000 because it records who paid
+rather than a single bit. That is the storage a spam report is checked against,
+and it is what stops reputation being writable by anyone.
 
 ### Vault economics
 
-A payment gives 20% to the vault, split 30/70 between treasury and the pool
-that pays gas for people who verify. Sponsoring one attestation costs
-0.00188 USDC, so a single commercial message priced at 0.03 funds roughly
-two verifications.
+A payment gives 20% to the vault, split 30/70 between treasury and the pool that
+pays gas for people who verify. Sponsoring one attestation costs 0.00188 USDC, so
+a single commercial message priced at 0.03 funds roughly two verifications.
 
 ## Subgraph
 
@@ -91,35 +87,30 @@ Studio: https://thegraph.com/studio/subgraph/usepostage
 
     https://api.studio.thegraph.com/query/1758667/usepostage/v0.4.0
 
-Indexes all four contracts above, including which signing keys are allowed to
-price mail and under what measurement. v0.4.0 follows the escrow to
-`0x4469e8` from block 60744660; v0.3.0 still points at the dead one and returns
-nothing for any sender.
+Indexes all four contracts, including which signing keys may price mail and under
+what measurement. v0.4.0 follows the escrow to `0x4469e8` from block 60744660;
+v0.3.0 still points at the dead one and returns nothing for any sender.
 
-Confirmed indexing the settlement made against the new escrow: the payment
-splits 0.024 to the inbox and 0.006 to the vault, and carries
-`reportedAsSpam: true` attributed to the wallet the escrow recorded as having
-paid — which is what `reportSpam` taking only a message id buys. The sender now
-reads `paidCount 1, spamReports 1, spamRate 1`, so the pricing engine quotes
-them at five times the floor rather than the minimum.
-
-## Arc Mainnet (5042)
-
-Not deployed yet.
+Confirmed indexing the settlement made against the new escrow: the payment splits
+0.024 to the inbox and 0.006 to the vault, and carries `reportedAsSpam: true`
+attributed to the wallet the escrow recorded as having paid. The sender then
+reads `paidCount 1, spamReports 1, spamRate 1`, so the pricing engine quotes them
+at five times the floor rather than the minimum.
 
 ## The mail path
 
-    worker    https://postage-mail.postage-worker.workers.dev
-    held mail KV namespace 332d86ab54b3480492e8241c0e18b9cf, binding HELD
+    worker     https://postage-mail.postage-worker.workers.dev
+    held mail  KV namespace 332d86ab54b3480492e8241c0e18b9cf, binding HELD
+    gateway    postage-seven.vercel.app
 
-The worker serves exactly one route, `POST /release`, and answers 404 to
-everything else and 401 without the shared secret. `MAIL_WORKER_URL` on the
-gateway points at it.
+The worker serves exactly one route, `POST /release`. Everything else answers
+404, and 401 without the shared secret. `MAIL_WORKER_URL` on the gateway points
+at it.
 
 Held mail is in KV rather than R2 because R2 is not enabled on the account, and
 it turned out to be the better fit: each value is written with the hold's
 deadline attached, so Cloudflare drops one nobody answered at exactly that
-moment. There is no sweep to fall behind.
+moment.
 
 ### The relay carries a message without touching it
 
@@ -127,34 +118,49 @@ moment. There is no sweep to fall behind.
 
 | Record | Name | Note |
 | --- | --- | --- |
-| TXT | `usepostage.com` | SPF, **merged** into the Cloudflare one rather than added beside it |
+| TXT | `usepostage.com` | SPF, **merged** into the Cloudflare record rather than added beside it |
 | TXT | `mailo._domainkey.usepostage.com` | DKIM |
 | CNAME | `email.usepostage.com` | tracking; unused, we send with tracking off |
-
-Open, click and unsubscribe tracking are also off at the domain level, so link
-rewriting cannot come back by someone dropping the per-message flags. Rewriting a
-link changes the body, and the body is what the sender's signature covers.
-
-The worker sends as key `55613b82-53c4b5eb` — `kind=domain`, `role=sending`,
-scoped to `usepostage.com`. It can send and read domains and nothing else; it
-cannot so much as list the account's keys. Creating one through the API needs
-`kind=domain` alongside `role=sending`, or Mailgun quietly issues an admin key
-instead.
 
 **Mailgun's MX records are deliberately absent**, which is why the domain reads
 `valid=unknown` against them. The MX for `usepostage.com` is Cloudflare Email
 Routing, and that is what delivers mail to the worker — adding Mailgun's would
 stop every message reaching Postage.
 
+Open, click and unsubscribe tracking are off at the domain level as well as
+per-message, so link rewriting cannot come back by someone dropping a flag.
+Rewriting a link changes the body, and the body is what the sender's signature
+covers.
+
 Verified against the live API rather than assumed: a raw message with
 `From: Sara Müller <sarah@example.org>` — a domain this account does not own,
 carrying its own DKIM signature — was accepted on `/messages.mime` and logged
 `accepted` then `delivered`, in test mode so nothing left the building. Mailgun
 returned the message's own `Message-ID` rather than minting one, and logged the
-sender and the subject as written. That is the whole premise of releasing a held
-message: it goes out as the message that arrived.
+sender and subject as written.
 
 Cloudflare's own `send_email` cannot do this. It rejects raw MIME whose envelope
 sender does not match the `From:` header, and that address must be on a domain
 the account owns — `From: header does not match mail from`. Rewriting `From:` is
 the one edit a forward must never make, so the release goes through Mailgun.
+
+### Credentials
+
+The worker sends as key `55613b82-53c4b5eb` — `kind=domain`, `role=sending`,
+scoped to `usepostage.com`. It can send and read domains and nothing else; it
+cannot list the account's keys.
+
+Creating one through the API needs `kind=domain` alongside `role=sending`. Pass
+`role=sending` on its own and Mailgun quietly issues an **admin** key instead.
+
+### Proven end to end
+
+A message from Gmail to a live handle, on the deployed stack: held in KV, replied
+to inside its own SMTP session, and released through Mailgun when the sender said
+a person wrote it. The worker logged the inbound and the `POST /release`
+thirty-three seconds apart, KV was empty afterwards, and the challenge row read
+resolved with `held_until` null.
+
+## Arc Mainnet (5042)
+
+Not deployed yet.

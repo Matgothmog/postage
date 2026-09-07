@@ -100,8 +100,6 @@ export async function POST(request: Request) {
 
   const signedIn = await session(request, wallet);
   const name = handle?.toLowerCase() ?? "";
-  // Falls back to the address Privy checked, so the common claim asks for a
-  // handle and nothing else.
   const address = (destination ?? signedIn?.email ?? "").toLowerCase();
 
   const rejection = validate(name, address);
@@ -186,8 +184,6 @@ export async function POST(request: Request) {
     // Handled by the poller, which will try again.
   }
 
-  // An address the account already knows comes back verified on the spot, and
-  // signing up was picking a handle.
   const state = await settleClaim(name).catch(() => null);
 
   return Response.json({
