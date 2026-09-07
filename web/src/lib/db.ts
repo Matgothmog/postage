@@ -61,8 +61,13 @@ const SCHEMA = [
      wallet TEXT NOT NULL,
      linked_at INTEGER NOT NULL
    )`,
-  /// Challenges are the only thing resembling a message we keep, and they hold
-  /// no content: just who was writing to whom, and what it would cost.
+  /// A message being held, and the terms for releasing it.
+  ///
+  /// `subject` and `body` are the one place Postage keeps what someone wrote,
+  /// and they are erased the moment the message is released or the hold runs
+  /// out. Holding them is what lets a sender prove personhood and have their
+  /// mail arrive without sending it a second time; without them the only way
+  /// through is to write it again.
   `CREATE TABLE IF NOT EXISTS challenges (
      token TEXT PRIMARY KEY,
      handle TEXT NOT NULL,
@@ -71,6 +76,9 @@ const SCHEMA = [
      tier TEXT NOT NULL,
      amount TEXT NOT NULL,
      quote_json TEXT NOT NULL,
+     subject TEXT,
+     body TEXT,
+     held_until INTEGER,
      created_at INTEGER NOT NULL,
      resolved_at INTEGER
    )`,
@@ -292,6 +300,10 @@ export async function walletForSender(sender: string): Promise<string | null> {
   return rows[0]?.wallet ?? null;
 }
 
+/// How long a held message is kept before it is erased unread. Matches the
+/// pass window, so the hold and the proof expire together.
+export const HOLD_SECONDS = 15 * 60;
+
 export interface Challenge {
   token: string;
   handle: string;
@@ -299,6 +311,10 @@ export interface Challenge {
   message_id: string;
   tier: string;
   amount: string;
+  /// Present only while the message is held. Null once released or expired.
+  subject: string | null;
+  body: string | null;
+  held_until: number | null;
   /// The enclave-signed quote, kept so the sender can pay it from the
   /// challenge page without us re-pricing the message we no longer hold.
   quote_json: string;
@@ -308,8 +324,9 @@ export interface Challenge {
 
 export async function createChallenge(challenge: Omit<Challenge, "resolved_at">): Promise<void> {
   await run(
-    `INSERT INTO challenges (token, handle, sender, message_id, tier, amount, quote_json, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO challenges
+       (token, handle, sender, message_id, tier, amount, quote_json, subject, body, held_until, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       challenge.token,
       challenge.handle,
@@ -318,8 +335,44 @@ export async function createChallenge(challenge: Omit<Challenge, "resolved_at">)
       challenge.tier,
       challenge.amount,
       challenge.quote_json,
+      challenge.subject,
+      challenge.body,
+      challenge.held_until,
       challenge.created_at,
     ]
+  );
+}
+
+/// Reads a held message and erases it in the same breath, so a release cannot
+/// leave a copy behind and cannot be replayed into a second delivery.
+export async function takeHeldMessage(
+  token: string
+): Promise<{ subject: string; body: string } | null> {
+  const rows = await all<{ subject: string | null; body: string | null }>(
+    `SELECT subject, body FROM challenges WHERE token = ? AND held_until > ? AND body IS NOT NULL`,
+    [token, Math.floor(Date.now() / 1000)]
+  );
+  const held = rows[0];
+  await forgetHeldMessage(token);
+  if (!held?.body) return null;
+  return { subject: held.subject ?? "(no subject)", body: held.body };
+}
+
+export async function forgetHeldMessage(token: string): Promise<void> {
+  await run(
+    `UPDATE challenges SET subject = NULL, body = NULL, held_until = NULL WHERE token = ?`,
+    [token]
+  );
+}
+
+/// Erases every hold that ran out. Called on the way past rather than on a
+/// timer, because a message nobody released should not outlive its window just
+/// because nothing happened to wake us.
+export async function purgeExpiredHolds(): Promise<void> {
+  await run(
+    `UPDATE challenges SET subject = NULL, body = NULL, held_until = NULL
+     WHERE held_until IS NOT NULL AND held_until <= ?`,
+    [Math.floor(Date.now() / 1000)]
   );
 }
 

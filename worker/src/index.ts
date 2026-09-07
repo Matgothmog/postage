@@ -10,6 +10,9 @@ type Verdict = {
   to?: string;
   reason?: string;
   challenge_url?: string;
+  /// True when the gateway is holding the message, so clearing the gate
+  /// delivers it and the sender never sends it twice.
+  held?: boolean;
 };
 
 /// Reads the Authentication-Results the receiving MTA already wrote, so the
@@ -65,6 +68,9 @@ function rejection(verdict: Verdict): string {
   if (!verdict.challenge_url) return "Not delivered.";
   if (verdict.reason === "dangerous") {
     return `Not delivered: this looks like an attempt to deceive the recipient, and paying will not change that. If it is a mistake, say so at ${verdict.challenge_url}`;
+  }
+  if (verdict.held) {
+    return `Held for 15 minutes, not lost: prove you are a person for free, or pay, and it is delivered for you - no need to send it again - ${verdict.challenge_url}`;
   }
   return `Not delivered: prove you are a person for free, or pay, then send again - ${verdict.challenge_url}`;
 }

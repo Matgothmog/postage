@@ -3,7 +3,14 @@ import type { Hex } from "viem";
 import { publicClient } from "@/lib/client";
 import { classify, extractUrls, type MailFacts } from "@/lib/classify";
 import { POSTAGE_ESCROW, escrowAbi } from "@/lib/contracts";
-import { createChallenge, inboxByHandle, spendPass, walletForSender } from "@/lib/db";
+import {
+  HOLD_SECONDS,
+  createChallenge,
+  inboxByHandle,
+  purgeExpiredHolds,
+  spendPass,
+  walletForSender,
+} from "@/lib/db";
 import { required } from "@/lib/env";
 import { quote } from "@/lib/pricing";
 import { messageIdFor, signQuote } from "@/lib/quote";
@@ -118,6 +125,11 @@ export async function POST(request: Request) {
   const messageId = messageIdFor(sender, handle, facts.subject, receivedAt);
   const signed = await signQuote(messageId, inbox.wallet as Hex, verdict.tier, priced.amount);
 
+  // Dangerous mail is never delivered by any route, so there is nothing to hold
+  // and no reason to keep what it said.
+  const holding = verdict.tier !== "dangerous";
+  await purgeExpiredHolds();
+
   await createChallenge({
     token,
     handle,
@@ -126,6 +138,9 @@ export async function POST(request: Request) {
     tier: verdict.tier,
     amount: priced.amount.toString(),
     quote_json: JSON.stringify({ ...signed, reasons: priced.reasons }),
+    subject: holding ? facts.subject : null,
+    body: holding ? facts.body : null,
+    held_until: holding ? receivedAt + HOLD_SECONDS : null,
     created_at: receivedAt,
   });
 
@@ -139,5 +154,7 @@ export async function POST(request: Request) {
     reasons: priced.reasons,
     challenge_url: `${appUrl}/c/${token}`,
     quote: signed,
+    // Tells the worker whether the sender still has to send it again.
+    held: holding,
   });
 }

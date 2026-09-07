@@ -241,31 +241,41 @@ The attester, relayer and classifier are separate keys on purpose. Compromising
 the relayer drains a few cents of sponsorship and nothing else; compromising the
 classifier lets someone set prices but not mint personhood.
 
-## Nothing is held on our side
+## Held means held
 
-A held message is refused inside SMTP, so it never becomes ours. It stays in the
-sender's outbox, which is the only copy that existed before we saw it.
+A sender should have to do one thing: prove they are a person. Not prove it and
+then go back and write the message again. That is only possible if the message
+still exists when they finish, so Postage keeps it — for fifteen minutes.
 
-The alternative — accepting the message, keeping it while the sender verifies,
-then delivering it — is what "held" usually means, and it was considered. It
-would remove the resend, and it costs too much. Cloudflare cannot defer an SMTP
-session: `setReject` is a permanent error and the API has no way to hold a
-message. So holding means taking custody of the body, storing strangers' mail in
-plaintext, and re-injecting it later through a raw-MIME relay to keep DKIM
-intact. That trades the one confidentiality claim this design can honestly make
-for a saving in clicks.
+There was no way around it. Cloudflare cannot defer an SMTP session: `setReject`
+is documented as a permanent error and the Workers API has no mechanism to hold
+a message for later. A temporary 4xx, which would make the sender's own server
+retry and need no storage at all, is not reachable — Cloudflare does not
+document what an exception does, and mail delivery is not a thing to build on an
+undocumented error path. Running our own MTA would give that control, which is
+another reason the enclave is where this ends up.
 
-The bounce carries the weight instead. It says what happened and what to do in a
-single line, and the challenge page will take the message pasted back in and
-deliver it, so the sender need not return to their mail client. What is pasted
-is relayed and forgotten; it is sent under our name with theirs in `Reply-To`,
-never forged into `From`.
+So the hold is real, and bounded:
+
+- Only mail that is actually held. Anything delivered outright is never stored.
+- Never `dangerous` mail, which no route delivers, so keeping it serves nothing.
+- Fifteen minutes, matching the pass window, so the hold and the proof lapse
+  together.
+- Read and erased in the same step, so releasing cannot leave a copy and cannot
+  be replayed into a second delivery.
+- Erased on the way past — every inbound message purges the holds that ran out,
+  rather than trusting a timer to wake up.
+
+Released mail goes out under our name with the sender's in `Reply-To`, never
+forged into `From`. That costs the DKIM alignment `message.forward()` preserves,
+so a released message displays as coming from Postage rather than the sender.
+Mail that is never held keeps the untouched forward.
 
 ## What is deliberately not stored
 
-Message bodies are never written anywhere. A held message leaves a challenge row
-recording sender, recipient and price — never the subject or the body. The mail
-is refused at the door and lives only in the sender's outbox until they resend.
+Nothing is kept about a message once it is settled. A released or expired
+challenge keeps sender, recipient and price, and its subject and body are null —
+the same row, emptied.
 
 Only a keyed commitment to the message goes onchain, as the id a payment is
 bound to. The escrow does not need to read a message to charge for it.

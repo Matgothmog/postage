@@ -27,10 +27,10 @@ decides **who pays to get through**.
 | Ordinary automated mail — newsletters, marketing | Held. Nobody proved a person is behind it, so it pays. |
 | Trying to deceive you | Never delivered. Being a person does not clear it, and paying is a penalty. |
 
-A stranger is refused inside SMTP with a link. They prove they are a person and
-it costs nothing, or they pay, and their message goes through. The refusal is
-not a bounce into nowhere — their mail is still in their outbox, and the
-challenge page will deliver it for them if they paste it back in.
+A stranger is refused inside SMTP with a link, and their message is **held for
+fifteen minutes** rather than thrown away. They prove they are a person and it
+costs nothing, or they pay — and the message they already sent is delivered for
+them. Proving personhood is the only thing they ever do.
 
 **A pass runs out.** Proving personhood opens a fifteen minute window; paying
 buys one delivery. Writing again tomorrow means proving it again. World ID is a
@@ -80,10 +80,17 @@ balance, or a decision. Changing the price later is one call.
 It runs, it charges real testnet USDC, and the parts do what this README says
 they do. It is not a service you should point your real mail at yet.
 
-**Message bodies are never stored.** A held message leaves a row recording who
-wrote to whom and what it would cost — never the subject, never the body. The
-mail is refused at the door and lives only in the sender's outbox until they
-resend it.
+**A held message is kept, briefly, and that is a real cost.** For a sender to
+prove they are a person and have their mail arrive without writing it twice,
+Postage has to still have it. So a held message is stored for at most fifteen
+minutes and erased the moment it is released or the hold runs out — read and
+deleted in the same query, so a release cannot leave a copy behind. Mail judged
+`dangerous` is never held at all, and mail that goes straight through is never
+stored in the first place.
+
+Fifteen minutes of held mail from strangers is a smaller claim than the one this
+project made before, and it is the honest price of not asking a person to send
+the same message twice.
 
 **Not stored is not the same as not seen.** Cloudflare receives the message, the
 gateway parses it, and the classifier reads it. That is not a gap in the

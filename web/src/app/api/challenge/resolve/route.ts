@@ -1,7 +1,15 @@
 import { type Hex, isAddress } from "viem";
 import { publicClient } from "@/lib/client";
 import { HUMAN_REGISTRY, POSTAGE_ESCROW, escrowAbi, registryAbi } from "@/lib/contracts";
-import { challengeByToken, grantPass, linkSenderWallet, resolveChallenge } from "@/lib/db";
+import {
+  challengeByToken,
+  grantPass,
+  inboxByHandle,
+  linkSenderWallet,
+  resolveChallenge,
+  takeHeldMessage,
+} from "@/lib/db";
+import { relayHeldMessage } from "@/lib/mail";
 
 /// A credential lasts 90 days onchain, so simply holding one proves a person
 /// verified at some point — not that anyone is here now. Requiring the
@@ -33,7 +41,7 @@ export async function POST(request: Request) {
   if (!dangerous && (await verifiedJustNow(wallet))) {
     await grantPass(challenge.handle, challenge.sender, "human", null);
     await resolveChallenge(token);
-    return Response.json({ status: "cleared", reason: "human" });
+    return Response.json({ status: "cleared", reason: "human", ...(await release(challenge)) });
   }
 
   if (await hasPaid(challenge.message_id as Hex)) {
@@ -47,10 +55,36 @@ export async function POST(request: Request) {
     }
 
     await grantPass(challenge.handle, challenge.sender, "paid", 1);
-    return Response.json({ status: "cleared", reason: "paid" });
+    return Response.json({ status: "cleared", reason: "paid", ...(await release(challenge)) });
   }
 
   return Response.json({ status: "pending" });
+}
+
+/// Sends the message that was held, so proving personhood is the only thing the
+/// sender ever has to do. The held copy is erased as it is read, whether or not
+/// the send succeeds, because a message that outlives its hold is a message we
+/// promised not to keep.
+async function release(challenge: { token: string; handle: string; sender: string }) {
+  const held = await takeHeldMessage(challenge.token);
+  if (!held) return { delivered: false, reason_undelivered: "expired" as const };
+
+  const inbox = await inboxByHandle(challenge.handle);
+  if (!inbox) return { delivered: false, reason_undelivered: "no_inbox" as const };
+
+  try {
+    await relayHeldMessage({
+      to: inbox.destination,
+      from: challenge.sender,
+      handle: challenge.handle,
+      subject: held.subject,
+      body: held.body,
+    });
+    return { delivered: true };
+  } catch {
+    // The gate is open either way; the sender can paste it back in.
+    return { delivered: false, reason_undelivered: "send_failed" as const };
+  }
 }
 
 async function verifiedJustNow(wallet: string): Promise<boolean> {

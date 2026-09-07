@@ -145,6 +145,20 @@ and reaching it kills signup permanently.
 
 ## Deliberately not done
 
+**Held mail is stored for fifteen minutes.** A sender must be able to prove
+personhood and have the message they already sent arrive, which means it has to
+still exist. Cloudflare cannot defer an SMTP session and offers no reachable
+temporary rejection, so there was no way to make the sender's own server hold it
+instead. The window is fifteen minutes, `dangerous` mail is never held, and the
+body is erased as it is read. It is a real retention claim where there used to
+be none — see [ARCHITECTURE.md](ARCHITECTURE.md#held-means-held).
+
+**Released mail loses DKIM alignment.** A held message is relayed under our name
+with the sender in `Reply-To`, because `message.forward()` can only be called
+during the worker execution that received it. So a released message displays as
+from Postage rather than from the sender. Mail that is never held still gets the
+untouched forward.
+
 **Privacy inside the server.** The destination address and the allowlist are
 stored in plaintext, and five parties read every message. This was a decision,
 not an oversight — see

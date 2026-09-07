@@ -23,7 +23,7 @@ const SETTLEMENT_ATTEMPTS = 10;
 const SETTLEMENT_INTERVAL_MS = 1_500;
 
 type Outcome =
-  | { kind: "cleared"; reason: string }
+  | { kind: "cleared"; reason: string; delivered: boolean }
   | { kind: "charged" }
   | { kind: "error"; message: string };
 
@@ -69,6 +69,21 @@ export function ChallengeActions({
   }
 
   if (outcome?.kind === "cleared") {
+    // The held message went out on its own, so there is nothing left to ask of
+    // the sender. Only a hold that ran out sends them back to the compose box.
+    if (outcome.delivered) {
+      return (
+        <div className="mt-8 rounded-xl border border-green-200 bg-green-50 p-4 text-sm text-green-800">
+          <p className="font-medium">
+            {outcome.reason === "human" ? "Verified, and delivered." : "Paid, and delivered."}
+          </p>
+          <p className="mt-1">
+            The message you already sent is in their inbox. You did not have to write it twice, and
+            we have erased our copy.
+          </p>
+        </div>
+      );
+    }
     return <Deliver token={token} handle={handle} reason={outcome.reason} />;
   }
 
@@ -78,8 +93,16 @@ export function ChallengeActions({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token, wallet: wallet.address }),
     });
-    const result = (await response.json()) as { status?: string; reason?: string; error?: string };
-    if (result.status === "cleared") return { kind: "cleared", reason: result.reason ?? "human" };
+    const result = (await response.json()) as {
+      status?: string;
+      reason?: string;
+      error?: string;
+      delivered?: boolean;
+    };
+    if (result.status === "cleared") {
+      return { kind: "cleared", reason: result.reason ?? "human", delivered: result.delivered === true };
+    }
+    if (result.status === "charged") return { kind: "charged" };
     return { kind: "error", message: result.error ?? "Not cleared yet" };
   }
 
@@ -202,8 +225,8 @@ function Deliver({ token, handle, reason }: { token: string; handle: string; rea
           {reason === "human" ? "Verified. That cost you nothing." : "Paid."}
         </p>
         <p className="mt-1">
-          Your message was never stored here, so send it again from your mail client — or paste it
-          below and we will deliver it now.
+          The hold on your message ran out before this was cleared, so it is gone. Paste it below
+          and we will deliver it now.
         </p>
       </div>
 
