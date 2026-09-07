@@ -38,24 +38,9 @@ export function ChallengeActions({
   dangerous: boolean;
   handle: string;
 }) {
-  const { ready, authenticated, login } = usePrivy();
-  const { wallets } = useWallets();
-  const { sendTransaction } = useSendTransaction();
-
+  const [lane, setLane] = useState<"choosing" | "paying">("choosing");
   const [busy, setBusy] = useState<"human" | "pay" | null>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
-
-  const wallet = wallets[0];
-
-  if (!ready) return null;
-  if (authenticated && !wallet) return <p className={note}>Setting up your wallet</p>;
-  if (!authenticated) {
-    return (
-      <button onClick={login} className={primary}>
-        Continue
-      </button>
-    );
-  }
 
   if (outcome?.kind === "charged") {
     return (
@@ -87,6 +72,90 @@ export function ChallengeActions({
     return <Deliver token={token} handle={handle} reason={outcome.reason} />;
   }
 
+  /// No wallet anywhere on this path. Proving personhood is not a payment, so
+  /// it should not need an account to make one.
+  async function verifyHuman() {
+    setBusy("human");
+    setOutcome(null);
+    try {
+      const response = await fetch("/api/world/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      const result = (await response.json()) as {
+        status?: string;
+        delivered?: boolean;
+        error?: string;
+      };
+      if (result.status !== "cleared") throw new Error(result.error ?? "Verification failed");
+      setOutcome({ kind: "cleared", reason: "human", delivered: result.delivered === true });
+    } catch (cause) {
+      setOutcome({ kind: "error", message: asMessage(cause) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  if (lane === "paying") {
+    return (
+      <PayLane
+        token={token}
+        quote={quote}
+        onSettled={setOutcome}
+        onBack={() => setLane("choosing")}
+      />
+    );
+  }
+
+  return (
+    <div className="mt-8 space-y-3">
+      <button onClick={verifyHuman} disabled={busy !== null} className={primary}>
+        {busy === "human" ? "Verifying" : "A person wrote this"}
+      </button>
+      <p className="px-1 text-xs text-neutral-500">
+        Prove it with World ID and your message is delivered. Free, no wallet, nothing to install
+        beyond the World app.
+      </p>
+
+      {!dangerous && (
+        <>
+          <button onClick={() => setLane("paying")} disabled={busy !== null} className={secondary}>
+            A machine sent this — pay {formatUsdc(BigInt(quote.amount))}
+          </button>
+          <p className="px-1 text-xs text-neutral-500">
+            Automated mail pays the recipient for the attention. You will need somewhere to pay
+            from, which takes an email address.
+          </p>
+        </>
+      )}
+
+      {outcome?.kind === "error" && <p className="text-sm text-red-600">{outcome.message}</p>}
+    </div>
+  );
+}
+
+/// Only this side of the fork needs an account, because only this side moves
+/// money. A person who is simply a person never reaches it.
+function PayLane({
+  token,
+  quote,
+  onSettled,
+  onBack,
+}: {
+  token: string;
+  quote: Quote;
+  onSettled: (outcome: Outcome) => void;
+  onBack: () => void;
+}) {
+  const { ready, authenticated, login } = usePrivy();
+  const { wallets } = useWallets();
+  const { sendTransaction } = useSendTransaction();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const wallet = wallets[0];
+
   async function askOnce(): Promise<Outcome> {
     const response = await fetch("/api/challenge/resolve", {
       method: "POST",
@@ -100,16 +169,16 @@ export function ChallengeActions({
       delivered?: boolean;
     };
     if (result.status === "cleared") {
-      return { kind: "cleared", reason: result.reason ?? "human", delivered: result.delivered === true };
+      return { kind: "cleared", reason: result.reason ?? "paid", delivered: result.delivered === true };
     }
     if (result.status === "charged") return { kind: "charged" };
     return { kind: "error", message: result.error ?? "Not cleared yet" };
   }
 
-  /// The gate opens on what the chain says, and a transaction that has been
-  /// broadcast is not yet a transaction that has been mined. Asking once would
-  /// tell most senders their payment failed a second after it succeeded.
-  async function resolve(): Promise<Outcome> {
+  /// A transaction that has been broadcast is not yet a transaction that has
+  /// been mined. Asking once would tell most senders their payment failed a
+  /// second after it succeeded.
+  async function settle(): Promise<Outcome> {
     let outcome = await askOnce();
     for (let attempt = 0; attempt < SETTLEMENT_ATTEMPTS && outcome.kind === "error"; attempt += 1) {
       await new Promise((wake) => setTimeout(wake, SETTLEMENT_INTERVAL_MS));
@@ -118,28 +187,9 @@ export function ChallengeActions({
     return outcome;
   }
 
-  async function verifyHuman() {
-    setBusy("human");
-    setOutcome(null);
-    try {
-      const response = await fetch("/api/world/verify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ wallet: wallet.address }),
-      });
-      const attestation = (await response.json()) as { sponsored?: boolean; error?: string };
-      if (!attestation.sponsored) throw new Error(attestation.error ?? "Verification failed");
-      setOutcome(await resolve());
-    } catch (cause) {
-      setOutcome({ kind: "error", message: asMessage(cause) });
-    } finally {
-      setBusy(null);
-    }
-  }
-
   async function pay() {
-    setBusy("pay");
-    setOutcome(null);
+    setBusy(true);
+    setError(null);
     try {
       await sendTransaction({
         to: POSTAGE_ESCROW,
@@ -157,25 +207,43 @@ export function ChallengeActions({
           ],
         }),
       });
-      setOutcome(await resolve());
+      onSettled(await settle());
     } catch (cause) {
-      setOutcome({ kind: "error", message: asMessage(cause) });
+      setError(asMessage(cause));
     } finally {
-      setBusy(null);
+      setBusy(false);
     }
   }
 
+  if (!ready) return <p className={note}>Loading</p>;
+
   return (
     <div className="mt-8 space-y-3">
-      <button onClick={verifyHuman} disabled={busy !== null} className={primary}>
-        {busy === "human" ? "Verifying" : "I'm a person - free, no gas"}
-      </button>
-      {!dangerous && (
-        <button onClick={pay} disabled={busy !== null} className={secondary}>
-          {busy === "pay" ? "Paying" : `Pay ${formatUsdc(BigInt(quote.amount))} instead`}
+      {!authenticated ? (
+        <>
+          <button onClick={login} className={primary}>
+            Set up a way to pay
+          </button>
+          <p className="px-1 text-xs text-neutral-500">
+            An email address is enough. It creates a wallet for you on Arc; there is nothing to
+            install.
+          </p>
+        </>
+      ) : !wallet ? (
+        <p className={note}>Setting up your wallet</p>
+      ) : (
+        <button onClick={pay} disabled={busy} className={primary}>
+          {busy ? "Paying" : `Pay ${formatUsdc(BigInt(quote.amount))} and deliver it`}
         </button>
       )}
-      {outcome?.kind === "error" && <p className="text-sm text-red-600">{outcome.message}</p>}
+
+      <button
+        onClick={onBack}
+        className="w-full px-5 py-2 text-sm text-neutral-500 hover:text-neutral-900"
+      >
+        Actually, a person wrote it
+      </button>
+      {error && <p className="text-sm text-red-600">{error}</p>}
     </div>
   );
 }

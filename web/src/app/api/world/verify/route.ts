@@ -1,8 +1,10 @@
-import { type Hex, createWalletClient, http, isAddress, keccak256, stringToBytes } from "viem";
+import { type Hex, createWalletClient, getAddress, http, keccak256, stringToBytes } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { publicClient } from "@/lib/client";
 import { HUMAN_REGISTRY, chain, registryAbi } from "@/lib/contracts";
+import { challengeByToken, grantPass, inboxByHandle, resolveChallenge, takeHeldMessage } from "@/lib/db";
 import { identityMode, required } from "@/lib/env";
+import { relayHeldMessage } from "@/lib/mail";
 
 /// Matches the Selfie Check credential lifetime, so the free lane lapses when
 /// the credential does rather than outliving it.
@@ -19,6 +21,15 @@ const attestationTypes = {
   ],
 } as const;
 
+/// The free lane, and it asks for no wallet.
+///
+/// Someone proving they are a person is not paying for anything, so making them
+/// hold an account to do it is a toll on the one path that is supposed to be
+/// free. The attestation still goes onchain, against an address derived from
+/// the nullifier rather than a wallet: an identity nobody holds the key to,
+/// which is all the registry needs it to be. One person still maps to one
+/// record, the relayer still pays the gas out of the vault, and the subgraph
+/// still sees it.
 export async function POST(request: Request) {
   let body: unknown;
   try {
@@ -27,80 +38,112 @@ export async function POST(request: Request) {
     return Response.json({ error: "Body must be JSON" }, { status: 400 });
   }
 
-  const { wallet, proof } = body as { wallet?: string; proof?: unknown };
-  if (!wallet || !isAddress(wallet)) {
-    return Response.json({ error: "A valid wallet address is required" }, { status: 400 });
+  const { token, proof } = body as { token?: string; proof?: unknown };
+  if (!token) return Response.json({ error: "A challenge token is required" }, { status: 400 });
+
+  const challenge = await challengeByToken(token);
+  if (!challenge) return Response.json({ error: "Unknown challenge" }, { status: 404 });
+
+  // Being a person is not a defence against phishing, so this route stays shut
+  // for mail the classifier called dangerous.
+  if (challenge.tier === "dangerous") {
+    return Response.json(
+      { error: "This will not be delivered whoever sends it. Being a person does not change that" },
+      { status: 403 }
+    );
   }
 
   let nullifier: string;
   try {
     nullifier =
-      identityMode() === "live"
-        ? await verifyWithWorld(proof)
-        : mockNullifier(wallet);
+      identityMode() === "live" ? await verifyWithWorld(proof) : mockNullifier(challenge.sender);
   } catch (cause) {
     const detail = cause instanceof Error ? cause.message : "Verification failed";
     return Response.json({ error: detail }, { status: 400 });
   }
 
-  const expiresAt = Math.floor(Date.now() / 1000) + CREDENTIAL_LIFETIME_SECONDS;
   const nullifierHash = toBytes32(nullifier);
+  const identity = identityFor(nullifierHash);
+  const expiresAt = Math.floor(Date.now() / 1000) + CREDENTIAL_LIFETIME_SECONDS;
 
-  const account = privateKeyToAccount(required("ATTESTER_PRIVATE_KEY") as Hex);
-  const signature = await account.signTypedData({
-    domain: {
-      name: "Postage",
-      version: "1",
-      chainId: chain.id,
-      verifyingContract: HUMAN_REGISTRY,
-    },
-    types: attestationTypes,
-    primaryType: "Attestation",
-    message: { wallet, nullifierHash, expiresAt },
-  });
-
-  // The relayer posts it, funded by the vault out of postage that recipients
-  // claimed from spam. The signature names the wallet, so who submits it
-  // changes nothing about who it belongs to.
-  let transactionHash: string;
   try {
-    transactionHash = await sponsorAttestation(wallet, nullifierHash, expiresAt, signature);
+    await recordPersonhood(identity, nullifierHash, expiresAt);
   } catch (cause) {
-    const detail = cause instanceof Error ? cause.message : "Could not sponsor the attestation";
-    return Response.json(
-      { wallet, nullifierHash, expiresAt, signature, sponsored: false, error: detail },
-      { status: 502 }
-    );
+    const detail = cause instanceof Error ? cause.message : "Could not record the attestation";
+    return Response.json({ error: detail }, { status: 502 });
   }
 
+  await grantPass(challenge.handle, challenge.sender, "human", null);
+  await resolveChallenge(token);
+
   return Response.json({
-    wallet,
+    status: "cleared",
+    reason: "human",
+    identity,
     nullifierHash,
     expiresAt,
-    signature,
-    sponsored: true,
-    transactionHash,
+    ...(await release(challenge)),
   });
 }
 
-async function sponsorAttestation(
-  wallet: Hex,
-  nullifierHash: Hex,
-  expiresAt: number,
-  signature: Hex
-): Promise<string> {
+/// An address standing for a person rather than an account. Derived from the
+/// nullifier, so one person is one record by construction and nobody holds a
+/// key to it — it is a name, not a wallet.
+function identityFor(nullifierHash: Hex): Hex {
+  return getAddress(`0x${nullifierHash.slice(-40)}`);
+}
+
+async function recordPersonhood(identity: Hex, nullifierHash: Hex, expiresAt: number): Promise<void> {
+  const alreadyFresh = await publicClient.readContract({
+    address: HUMAN_REGISTRY,
+    abi: registryAbi,
+    functionName: "humanUntil",
+    args: [identity],
+  });
+  // Attesting again inside the same second reverts as a non-extension, and a
+  // record written moments ago says everything a new one would.
+  if (Number(alreadyFresh) >= expiresAt) return;
+
+  const attester = privateKeyToAccount(required("ATTESTER_PRIVATE_KEY") as Hex);
+  const signature = await attester.signTypedData({
+    domain: { name: "Postage", version: "1", chainId: chain.id, verifyingContract: HUMAN_REGISTRY },
+    types: attestationTypes,
+    primaryType: "Attestation",
+    message: { wallet: identity, nullifierHash, expiresAt },
+  });
+
   const relayer = privateKeyToAccount(required("RELAYER_PRIVATE_KEY") as Hex);
   const client = createWalletClient({ account: relayer, chain, transport: http() });
-
   const hash = await client.writeContract({
     address: HUMAN_REGISTRY,
     abi: registryAbi,
     functionName: "attest",
-    args: [wallet, nullifierHash, expiresAt, signature],
+    args: [identity, nullifierHash, expiresAt, signature],
   });
-
   await publicClient.waitForTransactionReceipt({ hash });
-  return hash;
+}
+
+/// Sends the message that was held, so proving personhood is the whole of what
+/// the sender does. The held copy is erased as it is read.
+async function release(challenge: { token: string; handle: string; sender: string }) {
+  const held = await takeHeldMessage(challenge.token);
+  if (!held) return { delivered: false };
+
+  const inbox = await inboxByHandle(challenge.handle);
+  if (!inbox) return { delivered: false };
+
+  try {
+    await relayHeldMessage({
+      to: inbox.destination,
+      from: challenge.sender,
+      handle: challenge.handle,
+      subject: held.subject,
+      body: held.body,
+    });
+    return { delivered: true };
+  } catch {
+    return { delivered: false };
+  }
 }
 
 /// Forwards the IDKit result to the Developer Portal and pulls out the selfie
@@ -134,10 +177,11 @@ async function verifyWithWorld(proof: unknown): Promise<string> {
   return selfie.nullifier;
 }
 
-/// Used until Selfie Check is enabled on the app. Deterministic per wallet, so
-/// it behaves like a real nullifier: the same person cannot claim two of them.
-function mockNullifier(wallet: string): string {
-  return keccak256(stringToBytes(`mock-selfie:${wallet.toLowerCase()}`));
+/// Used until Selfie Check is enabled on the app. Keyed on the sender rather
+/// than at random, so the same address behaves like the same person and the
+/// uniqueness the nullifier is there to provide is still visible.
+function mockNullifier(sender: string): string {
+  return keccak256(stringToBytes(`mock-selfie:${sender.toLowerCase()}`));
 }
 
 function toBytes32(nullifier: string): Hex {

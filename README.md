@@ -28,9 +28,13 @@ decides **who pays to get through**.
 | Trying to deceive you | Never delivered. Being a person does not clear it, and paying is a penalty. |
 
 A stranger is refused inside SMTP with a link, and their message is **held for
-fifteen minutes** rather than thrown away. They prove they are a person and it
-costs nothing, or they pay — and the message they already sent is delivered for
-them. Proving personhood is the only thing they ever do.
+fifteen minutes** rather than thrown away. The page asks one question — did a
+person write this, or a machine?
+
+A person proves it with World ID and the message is delivered. **No wallet, no
+account, nothing to sign up for**; the free lane should not charge a toll in
+setup. A machine pays instead, and only then is there anything to create an
+account for, because only then is there money to move.
 
 **A pass runs out.** Proving personhood opens a fifteen minute window; paying
 buys one delivery. Writing again tomorrow means proving it again. World ID is a
@@ -44,7 +48,10 @@ way.
 and the half-cent of gas that moves it are quoted in the same unit. On a chain
 with a volatile gas token, a one-cent price is not a coherent idea.
 
-**World ID** is the free lane, and it is asked every time. A liveness and uniqueness check built for exactly
+**World ID** is the free lane, and it is asked every time and of nobody's
+wallet. The attestation goes onchain against an address derived from the
+nullifier — an identity nobody holds a key to, which is all the registry needs
+it to be. A liveness and uniqueness check built for exactly
 this — bot defence where speed matters — and its per-action nullifier means one
 person cannot mint themselves unlimited free senders.
 

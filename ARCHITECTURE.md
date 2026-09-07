@@ -139,7 +139,21 @@ amounts are native `msg.value` throughout and the 6-decimal view is never
 touched. That also removes an `approve` step, which matters because the person
 paying is a stranger who has never used the app.
 
-### World ID — who gets in free
+### World ID — who gets in free, without an account
+
+The page asks whether a person or a machine wrote the message, and the two
+answers cost different things. Proving personhood needs no wallet at all:
+somebody who is not paying should not have to open an account to say so, and
+requiring one would put a signup in front of the only lane that is meant to be
+free. Privy appears on the other branch, where there is actually money to move.
+
+The attestation still goes onchain. It is recorded against an address derived
+from the nullifier rather than a wallet — `address(uint160(uint256(nullifier)))`
+— so one person maps to one record by construction and nobody holds the key to
+it. It is a name, not an account. The relayer submits it out of the vault, so
+the free lane costs the sender nothing at all, not even gas.
+
+
 
 Proofs are verified off-chain against the Developer Portal, because the World ID
 router is on World Chain and settlement is on Arc. The backend signs an EIP-712
