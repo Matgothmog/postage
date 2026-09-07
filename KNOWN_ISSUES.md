@@ -15,7 +15,7 @@ end to end against production: a signed claim returned `200`, the code arrived,
 a wrong code decremented the allowance, the right one promoted the claim to an
 inbox, and the claim row was dropped. What remains below is code, not config.
 
-**World ID is not actually integrated in the browser.** This is now the only
+**World ID is not actually integrated in the browser.** This is still the only
 thing standing between the demo and a complete story. Verified.
 `@worldcoin/idkit` is a dependency, `/api/world/context` signs an `rp_context`
 correctly and `/api/world/verify` parses a Selfie Check result correctly, but
@@ -82,7 +82,31 @@ not add a client side check against it.
 **Nothing rate limits anything except claim emails.** Verified by reading. The
 three-per-hour throttle added to `POST /api/inbox` covers the email bomb. Every
 other route — `/api/mail/inbound` behind its shared secret, `/api/challenge/
-resolve`, `/api/world/verify`, which spends real gas — has no limit at all.
+resolve`, `/api/world/verify`, which spends real gas, and the worker's
+`/release`, which spends a Mailgun send — has no limit at all.
+
+**A held message that is never answered is silently dropped.** Verified by
+design: to reply to a sender inside their own SMTP session the message has to be
+accepted, and an accepted message tells their provider it was delivered. If they
+never answer, the hold runs out and nothing arrives, with no bounce to tell them
+so. The alternative — refusing the session — is what happens to a sender we
+cannot safely reply to, and it costs them the message unless they follow the
+link. Neither is free; this trade was made deliberately, for the one that does
+not ask a person to write the message twice.
+
+**`readIdentity` has never been run against a real Privy token.** The signature
+check, the issuer and audience checks and the `linked_accounts` parse are
+written against Privy's documented format and are exercised by nothing. A token
+that does not verify falls back to the emailed-code path rather than failing
+open, so the risk is a signup that quietly takes the long way rather than one
+that lets a stranger through. Establish first that the short path actually
+fires.
+
+**`message.reply()` has only been run against local workerd.** It answered
+correctly there, threaded to the original by `In-Reply-To` and `References` —
+but the DMARC precondition Cloudflare enforces is not enforced locally, so how
+many real senders qualify is unmeasured. Every one that does not gets the bounce
+instead, which still carries the link.
 
 ## Correctness
 
@@ -94,12 +118,6 @@ the tab, and clicking Cloudflare's link later leaves the claim unpromoted
 forever, and `GET /api/inbox` reads only `inboxes`, so the user lands back at
 the start with no way to resume. `clearClaim` runs only on success, so abandoned
 rows keep their code hash indefinitely, which contradicts the comment on it.
-
-**A failed forward is an unhandled exception.** Verified by reading.
-`worker/src/index.ts` wraps only the call to the gateway in `try`;
-`message.forward()` sits outside it. A destination Cloudflare will not accept
-therefore throws rather than taking the deliberate `setReject` path that makes
-the sending MTA retry.
 
 **Nothing detects a mail loop.** Verified by reading. `api/mail/inbound` returns
 `inbox.destination` without ever comparing it to the recipient it was called
@@ -121,47 +139,39 @@ and reaching it kills signup permanently.
 
 ## Smaller things
 
-- `ConfirmClaim` has no way back. A 410 or 429 leaves the user on a dead screen;
-  reloading works but nothing says so.
-- The poll does not abort its in-flight fetch on unmount.
-- `maxLength={6}` silently truncates a pasted `is 123456` to `is 123`, which
-  passes the length check and spends one of five attempts.
 - The code is in the subject line, so it is readable from a lock screen preview
-  without opening the mailbox — which is the property it exists to prove.
+  without opening the mailbox — which is the property it exists to prove. Only
+  on the long path now, which most people will not take.
 - `mail.ts` hardcodes "15 minutes" while `CODE_TTL_SECONDS` is the source of
   truth, and the `expiresIn` the API returns is dropped client side.
 - Two different `ClaimState` interfaces share a name across files.
-- `recordClaimSend` runs after the mail is sent, but `ensureDestination` runs
-  before it, so a claim that clears Cloudflare and then fails at Resend has
-  already made Cloudflare mail the address without counting against the
-  throttle.
-
-## Documentation that has drifted
-
-- `ARCHITECTURE.md:207` still says claiming a handle "is therefore the entire
-  signup". Two email confirmations ago that was true.
-- The trust boundaries table lists neither `CLOUDFLARE_API_TOKEN`,
-  `RESEND_API_KEY` nor `MESSAGE_ID_SECRET`.
+- The classifier called a plainly personal message `commercial` in testing. It
+  is held either way and proving personhood still clears it for nothing, so this
+  costs a real sender only if they decline to prove it — but the tier is meant
+  to describe the message, and there it was wrong.
 
 ## Deliberately not done
 
-**Held mail is stored for fifteen minutes.** A sender must be able to prove
-personhood and have the message they already sent arrive, which means it has to
-still exist. Cloudflare cannot defer an SMTP session and offers no reachable
-temporary rejection, so there was no way to make the sender's own server hold it
-instead. The window is fifteen minutes, `dangerous` mail is never held, and the
-body is erased as it is read. It is a real retention claim where there used to
-be none — see [ARCHITECTURE.md](ARCHITECTURE.md#held-means-held).
+**Held mail is stored for a day.** A sender must be able to say who wrote it and
+have the message they already sent arrive, which means it has to still exist.
+Cloudflare cannot defer an SMTP session and offers no reachable temporary
+rejection, so there was no way to make the sender's own server hold it instead.
+The window is one day, it lives in the worker's KV namespace rather than the
+database and carries an expiry Cloudflare enforces, `dangerous` mail is never
+held, and the value is deleted as it is released — see
+[ARCHITECTURE.md](ARCHITECTURE.md#held-means-held).
 
-**Released mail loses DKIM alignment.** A held message is relayed under our name
-with the sender in `Reply-To`, because `message.forward()` can only be called
-during the worker execution that received it. So a released message displays as
-from Postage rather than from the sender. Mail that is never held still gets the
-untouched forward.
+**A release depends on Mailgun.** Cloudflare's `send_email` refuses raw MIME
+whose `From:` is not on this account, and `message.forward()` cannot be called
+outside the session that received the message, so releasing one byte for byte
+needs a third relay. If Mailgun is unreachable the gate still opens and the
+sender is offered the paste-it-back route; the message is not lost, but it is
+not the message they sent either. See
+[ARCHITECTURE.md](ARCHITECTURE.md#mailgun--carrying-a-release).
 
 **Privacy inside the server.** The destination address and the allowlist are
-stored in plaintext, and five parties read every message. This was a decision,
-not an oversight — see
+stored in plaintext, five parties read every message, and a released one is
+handled by a sixth. This was a decision, not an oversight — see
 [ARCHITECTURE.md](ARCHITECTURE.md#what-privacy-would-actually-take) for what
 closing it would take and why it means running the MTA inside an enclave.
 

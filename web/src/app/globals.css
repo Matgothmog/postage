@@ -1,26 +1,99 @@
 @import "tailwindcss";
 
+/*
+ * Paper and ink, with one stamp-red accent. Addresses and amounts are set in
+ * the mono face so a handle reads as a thing you can copy rather than prose.
+ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --paper: #faf8f4;
+  --card: #ffffff;
+  --ink: #17161b;
+  --ink-soft: #6b6761;
+  --ink-faint: #9c968d;
+  --rule: #e6e1d7;
+  --rule-strong: #d5cec1;
+  --stamp: #cf3f27;
+  --stamp-soft: #fbeeea;
+  --good: #1f7a4d;
+  --good-soft: #eaf6ef;
+  --warn: #8a5a12;
+  --warn-soft: #fbf2e2;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --paper: #110f13;
+    --card: #1a181e;
+    --ink: #f3f0ea;
+    --ink-soft: #a49e95;
+    --ink-faint: #6d675f;
+    --rule: #2b2830;
+    --rule-strong: #3b3742;
+    --stamp: #ff6c4f;
+    --stamp-soft: #2a1712;
+    --good: #5fd39a;
+    --good-soft: #10241a;
+    --warn: #e0ae5e;
+    --warn-soft: #251c0e;
   }
 }
 
+@theme inline {
+  --color-paper: var(--paper);
+  --color-card: var(--card);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-ink-faint: var(--ink-faint);
+  --color-rule: var(--rule);
+  --color-rule-strong: var(--rule-strong);
+  --color-stamp: var(--stamp);
+  --color-stamp-soft: var(--stamp-soft);
+  --color-good: var(--good);
+  --color-good-soft: var(--good-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+/*
+ * The torn edge of a stamp. Punched out of the card rather than drawn on it,
+ * so it reads as perforation instead of a dotted border.
+ */
+.perforated {
+  --punch: 7px;
+  mask-image:
+    radial-gradient(var(--punch) at 50% 0, transparent 98%, #000 100%),
+    radial-gradient(var(--punch) at 50% 100%, transparent 98%, #000 100%);
+  mask-size: 22px 22px, 22px 22px;
+  mask-position: 0 0, 0 100%;
+  mask-repeat: repeat-x, repeat-x;
+  mask-composite: intersect;
+}
+
+/* Faint engine-turned ruling, the way security paper is printed. */
+.guilloche {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    color-mix(in oklab, var(--stamp) 8%, transparent) 0 1px,
+    transparent 1px 9px
+  );
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .rise {
+    animation: rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
 }

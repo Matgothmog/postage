@@ -1,14 +1,19 @@
 import { isAddress } from "viem";
 import { claimStatement, provesWallet, readStatement } from "@/lib/auth";
+import { settleClaim } from "@/lib/claims";
+import { ensureDestination } from "@/lib/cloudflare";
 import {
+  attachDestination,
   claimByHandle,
   inboxByHandle,
   inboxByWallet,
+  markCodeVerified,
   recentClaimsTo,
   recordClaimSend,
   startClaim,
 } from "@/lib/db";
 import { sendVerificationCode } from "@/lib/mail";
+import { type PrivyIdentity, readIdentity } from "@/lib/privy";
 import { CODE_TTL_SECONDS, generateCode, hashCode } from "@/lib/verification";
 
 const HANDLE = /^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$/;
@@ -24,16 +29,34 @@ const RESERVED = new Set([
   "support", "help", "info", "security", "billing", "mailer-daemon", "webmaster", "postage",
 ]);
 
-/// One address can only be asked to confirm so often. Each claim mails it twice,
-/// from two senders whose reputation we depend on, so without this an
-/// unauthenticated loop is an email bomb aimed at anyone.
+/// One address can only be asked to confirm so often. Each claim makes at least
+/// one stranger mail it, from a sender whose reputation we depend on, so without
+/// this an unauthenticated loop is an email bomb aimed at anyone.
 const MAX_CLAIMS_PER_DESTINATION = 3;
 const THROTTLE_WINDOW_SECONDS = 60 * 60;
 
+/// A signed-in session that owns the wallet it is claiming for. This is the
+/// short signup: Privy has already confirmed both the address and the wallet, so
+/// neither has to be confirmed a second time.
+async function session(request: Request, wallet: string): Promise<PrivyIdentity | null> {
+  const identity = await readIdentity(request.headers.get("privy-id-token"));
+  if (!identity?.wallets.includes(wallet.toLowerCase())) return null;
+  return identity;
+}
+
 /// Where a signed-in user sees their inbox. The row holds the address they
-/// actually read, so it is returned only to someone who can prove they hold the
-/// wallet rather than to anyone who knows it.
+/// actually read, so it is returned only to someone who can prove the wallet is
+/// theirs rather than to anyone who knows it - wallets are public.
 export async function GET(request: Request) {
+  const identity = await readIdentity(request.headers.get("privy-id-token"));
+  if (identity) {
+    for (const wallet of identity.wallets) {
+      const inbox = await inboxByWallet(wallet);
+      if (inbox) return Response.json({ inbox });
+    }
+    return Response.json({ inbox: null });
+  }
+
   const wallet = request.headers.get("x-postage-wallet");
   const issuedAt = Number(request.headers.get("x-postage-issued"));
   const signature = request.headers.get("x-postage-signature");
@@ -51,15 +74,17 @@ export async function GET(request: Request) {
 /// Starts a claim on handle@usepostage.com. Nothing is forwarded yet, and the
 /// handle only becomes an inbox once two separate things are true.
 ///
-/// The signature proves who is asking. Without it the wallet in the body is
-/// just a public string — they are indexed onchain and handed to every sender
-/// we ever gated — and anyone could repoint a live inbox at themselves by
-/// naming its owner's wallet.
+/// Somebody has to prove they are asking for their own wallet, and that they can
+/// read the address the handle will point at. Privy's identity token carries
+/// both already - it names the wallet it minted and the address it confirmed at
+/// sign-in - so a signed-in user claiming their own address answers nothing:
+/// they pick a handle and the only thing left is Cloudflare's own link.
 ///
-/// The emailed code proves the claimer can read the address they are pointing
-/// the handle at. Cloudflare's own verification cannot stand in for it, because
-/// destinations are shared across the whole account: an address someone else
-/// verified already reads as verified to us.
+/// Everyone else takes the long way. A signature proves the wallet, because
+/// otherwise the wallet in the body is a public string anyone could name, and an
+/// emailed code proves the address, because Cloudflare's verification cannot
+/// stand in for it: destinations are shared across the whole account, so one
+/// somebody else verified already reads as verified to us.
 export async function POST(request: Request) {
   const { handle, destination, wallet, issuedAt, signature } = (await request.json()) as {
     handle?: string;
@@ -69,20 +94,29 @@ export async function POST(request: Request) {
     signature?: string;
   };
 
-  const rejection = validate(handle, destination, wallet);
-  if (rejection) return Response.json({ error: rejection }, { status: 400 });
-
-  const name = handle!.toLowerCase();
-  const address = destination!.toLowerCase();
-
-  const proved = await provesWallet(wallet!, Number(issuedAt), signature ?? null, (at) =>
-    claimStatement(name, address, wallet!, at)
-  );
-  if (!proved) {
-    return Response.json({ error: "Sign the request with the wallet you are claiming for" }, { status: 401 });
+  if (!wallet || !isAddress(wallet)) {
+    return Response.json({ error: "A valid wallet is required" }, { status: 400 });
   }
 
-  const taken = await unavailableTo(name, wallet!);
+  const signedIn = await session(request, wallet);
+  const name = handle?.toLowerCase() ?? "";
+  // Falls back to the address Privy checked, so the common claim asks for a
+  // handle and nothing else.
+  const address = (destination ?? signedIn?.email ?? "").toLowerCase();
+
+  const rejection = validate(name, address);
+  if (rejection) return Response.json({ error: rejection }, { status: 400 });
+
+  if (!signedIn) {
+    const proved = await provesWallet(wallet, Number(issuedAt), signature ?? null, (at) =>
+      claimStatement(name, address, wallet, at)
+    );
+    if (!proved) {
+      return Response.json({ error: "Sign the request with the wallet you are claiming for" }, { status: 401 });
+    }
+  }
+
+  const taken = await unavailableTo(name, wallet);
   if (taken) return Response.json({ error: taken }, { status: 409 });
 
   if ((await recentClaimsTo(address, THROTTLE_WINDOW_SECONDS)) >= MAX_CLAIMS_PER_DESTINATION) {
@@ -92,52 +126,91 @@ export async function POST(request: Request) {
     );
   }
 
-  const code = generateCode();
-  try {
-    await sendVerificationCode(address, name, code);
-  } catch (cause) {
-    const detail = cause instanceof Error ? cause.message : "Could not send the code";
-    return Response.json({ error: detail }, { status: 502 });
+  // Counted before anything is sent rather than after. A claim that mails the
+  // address and then fails has still mailed it, and a throttle that only counts
+  // successes does not throttle that.
+  await recordClaimSend(address);
+
+  const alreadyRead = signedIn?.email === address;
+  if (!alreadyRead) {
+    const code = generateCode();
+    try {
+      await sendVerificationCode(address, name, code);
+    } catch (cause) {
+      const detail = cause instanceof Error ? cause.message : "Could not send the code";
+      return Response.json({ error: detail }, { status: 502 });
+    }
+
+    await startClaim({
+      handle: name,
+      destination: address,
+      wallet,
+      code_hash: hashCode(name, code),
+      expires_at: Math.floor(Date.now() / 1000) + CODE_TTL_SECONDS,
+      // Cloudflare is not told about this address until the code comes back.
+      // Registering now would make it send its own mail at the same moment as
+      // ours, so the claimer would face two emails and two instructions at once.
+      cf_address_id: null,
+      cf_verified_at: null,
+    });
+
+    return Response.json({
+      status: "pending",
+      handle: name,
+      destination: address,
+      codeVerified: false,
+      cloudflareVerified: false,
+      live: false,
+      expiresIn: CODE_TTL_SECONDS,
+    });
   }
 
-  await recordClaimSend(address);
   await startClaim({
     handle: name,
     destination: address,
-    wallet: wallet!,
-    code_hash: hashCode(name, code),
+    wallet,
+    // Not null, and a claim that never needed a code must still fill it. The
+    // hash of one nobody was sent can never be matched, so the confirm route
+    // stays shut rather than being left open to anything.
+    code_hash: hashCode(name, generateCode()),
     expires_at: Math.floor(Date.now() / 1000) + CODE_TTL_SECONDS,
-    // Cloudflare is not told about this address until the code comes back.
-    // Registering now would make it send its own mail at the same moment as
-    // ours, so the claimer would face two emails and two instructions at once.
     cf_address_id: null,
     cf_verified_at: null,
   });
+  await markCodeVerified(name);
+
+  try {
+    const registered = await ensureDestination(address);
+    await attachDestination(name, registered.id, registered.verifiedAt);
+  } catch {
+    // Handled by the poller, which will try again.
+  }
+
+  // An address the account already knows comes back verified on the spot, and
+  // signing up was picking a handle.
+  const state = await settleClaim(name).catch(() => null);
 
   return Response.json({
-    status: "pending",
+    status: state?.live ? "live" : "pending",
     handle: name,
     destination: address,
-    codeVerified: false,
-    cloudflareVerified: false,
-    expiresIn: CODE_TTL_SECONDS,
+    codeVerified: true,
+    cloudflareVerified: state?.cloudflareVerified ?? false,
+    live: state?.live ?? false,
   });
 }
 
-function validate(handle?: string, destination?: string, wallet?: string): string | null {
-  const name = handle?.toLowerCase() ?? "";
-  if (!name || name.length < 2 || name.length > 31 || !HANDLE.test(name)) {
+function validate(handle: string, destination: string): string | null {
+  if (!handle || handle.length < 2 || handle.length > 31 || !HANDLE.test(handle)) {
     return "Pick 2-31 characters: letters, digits, dot, dash, not starting or ending with punctuation";
   }
-  if (name.includes("..")) return "Two dots in a row is not a valid address";
-  if (RESERVED.has(name)) return "That name is reserved";
+  if (handle.includes("..")) return "Two dots in a row is not a valid address";
+  if (RESERVED.has(handle)) return "That name is reserved";
 
   if (!destination || !EMAIL.test(destination)) return "A valid destination address is required";
-  if (destination.toLowerCase().endsWith(`@${OUR_DOMAIN}`)) {
+  if (destination.endsWith(`@${OUR_DOMAIN}`)) {
     return "Forward to an inbox you already read, not back to Postage";
   }
-
-  if (!wallet || !isAddress(wallet)) return "A valid wallet is required";
   return null;
 }
 

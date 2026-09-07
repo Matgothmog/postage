@@ -27,20 +27,26 @@ decides **who pays to get through**.
 | Ordinary automated mail — newsletters, marketing | Held. Nobody proved a person is behind it, so it pays. |
 | Trying to deceive you | Never delivered. Being a person does not clear it, and paying is a penalty. |
 
-A stranger is refused inside SMTP with a link, and their message is **held for
-fifteen minutes** rather than thrown away. The page asks one question — did a
-person write this, or a machine?
+A stranger's message is **held for a day** rather than thrown away, and they get
+a reply to it asking one question: did a person write this, or a machine? Two
+links, one answer. They do not write the message again — we still have it.
 
 A person proves it with World ID and the message is delivered. **No wallet, no
 account, nothing to sign up for**; the free lane should not charge a toll in
 setup. A machine pays instead, and only then is there anything to create an
 account for, because only then is there money to move.
 
+**What is delivered is what was sent.** A released message goes out as the exact
+bytes that arrived — the sender's own DKIM signature still covers it, their
+address is still in `From:`, and nothing of ours has been added to it.
+
 **A pass runs out.** Proving personhood opens a fifteen minute window; paying
 buys one delivery. Writing again tomorrow means proving it again. World ID is a
 check that someone was there a moment ago, not a badge an address keeps, and
 until liveness detection is good enough to say otherwise this treats it that
-way.
+way. The hold outlasts the pass on purpose: the pass is about how recently
+someone proved they were there, the hold about how long a person takes to read
+their mail.
 
 ## Why it needs all of this
 
@@ -78,26 +84,29 @@ to sign.
 
 ## Nothing to set up
 
-Claim a handle and you are done. An inbox charges one cent before its owner has
-picked a price, so the first message is charged for without a transaction, a
-balance, or a decision. Changing the price later is one call.
+Sign in, pick a handle, click the link Cloudflare mails you. That is the whole
+of it. Signing in already proves you can read the address the handle points at,
+so nothing asks you to prove it twice, and an inbox charges one cent before its
+owner has picked a price — the first message is charged for without a
+transaction, a balance, or a decision about pricing. Changing the price later is
+one call.
 
 ## This is a proof of concept
 
 It runs, it charges real testnet USDC, and the parts do what this README says
 they do. It is not a service you should point your real mail at yet.
 
-**A held message is kept, briefly, and that is a real cost.** For a sender to
-prove they are a person and have their mail arrive without writing it twice,
-Postage has to still have it. So a held message is stored for at most fifteen
-minutes and erased the moment it is released or the hold runs out — read and
-deleted in the same query, so a release cannot leave a copy behind. Mail judged
-`dangerous` is never held at all, and mail that goes straight through is never
-stored in the first place.
+**A held message is kept, and that is a real cost.** For a sender to prove they
+are a person and have their mail arrive without writing it twice, Postage has to
+still have it. So a held message is stored for at most a day, in the worker that
+received it and nowhere else, and erased the moment it is released or the hold
+runs out. Releasing it deletes it, and a second release finds nothing. Mail
+judged `dangerous` is never held at all, and mail that goes straight through is
+never stored in the first place.
 
-Fifteen minutes of held mail from strangers is a smaller claim than the one this
-project made before, and it is the honest price of not asking a person to send
-the same message twice.
+A day of held mail from strangers is the honest price of not asking a person to
+send the same message twice. Anything shorter and a sender who answers after
+lunch finds their message gone.
 
 **Not stored is not the same as not seen.** Cloudflare receives the message, the
 gateway parses it, and the classifier reads it. That is not a gap in the

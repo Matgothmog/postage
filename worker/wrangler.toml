@@ -2,4 +2,28 @@ name = "postage-mail"
 main = "src/index.ts"
 compatibility_date = "2026-09-01"
 
-# Set with: wrangler secret put POSTAGE_API_URL / POSTAGE_SECRET
+# The release endpoint the gateway calls. Nothing else is served here.
+workers_dev = true
+
+[vars]
+# api.eu.mailgun.net for a domain created in the EU region.
+MAILGUN_API_BASE = "https://api.mailgun.net"
+
+# Mailgun will show MX records for this domain. DO NOT ADD THEM: usepostage.com's
+# MX is what points inbound mail at this worker, and repointing it stops every
+# message reaching Postage at all. Only the SPF and DKIM records are needed, and
+# the SPF one has to be merged into the record already there rather than added
+# beside it - two SPF records are worse than none.
+#
+# Nothing about a released message depends on this name. The `From:` header stays
+# the sender's, and DMARC aligns against their signature rather than ours.
+MAILGUN_DOMAIN = "usepostage.com"
+
+# Held mail, and the only copy of it. Values carry an expiry set when they are
+# written, so a hold nobody answers is dropped by Cloudflare at its deadline
+# rather than by anything here remembering to look.
+[[kv_namespaces]]
+binding = "HELD"
+id = "332d86ab54b3480492e8241c0e18b9cf"
+
+# Set with: wrangler secret put POSTAGE_API_URL / POSTAGE_SECRET / MAILGUN_API_KEY

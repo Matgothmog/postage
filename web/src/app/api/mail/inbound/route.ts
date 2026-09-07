@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { Hex } from "viem";
-import { publicClient } from "@/lib/client";
+import { challengeMail } from "@/lib/challenge-email";
 import { classify, extractUrls, type MailFacts } from "@/lib/classify";
+import { publicClient } from "@/lib/client";
 import { POSTAGE_ESCROW, escrowAbi } from "@/lib/contracts";
 import {
   HOLD_SECONDS,
@@ -27,9 +28,13 @@ interface InboundPayload {
 }
 
 /// Whether the receiving MTA could confirm the envelope sender is who it says.
-/// The allowlist is keyed on that address, so letting an unauthenticated
-/// message skip the gate would let anyone through by writing someone else's
-/// name on the envelope.
+///
+/// Two things hang on this. The allowlist is keyed on that address, so letting
+/// an unauthenticated message skip the gate would let anyone through by writing
+/// someone else's name on the envelope. And it decides whether we write back at
+/// all: answering a forged sender means mailing whoever was impersonated, which
+/// is backscatter, so an unauthenticated sender is told inside the SMTP session
+/// instead and nothing leaves the building.
 function senderIsAuthenticated(payload: Partial<InboundPayload>): boolean {
   if (payload.dmarc === "pass") return true;
   return payload.spf === "pass" && payload.dkim !== "fail";
@@ -48,8 +53,9 @@ function senderIsAuthenticated(payload: Partial<InboundPayload>): boolean {
 ///               if a wallet is attached, and proving personhood does not
 ///               clear it - a real person can still be phishing.
 ///
-/// Nothing about the message is stored. The challenge row records who wrote to
-/// whom and the price, never the subject or the body.
+/// Nothing about the message is stored here. The worker keeps the original
+/// bytes so that releasing a hold puts the message that was sent on the wire
+/// rather than a copy of it; this side records who wrote to whom and the price.
 export async function POST(request: Request) {
   if (request.headers.get("x-postage-secret") !== required("MAIL_WEBHOOK_SECRET")) {
     return Response.json({ error: "Bad secret" }, { status: 401 });
@@ -69,10 +75,11 @@ export async function POST(request: Request) {
   }
 
   const sender = from.toLowerCase();
+  const authenticated = senderIsAuthenticated(payload);
 
   // A live pass, and the envelope it was earned with. Passes run out, so this
   // is a sender who cleared the gate minutes ago rather than ever.
-  if (senderIsAuthenticated(payload)) {
+  if (authenticated) {
     const pass = await spendPass(handle, sender);
     if (pass) {
       return Response.json({ action: "forward", to: inbox.destination, reason: pass.reason });
@@ -124,10 +131,12 @@ export async function POST(request: Request) {
   const receivedAt = Math.floor(Date.now() / 1000);
   const messageId = messageIdFor(sender, handle, facts.subject, receivedAt);
   const signed = await signQuote(messageId, inbox.wallet as Hex, verdict.tier, priced.amount);
+  const challengeUrl = `${appUrl}/c/${token}`;
 
   // Dangerous mail is never delivered by any route, so there is nothing to hold
   // and no reason to keep what it said.
   const holding = verdict.tier !== "dangerous";
+  const heldUntil = receivedAt + HOLD_SECONDS;
   await purgeExpiredHolds();
 
   await createChallenge({
@@ -138,23 +147,47 @@ export async function POST(request: Request) {
     tier: verdict.tier,
     amount: priced.amount.toString(),
     quote_json: JSON.stringify({ ...signed, reasons: priced.reasons }),
-    subject: holding ? facts.subject : null,
-    body: holding ? facts.body : null,
-    held_until: holding ? receivedAt + HOLD_SECONDS : null,
+    held_until: holding ? heldUntil : null,
     created_at: receivedAt,
   });
 
-  return Response.json({
-    // Dangerous mail is refused whether or not anyone pays. The link is still
-    // offered so a misclassified sender has a route back.
-    action: "reject",
+  const common = {
     reason: verdict.tier,
     verdict,
     price: priced.amount.toString(),
     reasons: priced.reasons,
-    challenge_url: `${appUrl}/c/${token}`,
+    challenge_url: challengeUrl,
     quote: signed,
-    // Tells the worker whether the sender still has to send it again.
-    held: holding,
+  };
+
+  if (!holding) {
+    return Response.json({
+      ...common,
+      action: "reject",
+      bounce: `Not delivered: this looks like an attempt to deceive the recipient, and paying will not change that. If it is a mistake, say so at ${challengeUrl}`,
+    });
+  }
+
+  return Response.json({
+    ...common,
+    action: "hold",
+    token,
+    held_until: heldUntil,
+    // Present only when we can write back without mailing a stranger whose name
+    // was borrowed. Without it the worker refuses the message instead, and the
+    // link travels in the bounce the sender's own server writes them.
+    notice: authenticated
+      ? challengeMail({
+          handle,
+          subject: facts.subject,
+          tier: verdict.tier,
+          amount: priced.amount,
+          reasons: priced.reasons,
+          challengeUrl,
+          appUrl,
+          heldUntil,
+        })
+      : null,
+    bounce: `Held, not lost: say whether a person or a machine wrote this and we deliver the message you already sent - ${challengeUrl}`,
   });
 }

@@ -16,6 +16,8 @@ flowchart TB
     S["Sender's mail provider"]
     CF["Cloudflare Email Routing<br/>MX for usepostage.com"]
     W["Email Worker"]
+    R[("Workers KV<br/>held mail, raw,<br/>expires in a day")]
+    M["Mailgun<br/>carries a release"]
     V["Next.js on Vercel"]
     T[("Turso / libSQL<br/>inboxes, allowlist,<br/>challenges — no mail")]
     C["Claude<br/>four-tier classifier"]
@@ -26,7 +28,11 @@ flowchart TB
 
     S -->|SMTP| CF --> W
     W -->|"classify, shared secret"| V
-    W -->|"forward"| S
+    W -->|"forward, untouched"| S
+    W <-->|"hold the raw bytes"| R
+    W -->|"reply: person or machine?"| S
+    V -->|"release, shared secret"| W
+    W -->|"the same bytes, unchanged"| M --> S
     V --> C
     V <--> T
     V -->|"sign the price"| A
@@ -50,6 +56,20 @@ receiving MTA already computed, and returns one verdict.
 
 The tier does not decide whether a stranger is held — everyone is. It decides
 who pays to get out.
+
+## The sender is asked, not bounced
+
+A held sender gets a reply to the message they just sent, in the same SMTP
+session that carried it, threaded to it by `In-Reply-To`. It asks one question
+with a link for each answer. Nothing about it asks them to write the message
+again, because it is still here.
+
+`message.reply()` will only answer a sender whose DMARC result passed, which is
+exactly the condition under which answering is safe: a forged `From:` names
+somebody who did not write to us, and mailing them would be backscatter. So an
+unauthenticated sender is refused inside the session instead and the link
+travels in the bounce their own server writes them. Their message is still held
+either way.
 
 Three consequences worth being explicit about:
 
@@ -207,7 +227,30 @@ MIME re-encode would invalidate it and DMARC would have nothing to align on. The
 original sender therefore displays correctly in the recipient's client.
 
 The pitch — *tired of this, want to get paid for it?* — goes in the **challenge
-page** the sender lands on, never appended to forwarded mail.
+page and the mail that links to it**, never appended to a forwarded message.
+
+### Mailgun — carrying a release
+
+`message.forward()` can only be called during the execution that received the
+message, so a message released an hour later needs another way out, and it has
+to be a way that does not touch the bytes.
+
+Cloudflare's own `send_email` cannot do it. It refuses raw MIME unless the
+envelope sender matches the `From:` header, and that address must be on a domain
+this account owns — so the only way to release a stranger's message through it
+is to rewrite `From:`, which is the one edit a forward must never make. The
+runtime says so in as many words: `From: header does not match mail from`.
+
+So the release goes out through Mailgun's MIME endpoint, with our own DKIM
+signing and both kinds of click tracking explicitly turned **off**. Tracking is
+the important one: it rewrites every link in the body, and rewriting the body
+changes exactly what the sender's signature covers. What arrives is the bytes
+that arrived here — same headers, same body, same signature — with a `Received:`
+line added by each hop, as in any forward.
+
+The worker holds the message and hands it straight to Mailgun. The gateway says
+*send it* and learns whether it went; the message itself never passes back
+through Vercel.
 
 ## The vault closes the loop
 
@@ -226,28 +269,43 @@ Sponsoring one attestation costs 0.00188 USDC. `refillRelayer()` is callable by
 anyone, because the funds can only ever move to the relayer — a keeper can top
 it up without anyone gaining the ability to move money elsewhere.
 
-## One email at a time
+## Signing up is one click, and it is not ours
 
-Claiming a handle needs two confirmations that cannot stand in for each other:
-our code, which ties the claim to whoever made it, and Cloudflare's, without
-which it will not carry mail to that address at all. Cloudflare's cannot be
-automated — the link it sends is answerable only by the person reading that
-mailbox, and no API accepts it on their behalf.
+Claiming a handle needs two facts: that the claimer holds the wallet earnings
+will accrue to, and that they can read the address the handle will point at.
+Neither can be taken on the browser's word — a wallet address is public and
+indexed onchain, and Cloudflare's own verification cannot stand in for the
+second, because destinations are shared across the whole account and one
+somebody else verified already reads as verified to us.
 
-What can be removed is the collision. Cloudflare is not told about the address
-until the code comes back, so the claimer deals with one message at a time and
-never presses anything to summon the second. An address the account already
-knows returns verified on the spot, and signing up was the code and nothing
-else.
+Both facts are already established by the time anyone reaches the form. Privy's
+**identity token** is a short-lived JWT whose claims list the accounts it
+verified — the address someone proved they could read when they signed in, and
+the wallet it minted for them — signed by a key only Privy holds and checked
+here against the app's public JWKS. No app secret, no call to Privy, no library:
+one signature check against a key anyone can fetch. So the short signup asks for
+a handle and nothing else.
+
+What is left is Cloudflare's, and it cannot be removed: Email Routing will not
+carry mail to an address it has not confirmed, the link it sends is answerable
+only by the person reading that mailbox, and no API accepts it on their behalf.
+An address the account already knows comes back verified on the spot, and
+signing up was picking a name.
+
+The long way still exists, for forwarding somewhere other than where you sign
+in, and for a session with no identity token to offer: a wallet signature for
+the first fact and an emailed code for the second. Cloudflare is not told about
+the address until that code comes back, so the claimer deals with one message at
+a time.
 
 ## Setup a new user does not have to do
 
 An inbox that has never called `setFloorPrice` reads zero, and a zero floor
 prices every message at nothing. So the escrow does not read `floorPrice`
 directly: `effectiveFloor` returns the owner's chosen price, or one cent if
-they never chose one, and `payToSend` enforces that. Claiming a handle is
-therefore the entire signup — the first message is charged for correctly
-without a transaction, a balance, or a decision about pricing.
+they never chose one, and `payToSend` enforces that. So there is no pricing step
+in signing up — the first message is charged for correctly without a
+transaction, a balance, or a decision.
 
 ## Trust boundaries
 
@@ -260,6 +318,11 @@ without a transaction, a balance, or a decision about pricing.
 | `MAIL_WEBHOOK_SECRET` | Vercel + worker secret | Stops anyone injecting mail into the gateway |
 | `ANTHROPIC_API_KEY` | Vercel env | Classifier access |
 | `DATABASE_AUTH_TOKEN`, `GRAPH_API_KEY` | Vercel env | Turso and gateway queries |
+| `MESSAGE_ID_SECRET` | Vercel env | Keys the onchain message id, and derives the verification code hash |
+| `CLOUDFLARE_API_TOKEN` | Vercel env | Registers a new user's forwarding address |
+| `RESEND_API_KEY` | Vercel env | The code for an address Privy has not already checked |
+| `MAILGUN_API_KEY` | Worker secret | Carries a released message; never leaves Cloudflare |
+| `MAIL_WORKER_URL` | Vercel env | Where a release is asked for. Not a secret; the shared secret is what guards it |
 
 Only `NEXT_PUBLIC_PRIVY_APP_ID` reaches the browser, and Privy app ids are
 public by design. `NEXT_PUBLIC_` is a broadcast, not a permission — everything
@@ -271,9 +334,9 @@ classifier lets someone set prices but not mint personhood.
 
 ## Held means held
 
-A sender should have to do one thing: prove they are a person. Not prove it and
-then go back and write the message again. That is only possible if the message
-still exists when they finish, so Postage keeps it — for fifteen minutes.
+A sender should have to do one thing: say who wrote it. Not answer that and then
+go back and write the message again. That is only possible if the message still
+exists when they finish, so Postage keeps it — for a day.
 
 There was no way around it. Cloudflare cannot defer an SMTP session: `setReject`
 is documented as a permanent error and the Workers API has no mechanism to hold
@@ -287,23 +350,29 @@ So the hold is real, and bounded:
 
 - Only mail that is actually held. Anything delivered outright is never stored.
 - Never `dangerous` mail, which no route delivers, so keeping it serves nothing.
-- Fifteen minutes, matching the pass window, so the hold and the proof lapse
-  together.
-- Read and erased in the same step, so releasing cannot leave a copy and cannot
-  be replayed into a second delivery.
-- Erased on the way past — every inbound message purges the holds that ran out,
-  rather than trusting a timer to wake up.
+- One day, which is longer than the pass window and deliberately so. A pass is
+  about how recently somebody proved they were there; a hold is about how long a
+  person takes to read their mail, and nobody answers their inbox in fifteen
+  minutes.
+- In the worker that received it, and nowhere else. The gateway records that a
+  hold exists and nothing about what it says.
+- The right to release is taken by one conditional update before anything is
+  sent, so two clicks a second apart cannot both deliver it, and the object is
+  deleted as it goes.
+- Written with the deadline attached, so Cloudflare drops it at that moment
+  whatever else is or is not happening. Nothing has to notice, so nothing can
+  fail to: there is no sweep to fall behind and no rate at which a message
+  outlives the promise made about it.
 
-Released mail goes out under our name with the sender's in `Reply-To`, never
-forged into `From`. That costs the DKIM alignment `message.forward()` preserves,
-so a released message displays as coming from Postage rather than the sender.
-Mail that is never held keeps the untouched forward.
+Released mail is byte for byte the mail that arrived. See
+[Mailgun](#mailgun--carrying-a-release) for why that needs a second way out and
+what had to be switched off to keep it true.
 
 ## What is deliberately not stored
 
-Nothing is kept about a message once it is settled. A released or expired
-challenge keeps sender, recipient and price, and its subject and body are null —
-the same row, emptied.
+Nothing anyone wrote is in the database at all. A challenge row is sender,
+recipient, price and whether a hold is outstanding; the message lives in the
+worker's KV namespace and goes when it is released or when it expires.
 
 Only a keyed commitment to the message goes onchain, as the id a payment is
 bound to. The escrow does not need to read a message to charge for it.
@@ -316,8 +385,10 @@ exact about which of those Postage does.
 Five parties see a message in plaintext today: Cloudflare terminates the SMTP
 connection, the mail worker parses the MIME, the gateway receives the parsed
 fields, the classifier reads them, and the destination provider receives the
-forward. Turso durably holds the map from each handle to the real address behind
-it, and the list of who has written to whom.
+forward. A held message adds KV, which is still Cloudflare, and — only if it is
+released — Mailgun, which carries it. Turso durably holds the map from each
+handle to the real address behind it, and the list of who has written to whom,
+and nothing of what anyone wrote.
 
 **This is not an implementation shortcut.** SMTP has no end-to-end encryption in
 practice. STARTTLS, MTA-STS and DANE protect the hop between two servers; the

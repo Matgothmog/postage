@@ -106,3 +106,55 @@ them at five times the floor rather than the minimum.
 ## Arc Mainnet (5042)
 
 Not deployed yet.
+
+## The mail path
+
+    worker    https://postage-mail.postage-worker.workers.dev
+    held mail KV namespace 332d86ab54b3480492e8241c0e18b9cf, binding HELD
+
+The worker serves exactly one route, `POST /release`, and answers 404 to
+everything else and 401 without the shared secret. `MAIL_WORKER_URL` on the
+gateway points at it.
+
+Held mail is in KV rather than R2 because R2 is not enabled on the account, and
+it turned out to be the better fit: each value is written with the hold's
+deadline attached, so Cloudflare drops one nobody answered at exactly that
+moment. There is no sweep to fall behind.
+
+### The relay carries a message without touching it
+
+`usepostage.com` is active on Mailgun for sending. Three records, all valid:
+
+| Record | Name | Note |
+| --- | --- | --- |
+| TXT | `usepostage.com` | SPF, **merged** into the Cloudflare one rather than added beside it |
+| TXT | `mailo._domainkey.usepostage.com` | DKIM |
+| CNAME | `email.usepostage.com` | tracking; unused, we send with tracking off |
+
+Open, click and unsubscribe tracking are also off at the domain level, so link
+rewriting cannot come back by someone dropping the per-message flags. Rewriting a
+link changes the body, and the body is what the sender's signature covers.
+
+The worker sends as key `55613b82-53c4b5eb` — `kind=domain`, `role=sending`,
+scoped to `usepostage.com`. It can send and read domains and nothing else; it
+cannot so much as list the account's keys. Creating one through the API needs
+`kind=domain` alongside `role=sending`, or Mailgun quietly issues an admin key
+instead.
+
+**Mailgun's MX records are deliberately absent**, which is why the domain reads
+`valid=unknown` against them. The MX for `usepostage.com` is Cloudflare Email
+Routing, and that is what delivers mail to the worker — adding Mailgun's would
+stop every message reaching Postage.
+
+Verified against the live API rather than assumed: a raw message with
+`From: Sara Müller <sarah@example.org>` — a domain this account does not own,
+carrying its own DKIM signature — was accepted on `/messages.mime` and logged
+`accepted` then `delivered`, in test mode so nothing left the building. Mailgun
+returned the message's own `Message-ID` rather than minting one, and logged the
+sender and the subject as written. That is the whole premise of releasing a held
+message: it goes out as the message that arrived.
+
+Cloudflare's own `send_email` cannot do this. It rejects raw MIME whose envelope
+sender does not match the `From:` header, and that address must be on a domain
+the account owns — `From: header does not match mail from`. Rewriting `From:` is
+the one edit a forward must never make, so the release goes through Mailgun.

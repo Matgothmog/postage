@@ -3,17 +3,51 @@ import PostalMime from "postal-mime";
 interface Env {
   POSTAGE_API_URL: string;
   POSTAGE_SECRET: string;
+  /// Messages waiting for their sender to answer, as the exact bytes that
+  /// arrived. Nothing else in the system has a copy.
+  ///
+  /// KV rather than a bucket, for the one property that matters here: it drops
+  /// a value at a time we set when we write it. A hold nobody answers is erased
+  /// by Cloudflare at its deadline rather than by us noticing later, so there is
+  /// no sweep to fall behind and no window in which a message outlives the
+  /// promise made about it. The gap between writing and reading is however long
+  /// a person takes to open their mail, so KV's consistency window does not come
+  /// into it.
+  HELD: KVNamespace;
+  /// Carries a released message out again. Cloudflare cannot: `send_email`
+  /// refuses raw MIME whose `From:` is not a domain on this account, and
+  /// rewriting `From:` is the one thing a forward must never do.
+  MAILGUN_API_BASE: string;
+  MAILGUN_DOMAIN: string;
+  MAILGUN_API_KEY: string;
 }
 
-type Verdict = {
-  action: "forward" | "reject";
+/// What the sender is shown when we can write back to them.
+interface Notice {
+  subject: string;
+  html: string;
+  text: string;
+}
+
+interface Verdict {
+  action: "forward" | "hold" | "reject";
+  /// Verified destination, on `forward` only.
   to?: string;
   reason?: string;
-  challenge_url?: string;
-  /// True when the gateway is holding the message, so clearing the gate
-  /// delivers it and the sender never sends it twice.
-  held?: boolean;
-};
+  /// Key the message is held under, on `hold` only.
+  token?: string;
+  held_until?: number;
+  /// Absent when answering the sender would mean mailing someone whose name was
+  /// forged, in which case the SMTP refusal carries the link instead.
+  notice?: Notice | null;
+  /// What to say inside the SMTP session if we do not write back.
+  bounce?: string;
+}
+
+/// Only reached if the gateway sends a hold with no deadline on it. Not the
+/// source of truth for how long a message is kept - that is the gateway's - just
+/// a floor under it, so nothing can be stored indefinitely by omission.
+const FALLBACK_HOLD_SECONDS = 24 * 60 * 60;
 
 /// Reads the Authentication-Results the receiving MTA already wrote, so the
 /// classifier is told whether the sender is who they claim rather than having
@@ -28,7 +62,10 @@ function authResults(header: string | null): { spf: string | null; dkim: string 
 
 export default {
   async email(message: ForwardableEmailMessage, env: Env): Promise<void> {
-    const parsed = await PostalMime.parse(message.raw);
+    // Buffered before parsing, because the raw stream reads once and holding a
+    // message means keeping exactly these bytes rather than a rendering of them.
+    const raw = await new Response(message.raw).arrayBuffer();
+    const parsed = await PostalMime.parse(raw);
     const auth = authResults(message.headers.get("authentication-results"));
 
     let verdict: Verdict;
@@ -47,8 +84,33 @@ export default {
       return;
     }
 
+    // Untouched, so the sender's DKIM signature still covers what arrives and
+    // their address still displays as the one that wrote it.
     if (verdict.action === "forward" && verdict.to) {
-      await message.forward(verdict.to);
+      try {
+        await message.forward(verdict.to);
+      } catch {
+        // A destination Cloudflare will not accept must refuse the session, so
+        // the sending MTA retries. Throwing here loses the message instead.
+        message.setReject("Postage could not deliver to that inbox, please retry");
+      }
+      return;
+    }
+
+    if (verdict.action === "hold" && verdict.token) {
+      // The gateway sets the deadline; this only guards the case where it did
+      // not. A value written with no expiry is kept until something deletes it,
+      // and a held message nobody ever deletes is the one thing the promise made
+      // about holding cannot survive.
+      const heldUntil = verdict.held_until ?? Math.floor(Date.now() / 1000) + FALLBACK_HOLD_SECONDS;
+      await env.HELD.put(verdict.token, raw, { expiration: heldUntil });
+
+      // Answering in the same session is the whole point: the sender is told
+      // their message is waiting rather than that it bounced, and one click
+      // sends the copy we are holding.
+      if (verdict.notice && (await replied(message, verdict.notice))) return;
+
+      message.setReject(verdict.bounce ?? "Held. See the link in this message to release it");
       return;
     }
 
@@ -57,22 +119,91 @@ export default {
       return;
     }
 
-    // This line is the only thing the sender ever sees, so it has to say what
-    // happened and what to do about it in one breath. Their mail is still in
-    // their outbox; the link is how it gets through.
-    message.setReject(rejection(verdict));
+    message.setReject(verdict.bounce ?? "Not delivered.");
+  },
+
+  /// Releases a held message. Called by the gateway once the sender has said who
+  /// wrote it, and reachable by nothing else.
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const { pathname } = new URL(request.url);
+    if (request.method !== "POST" || pathname !== "/release") {
+      return new Response("Not found", { status: 404 });
+    }
+    if (request.headers.get("x-postage-secret") !== env.POSTAGE_SECRET) {
+      return new Response("Bad secret", { status: 401 });
+    }
+
+    let body: { token?: string; to?: string };
+    try {
+      body = await request.json();
+    } catch {
+      return new Response("Body must be JSON", { status: 400 });
+    }
+
+    const { token, to } = body;
+    if (!token || !to) return new Response("token and to are required", { status: 400 });
+
+    const held = await env.HELD.get(token, "arrayBuffer");
+    if (!held) return new Response("Nothing is held under that token", { status: 404 });
+
+    try {
+      await deliverUntouched(env, held, to);
+    } catch (cause) {
+      // Kept, so the sender can be told it did not go and try again rather than
+      // losing a message they were promised was safe.
+      return new Response(cause instanceof Error ? cause.message : "Could not send it", { status: 502 });
+    }
+
+    await env.HELD.delete(token);
+    return Response.json({ sent: true });
   },
 };
 
-function rejection(verdict: Verdict): string {
-  if (!verdict.challenge_url) return "Not delivered.";
-  if (verdict.reason === "dangerous") {
-    return `Not delivered: this looks like an attempt to deceive the recipient, and paying will not change that. If it is a mistake, say so at ${verdict.challenge_url}`;
+/// Puts the message back on the wire as the bytes that arrived.
+///
+/// Every option here turns something off. Mailgun would otherwise sign the
+/// message with our key and rewrite every link in the body for click tracking,
+/// and rewriting the body changes what the sender's own signature covers - the
+/// message would arrive looking forged by exactly the measure this gateway
+/// exists to apply. The envelope sender is Mailgun's, as it is in any forward;
+/// the `From:` header, which is what the recipient sees and what DMARC aligns
+/// against, is untouched.
+async function deliverUntouched(env: Env, raw: ArrayBuffer, to: string): Promise<void> {
+  const form = new FormData();
+  form.append("to", to);
+  form.append("message", new Blob([raw], { type: "message/rfc822" }), "held.eml");
+  form.append("o:dkim", "no");
+  form.append("o:tracking", "no");
+  form.append("o:tracking-clicks", "no");
+  form.append("o:tracking-opens", "no");
+
+  const response = await fetch(`${env.MAILGUN_API_BASE}/v3/${env.MAILGUN_DOMAIN}/messages.mime`, {
+    method: "POST",
+    headers: { Authorization: `Basic ${btoa(`api:${env.MAILGUN_API_KEY}`)}` },
+    body: form,
+  });
+
+  if (!response.ok) {
+    throw new Error(`Mailgun returned ${response.status}: ${(await response.text()).slice(0, 200)}`);
   }
-  if (verdict.held) {
-    return `Held for 15 minutes, not lost: prove you are a person for free, or pay, and it is delivered for you - no need to send it again - ${verdict.challenge_url}`;
+}
+
+/// True if the sender was told. A refusal here is not a failure worth losing the
+/// message over - Cloudflare will not let us reply to an unauthenticated sender,
+/// which is exactly the case where replying would mail the wrong person - so the
+/// caller falls back to refusing inside the session.
+async function replied(message: ForwardableEmailMessage, notice: Notice): Promise<boolean> {
+  try {
+    await message.reply({
+      from: { name: "Postage", email: message.to },
+      subject: notice.subject,
+      text: notice.text,
+      html: notice.html,
+    });
+    return true;
+  } catch {
+    return false;
   }
-  return `Not delivered: prove you are a person for free, or pay, then send again - ${verdict.challenge_url}`;
 }
 
 async function ask(

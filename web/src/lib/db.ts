@@ -63,11 +63,12 @@ const SCHEMA = [
    )`,
   /// A message being held, and the terms for releasing it.
   ///
-  /// `subject` and `body` are the one place Postage keeps what someone wrote,
-  /// and they are erased the moment the message is released or the hold runs
-  /// out. Holding them is what lets a sender prove personhood and have their
-  /// mail arrive without sending it a second time; without them the only way
-  /// through is to write it again.
+  /// Nothing anyone wrote is in this table. The message itself is held by the
+  /// worker that received it, so that releasing it can put the original bytes
+  /// on the wire; `held_until` is only this side's record that it still exists.
+  ///
+  /// `subject` and `body` remain so that rows written before the message moved
+  /// out of here are still emptied by `purgeExpiredHolds`. Nothing writes them.
   `CREATE TABLE IF NOT EXISTS challenges (
      token TEXT PRIMARY KEY,
      handle TEXT NOT NULL,
@@ -314,9 +315,15 @@ export async function walletForSender(sender: string): Promise<string | null> {
   return rows[0]?.wallet ?? null;
 }
 
-/// How long a held message is kept before it is erased unread. Matches the
-/// pass window, so the hold and the proof expire together.
-export const HOLD_SECONDS = 15 * 60;
+/// How long a held message is kept before it is erased unread.
+///
+/// Longer than the pass window on purpose. A pass is about how recently someone
+/// proved they were there; a hold is about how long a person reasonably takes to
+/// read the mail asking them, and nobody answers their inbox inside fifteen
+/// minutes. Making them shorter than a day would mean a sender who replies over
+/// lunch finds their message gone and has to write it again, which is the one
+/// thing holding it exists to prevent.
+export const HOLD_SECONDS = 24 * 60 * 60;
 
 export interface Challenge {
   token: string;
@@ -325,9 +332,8 @@ export interface Challenge {
   message_id: string;
   tier: string;
   amount: string;
-  /// Present only while the message is held. Null once released or expired.
-  subject: string | null;
-  body: string | null;
+  /// Set while the worker still holds the message. Null once released, expired,
+  /// or never held at all.
   held_until: number | null;
   /// The enclave-signed quote, kept so the sender can pay it from the
   /// challenge page without us re-pricing the message we no longer hold.
@@ -339,8 +345,8 @@ export interface Challenge {
 export async function createChallenge(challenge: Omit<Challenge, "resolved_at">): Promise<void> {
   await run(
     `INSERT INTO challenges
-       (token, handle, sender, message_id, tier, amount, quote_json, subject, body, held_until, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (token, handle, sender, message_id, tier, amount, quote_json, held_until, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       challenge.token,
       challenge.handle,
@@ -349,39 +355,29 @@ export async function createChallenge(challenge: Omit<Challenge, "resolved_at">)
       challenge.tier,
       challenge.amount,
       challenge.quote_json,
-      challenge.subject,
-      challenge.body,
       challenge.held_until,
       challenge.created_at,
     ]
   );
 }
 
-/// Reads a held message and erases it in the same breath, so a release cannot
-/// leave a copy behind and cannot be replayed into a second delivery.
-export async function takeHeldMessage(
-  token: string
-): Promise<{ subject: string; body: string } | null> {
-  const rows = await all<{ subject: string | null; body: string | null }>(
-    `SELECT subject, body FROM challenges WHERE token = ? AND held_until > ? AND body IS NOT NULL`,
-    [token, Math.floor(Date.now() / 1000)]
-  );
-  const held = rows[0];
-  await forgetHeldMessage(token);
-  if (!held?.body) return null;
-  return { subject: held.subject ?? "(no subject)", body: held.body };
+/// Takes the right to release a held message, once. The condition and the write
+/// are one statement, so two requests racing on the same token cannot both come
+/// away believing they may send it - only the one that changed a row may.
+export async function claimHold(token: string): Promise<boolean> {
+  const client = await db();
+  const result = await client.execute({
+    sql: `UPDATE challenges SET held_until = NULL WHERE token = ? AND held_until > ?`,
+    args: [token, Math.floor(Date.now() / 1000)],
+  });
+  return result.rowsAffected > 0;
 }
 
-export async function forgetHeldMessage(token: string): Promise<void> {
-  await run(
-    `UPDATE challenges SET subject = NULL, body = NULL, held_until = NULL WHERE token = ?`,
-    [token]
-  );
-}
-
-/// Erases every hold that ran out. Called on the way past rather than on a
-/// timer, because a message nobody released should not outlive its window just
-/// because nothing happened to wake us.
+/// Drops every hold that ran out. Called on the way past rather than on a timer,
+/// because a message nobody released should not outlive its window just because
+/// nothing happened to wake us. The worker erases its own copy the same way; this
+/// only forgets that there was one, and empties the two columns rows written
+/// before the move still carry.
 export async function purgeExpiredHolds(): Promise<void> {
   await run(
     `UPDATE challenges SET subject = NULL, body = NULL, held_until = NULL

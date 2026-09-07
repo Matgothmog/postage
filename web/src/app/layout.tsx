@@ -7,8 +7,9 @@ const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Postage",
-  description: "Email where attention has a price, and being human makes it free.",
+  title: "Postage — your attention already has a price",
+  description:
+    "Hand out one address instead of your own. Real mail arrives untouched; machines pay you a cent to interrupt you.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
@@ -17,7 +18,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-neutral-50 text-neutral-900">
+      <body className="min-h-full">
         <Providers>{children}</Providers>
       </body>
     </html>

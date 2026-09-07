@@ -18,3 +18,7 @@ subgraph/build/
 
 # forge install pulls these
 contracts/lib/
+
+# wrangler local state and secrets
+worker/.dev.vars
+worker/.wrangler/

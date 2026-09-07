@@ -3,6 +3,7 @@
 import { usePrivy, useSendTransaction, useWallets } from "@privy-io/react-auth";
 import { useState } from "react";
 import { encodeFunctionData } from "viem";
+import { Callout, field, primaryButton, quietButton } from "@/components/chrome";
 import { POSTAGE_ESCROW, escrowAbi } from "@/lib/contracts";
 import { formatUsdc } from "@/lib/format";
 
@@ -32,23 +33,26 @@ export function ChallengeActions({
   quote,
   dangerous,
   handle,
+  lane: initialLane,
 }: {
   token: string;
   quote: Quote;
   dangerous: boolean;
   handle: string;
+  /// Which answer they already gave. Both are links in the mail they were sent,
+  /// so arriving here having chosen should not mean choosing again.
+  lane: "choosing" | "paying";
 }) {
-  const [lane, setLane] = useState<"choosing" | "paying">("choosing");
+  const [lane, setLane] = useState(dangerous ? "choosing" : initialLane);
   const [busy, setBusy] = useState<"human" | "pay" | null>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
 
   if (outcome?.kind === "charged") {
     return (
-      <div className="mt-8 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
-        <p className="font-medium">Charged, and still not delivered.</p>
-        <p className="mt-1">
+      <div className="mt-8">
+        <Callout tone="bad" title="Charged, and still not delivered.">
           Paying is the penalty for this tier, not the price of getting through. Nothing was sent.
-        </p>
+        </Callout>
       </div>
     );
   }
@@ -58,14 +62,14 @@ export function ChallengeActions({
     // the sender. Only a hold that ran out sends them back to the compose box.
     if (outcome.delivered) {
       return (
-        <div className="mt-8 rounded-xl border border-green-200 bg-green-50 p-4 text-sm text-green-800">
-          <p className="font-medium">
-            {outcome.reason === "human" ? "Verified, and delivered." : "Paid, and delivered."}
-          </p>
-          <p className="mt-1">
-            The message you already sent is in their inbox. You did not have to write it twice, and
-            we have erased our copy.
-          </p>
+        <div className="mt-8">
+          <Callout
+            tone="good"
+            title={outcome.reason === "human" ? "Verified, and delivered." : "Paid, and delivered."}
+          >
+            The message you already sent is in their inbox — the same bytes, the same signature, the
+            same sender. You did not write it twice, and our copy is gone.
+          </Callout>
         </div>
       );
     }
@@ -110,27 +114,31 @@ export function ChallengeActions({
 
   return (
     <div className="mt-8 space-y-3">
-      <button onClick={verifyHuman} disabled={busy !== null} className={primary}>
+      <button onClick={verifyHuman} disabled={busy !== null} className={`${primaryButton} w-full`}>
         {busy === "human" ? "Verifying" : "A person wrote this"}
       </button>
-      <p className="px-1 text-xs text-neutral-500">
+      <p className="px-1 text-xs leading-relaxed text-ink-faint">
         Prove it with World ID and your message is delivered. Free, no wallet, nothing to install
         beyond the World app.
       </p>
 
       {!dangerous && (
         <>
-          <button onClick={() => setLane("paying")} disabled={busy !== null} className={secondary}>
+          <button
+            onClick={() => setLane("paying")}
+            disabled={busy !== null}
+            className="w-full rounded-xl border border-rule-strong bg-card px-5 py-3 text-sm font-medium text-ink transition hover:border-ink disabled:opacity-40"
+          >
             A machine sent this — pay {formatUsdc(BigInt(quote.amount))}
           </button>
-          <p className="px-1 text-xs text-neutral-500">
+          <p className="px-1 text-xs leading-relaxed text-ink-faint">
             Automated mail pays the recipient for the attention. You will need somewhere to pay
             from, which takes an email address.
           </p>
         </>
       )}
 
-      {outcome?.kind === "error" && <p className="text-sm text-red-600">{outcome.message}</p>}
+      {outcome?.kind === "error" && <p className="text-sm text-stamp">{outcome.message}</p>}
     </div>
   );
 }
@@ -215,42 +223,39 @@ function PayLane({
     }
   }
 
-  if (!ready) return <p className={note}>Loading</p>;
+  if (!ready) return <p className="mt-8 text-sm text-ink-faint">Loading</p>;
 
   return (
     <div className="mt-8 space-y-3">
       {!authenticated ? (
         <>
-          <button onClick={login} className={primary}>
+          <button onClick={login} className={`${primaryButton} w-full`}>
             Set up a way to pay
           </button>
-          <p className="px-1 text-xs text-neutral-500">
+          <p className="px-1 text-xs leading-relaxed text-ink-faint">
             An email address is enough. It creates a wallet for you on Arc; there is nothing to
             install.
           </p>
         </>
       ) : !wallet ? (
-        <p className={note}>Setting up your wallet</p>
+        <p className="text-sm text-ink-faint">Setting up your wallet</p>
       ) : (
-        <button onClick={pay} disabled={busy} className={primary}>
+        <button onClick={pay} disabled={busy} className={`${primaryButton} w-full`}>
           {busy ? "Paying" : `Pay ${formatUsdc(BigInt(quote.amount))} and deliver it`}
         </button>
       )}
 
-      <button
-        onClick={onBack}
-        className="w-full px-5 py-2 text-sm text-neutral-500 hover:text-neutral-900"
-      >
+      <button onClick={onBack} className={`${quietButton} w-full`}>
         Actually, a person wrote it
       </button>
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-stamp">{error}</p>}
     </div>
   );
 }
 
-/// Postage never kept the message that was refused, so the way through is
-/// either to send it again from their mail client or to paste it here. This is
-/// the second, which saves the trip without anyone storing mail.
+/// The way back when the hold has already run out, or when the send failed. The
+/// message it puts through is one the sender writes here, so it goes out under
+/// our name rather than pretending to be theirs.
 function Deliver({ token, handle, reason }: { token: string; handle: string; reason: string }) {
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
@@ -279,42 +284,42 @@ function Deliver({ token, handle, reason }: { token: string; handle: string; rea
 
   if (sent) {
     return (
-      <div className="mt-8 rounded-xl border border-green-200 bg-green-50 p-4 text-sm text-green-800">
-        <p className="font-medium">Delivered.</p>
-        <p className="mt-1">It is in their inbox now, and replying comes straight back to you.</p>
+      <div className="mt-8">
+        <Callout tone="good" title="Delivered.">
+          It is in their inbox now, and replying comes straight back to you.
+        </Callout>
       </div>
     );
   }
 
   return (
     <div className="mt-8 space-y-4">
-      <div className="rounded-xl border border-green-200 bg-green-50 p-4 text-sm text-green-800">
-        <p className="font-medium">
-          {reason === "human" ? "Verified. That cost you nothing." : "Paid."}
-        </p>
-        <p className="mt-1">
-          The hold on your message ran out before this was cleared, so it is gone. Paste it below
-          and we will deliver it now.
-        </p>
-      </div>
+      <Callout tone="good" title={reason === "human" ? "Verified. That cost you nothing." : "Paid."}>
+        The message itself is no longer here — the hold ran out before this was answered. Paste it
+        below and we will deliver it now.
+      </Callout>
 
       <input
         value={subject}
         onChange={(event) => setSubject(event.target.value)}
         placeholder="Subject"
-        className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm"
+        className={field}
       />
       <textarea
         value={body}
         onChange={(event) => setBody(event.target.value)}
         rows={7}
         placeholder={`Paste what you wrote to ${handle}@usepostage.com`}
-        className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm"
+        className={`${field} resize-y`}
       />
-      <button onClick={deliver} disabled={sending || body.trim().length === 0} className={primary}>
+      <button
+        onClick={deliver}
+        disabled={sending || body.trim().length === 0}
+        className={`${primaryButton} w-full`}
+      >
         {sending ? "Delivering" : "Deliver it now"}
       </button>
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-stamp">{error}</p>}
     </div>
   );
 }
@@ -322,9 +327,3 @@ function Deliver({ token, handle, reason }: { token: string; handle: string; rea
 function asMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
-
-const primary =
-  "w-full rounded-lg bg-neutral-900 px-5 py-3 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50";
-const secondary =
-  "w-full rounded-lg border border-neutral-300 bg-white px-5 py-3 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50";
-const note = "mt-8 text-sm text-neutral-500";

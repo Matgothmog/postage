@@ -4,11 +4,12 @@ import { relayHeldMessage } from "@/lib/mail";
 const MAX_SUBJECT = 200;
 const MAX_BODY = 20_000;
 
-/// Delivers a message the sender pastes back in, once they have cleared the
-/// gate. Postage never kept the one that was refused — it was turned away at
-/// the door and only ever existed in their outbox — so getting it through
-/// otherwise means going back to their mail client and sending it again. This
-/// saves that trip without anyone having to store mail.
+/// Delivers a message the sender pastes back in. The way through is normally
+/// the one we are holding, released as the bytes that arrived — this is what is
+/// left when there is nothing to release: a hold that ran out, a sender who was
+/// refused inside the session rather than held, or a relay that would not take
+/// it. What goes out here is written in our form rather than theirs, so it goes
+/// under our name; it is the fallback, not the path.
 ///
 /// It is not a relay anyone can use: it spends the same pass an inbound message
 /// would have spent, so it can only send what the sender had already earned the

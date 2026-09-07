@@ -2,9 +2,9 @@ import { type Hex, createWalletClient, getAddress, http, keccak256, stringToByte
 import { privateKeyToAccount } from "viem/accounts";
 import { publicClient } from "@/lib/client";
 import { HUMAN_REGISTRY, chain, registryAbi } from "@/lib/contracts";
-import { challengeByToken, grantPass, inboxByHandle, resolveChallenge, takeHeldMessage } from "@/lib/db";
+import { challengeByToken, grantPass, resolveChallenge } from "@/lib/db";
 import { identityMode, required } from "@/lib/env";
-import { relayHeldMessage } from "@/lib/mail";
+import { releaseHeldMessage } from "@/lib/hold";
 
 /// Matches the Selfie Check credential lifetime, so the free lane lapses when
 /// the credential does rather than outliving it.
@@ -82,7 +82,7 @@ export async function POST(request: Request) {
     identity,
     nullifierHash,
     expiresAt,
-    ...(await release(challenge)),
+    ...(await releaseHeldMessage(token, challenge.handle)),
   });
 }
 
@@ -121,29 +121,6 @@ async function recordPersonhood(identity: Hex, nullifierHash: Hex, expiresAt: nu
     args: [identity, nullifierHash, expiresAt, signature],
   });
   await publicClient.waitForTransactionReceipt({ hash });
-}
-
-/// Sends the message that was held, so proving personhood is the whole of what
-/// the sender does. The held copy is erased as it is read.
-async function release(challenge: { token: string; handle: string; sender: string }) {
-  const held = await takeHeldMessage(challenge.token);
-  if (!held) return { delivered: false };
-
-  const inbox = await inboxByHandle(challenge.handle);
-  if (!inbox) return { delivered: false };
-
-  try {
-    await relayHeldMessage({
-      to: inbox.destination,
-      from: challenge.sender,
-      handle: challenge.handle,
-      subject: held.subject,
-      body: held.body,
-    });
-    return { delivered: true };
-  } catch {
-    return { delivered: false };
-  }
 }
 
 /// Forwards the IDKit result to the Developer Portal and pulls out the selfie
