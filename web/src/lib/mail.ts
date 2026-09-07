@@ -30,30 +30,35 @@ function body(handle: string, code: string): string {
   return [
     `Your code is ${code}.`,
     "",
-    `Someone asked us to forward ${handle}@usepostage.com to this address.`,
-    "Enter the code to confirm it was you.",
+    `Someone asked us to deliver ${handle}@usepostage.com to this address.`,
+    "Enter the code to confirm it was you. That is the whole of it.",
     "",
-    "Cloudflare, who carries the mail, has sent a separate email asking you to",
-    "confirm the same thing. Both are needed before anything is forwarded here.",
-    "",
-    "If you were not expecting this, ignore both. Nothing reaches you unless you",
+    "If you were not expecting this, ignore it. Nothing reaches you unless you",
     "confirm, and the code expires in 15 minutes.",
   ].join("\n");
 }
 
-/// Sends a message a cleared sender pasted back in.
+/// Delivers a message to the inbox owner.
 ///
-/// It goes out under our own name with theirs in Reply-To, rather than forged
-/// into the From line. A message that claimed to be from them would be
-/// unsigned mail wearing their domain, which is the thing this whole gateway
-/// exists to catch.
-export async function relayHeldMessage(message: {
+/// Every message goes out this way now. Cloudflare receives the mail and hands
+/// it to us; it never forwards, which is what lets someone claim a handle
+/// without confirming their address to Cloudflare as well as to us.
+///
+/// The sender's name leads the From line and their address is in Reply-To,
+/// rather than either being forged into From. Authentication is then honestly
+/// ours: the message really is from us, signed by us, and says whose words it
+/// carries. Replying still reaches them.
+export async function deliverMessage(message: {
   to: string;
   from: string;
   handle: string;
   subject: string;
-  body: string;
+  text?: string;
+  html?: string;
+  note?: string;
 }): Promise<void> {
+  const footer = message.note ?? `Sent to ${message.handle}@usepostage.com by ${message.from}.`;
+
   const response = await fetch(RESEND_ENDPOINT, {
     method: "POST",
     headers: {
@@ -61,21 +66,44 @@ export async function relayHeldMessage(message: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      from: required("MAIL_FROM"),
+      from: asSender(message.from),
       to: message.to,
       reply_to: message.from,
       subject: message.subject,
-      text: [
-        message.body,
-        "",
-        "—",
-        `Sent to ${message.handle}@usepostage.com by ${message.from}, who cleared the gate.`,
-        "Replying goes straight to them.",
-      ].join("\n"),
+      ...(message.html
+        ? { html: `${message.html}<hr><p style="color:#888;font-size:12px">${footer}</p>` }
+        : { text: [message.text ?? "", "", "—", footer].join("\n") }),
     }),
   });
 
   if (!response.ok) {
     throw new Error(`Could not deliver it: ${(await response.text()).slice(0, 200)}`);
   }
+}
+
+/// `Sarah (via Postage) <hello@usepostage.com>`. The recipient sees who wrote
+/// to them in the message list rather than a column of identical rows, while
+/// every signature on the message stays ours.
+function asSender(from: string): string {
+  const address = /<([^>]+)>/.exec(required("MAIL_FROM"))?.[1] ?? required("MAIL_FROM");
+  const name = from.split("@")[0]?.replace(/[^\w .-]/g, "").slice(0, 40) || "Someone";
+  return `${name} (via Postage) <${address}>`;
+}
+
+/// A message a cleared sender pasted back in, once their held copy had expired.
+export async function relayHeldMessage(message: {
+  to: string;
+  from: string;
+  handle: string;
+  subject: string;
+  body: string;
+}): Promise<void> {
+  await deliverMessage({
+    to: message.to,
+    from: message.from,
+    handle: message.handle,
+    subject: message.subject,
+    text: message.body,
+    note: `Sent to ${message.handle}@usepostage.com by ${message.from}, who cleared the gate. Replying goes straight to them.`,
+  });
 }

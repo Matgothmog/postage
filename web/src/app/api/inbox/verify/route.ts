@@ -1,30 +1,6 @@
 import { settleClaim } from "@/lib/claims";
-import { ensureDestination } from "@/lib/cloudflare";
-import { attachDestination, claimByHandle, consumeAttempt, markCodeVerified } from "@/lib/db";
+import { claimByHandle, consumeAttempt, markCodeVerified } from "@/lib/db";
 import { MAX_ATTEMPTS, codeMatches } from "@/lib/verification";
-
-/// Polled while the user is on the confirmation screen, so the Cloudflare half
-/// ticks over the moment they click the link in its email.
-export async function GET(request: Request) {
-  const handle = new URL(request.url).searchParams.get("handle");
-  if (!handle) return Response.json({ error: "handle is required" }, { status: 400 });
-
-  let state;
-  try {
-    state = await settleClaim(handle);
-  } catch {
-    // Cloudflare being unreachable is a reason to keep waiting, not to report
-    // progress the caller has already made as undone. The poller ignores this.
-    return Response.json({ error: "Waiting on Cloudflare" }, { status: 503 });
-  }
-  if (!state) return Response.json({ error: "Nothing is being claimed here" }, { status: 404 });
-
-  return Response.json({
-    codeVerified: state.codeVerified,
-    cloudflareVerified: state.cloudflareVerified,
-    live: state.live,
-  });
-}
 
 /// Confirms the claimer can read the address they pointed the handle at.
 export async function POST(request: Request) {
@@ -51,29 +27,6 @@ export async function POST(request: Request) {
 
   await markCodeVerified(claim.handle);
 
-  // Only now does Cloudflare hear about the address, and the claimer does
-  // nothing to make that happen. An address the account already knows comes
-  // back verified, and this was the whole of signing up.
-  try {
-    const destination = await ensureDestination(claim.destination);
-    await attachDestination(claim.handle, destination.id, destination.verifiedAt);
-  } catch {
-    // Handled by the poller, which will try again.
-  }
-
-  // The code is accepted and recorded either way. If Cloudflare cannot be
-  // reached right now the claim simply waits, rather than telling someone the
-  // code they just got right was wrong.
-  let state = null;
-  try {
-    state = await settleClaim(claim.handle);
-  } catch {
-    state = null;
-  }
-
-  return Response.json({
-    codeVerified: true,
-    cloudflareVerified: state?.cloudflareVerified ?? false,
-    live: state?.live ?? false,
-  });
+  const state = await settleClaim(claim.handle);
+  return Response.json({ codeVerified: true, live: state?.live ?? false });
 }
