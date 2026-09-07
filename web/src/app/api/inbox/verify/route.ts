@@ -1,5 +1,6 @@
 import { settleClaim } from "@/lib/claims";
-import { claimByHandle, consumeAttempt, markCodeVerified } from "@/lib/db";
+import { ensureDestination } from "@/lib/cloudflare";
+import { attachDestination, claimByHandle, consumeAttempt, markCodeVerified } from "@/lib/db";
 import { MAX_ATTEMPTS, codeMatches } from "@/lib/verification";
 
 /// Polled while the user is on the confirmation screen, so the Cloudflare half
@@ -49,6 +50,16 @@ export async function POST(request: Request) {
   }
 
   await markCodeVerified(claim.handle);
+
+  // Only now does Cloudflare hear about the address, and the claimer does
+  // nothing to make that happen. An address the account already knows comes
+  // back verified, and this was the whole of signing up.
+  try {
+    const destination = await ensureDestination(claim.destination);
+    await attachDestination(claim.handle, destination.id, destination.verifiedAt);
+  } catch {
+    // Handled by the poller, which will try again.
+  }
 
   // The code is accepted and recorded either way. If Cloudflare cannot be
   // reached right now the claim simply waits, rather than telling someone the

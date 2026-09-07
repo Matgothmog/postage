@@ -226,6 +226,20 @@ Sponsoring one attestation costs 0.00188 USDC. `refillRelayer()` is callable by
 anyone, because the funds can only ever move to the relayer — a keeper can top
 it up without anyone gaining the ability to move money elsewhere.
 
+## One email at a time
+
+Claiming a handle needs two confirmations that cannot stand in for each other:
+our code, which ties the claim to whoever made it, and Cloudflare's, without
+which it will not carry mail to that address at all. Cloudflare's cannot be
+automated — the link it sends is answerable only by the person reading that
+mailbox, and no API accepts it on their behalf.
+
+What can be removed is the collision. Cloudflare is not told about the address
+until the code comes back, so the claimer deals with one message at a time and
+never presses anything to summon the second. An address the account already
+knows returns verified on the spot, and signing up was the code and nothing
+else.
+
 ## Setup a new user does not have to do
 
 An inbox that has never called `setFloorPrice` reads zero, and a zero floor

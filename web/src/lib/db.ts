@@ -265,6 +265,20 @@ export async function markCodeVerified(handle: string): Promise<void> {
   ]);
 }
 
+/// Records which Cloudflare destination a claim is waiting on, once the code
+/// has come back and we have asked Cloudflare for one.
+export async function attachDestination(
+  handle: string,
+  addressId: string,
+  verifiedAt: number | null
+): Promise<void> {
+  await run(`UPDATE inbox_claims SET cf_address_id = ?, cf_verified_at = ? WHERE handle = ?`, [
+    addressId,
+    verifiedAt,
+    handle.toLowerCase(),
+  ]);
+}
+
 /// Pinned to the address the status was read for. Without that, a slow reply
 /// about one destination could stamp a claim that has since been repointed at
 /// another, marking an address Cloudflare never verified as verified.

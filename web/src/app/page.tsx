@@ -250,7 +250,9 @@ function ConfirmClaim({
     <section className="mt-8 rounded-xl border border-neutral-200 bg-white p-5">
       <h2 className="text-sm font-medium">Check {claim.destination}</h2>
       <p className="mt-1 text-sm text-neutral-600">
-        We sent two emails, and {claim.handle}@usepostage.com goes live when both are done.
+        {claim.codeVerified
+          ? "Cloudflare carries the mail and has just sent you a link of its own. Click it and you are done — often it is already sorted and this finishes on its own."
+          : `Enter the code we sent, and ${claim.handle}@usepostage.com is nearly yours.`}
       </p>
 
       <div className="mt-5 space-y-5">
@@ -277,10 +279,16 @@ function ConfirmClaim({
         </Step>
 
         <Step done={claim.cloudflareVerified} n={2} label="Click the link from Cloudflare">
-          {claim.cloudflareVerified ? null : (
+          {claim.cloudflareVerified ? null : claim.codeVerified ? (
             <p className="mt-1 text-xs text-neutral-500">
-              Waiting. Cloudflare carries the mail and will not forward anywhere it has not
-              checked. Sent from cloudflare.com, so look in spam if it is not there.
+              Waiting. Cloudflare will not carry mail to an address it has not checked itself, and
+              only the person reading that mailbox can answer it. Sent from cloudflare.com, so look
+              in spam if it is not there.
+            </p>
+          ) : (
+            <p className="mt-1 text-xs text-neutral-400">
+              Nothing to do yet. We ask Cloudflare for this the moment your code goes in, so you
+              only ever deal with one email at a time.
             </p>
           )}
         </Step>

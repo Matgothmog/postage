@@ -1,6 +1,5 @@
 import { isAddress } from "viem";
 import { claimStatement, provesWallet, readStatement } from "@/lib/auth";
-import { ensureDestination } from "@/lib/cloudflare";
 import {
   claimByHandle,
   inboxByHandle,
@@ -93,14 +92,6 @@ export async function POST(request: Request) {
     );
   }
 
-  let cloudflare;
-  try {
-    cloudflare = await ensureDestination(address);
-  } catch (cause) {
-    const detail = cause instanceof Error ? cause.message : "Cloudflare rejected the address";
-    return Response.json({ error: detail }, { status: 502 });
-  }
-
   const code = generateCode();
   try {
     await sendVerificationCode(address, name, code);
@@ -116,8 +107,11 @@ export async function POST(request: Request) {
     wallet: wallet!,
     code_hash: hashCode(name, code),
     expires_at: Math.floor(Date.now() / 1000) + CODE_TTL_SECONDS,
-    cf_address_id: cloudflare.id,
-    cf_verified_at: cloudflare.verifiedAt,
+    // Cloudflare is not told about this address until the code comes back.
+    // Registering now would make it send its own mail at the same moment as
+    // ours, so the claimer would face two emails and two instructions at once.
+    cf_address_id: null,
+    cf_verified_at: null,
   });
 
   return Response.json({
@@ -125,9 +119,7 @@ export async function POST(request: Request) {
     handle: name,
     destination: address,
     codeVerified: false,
-    // Already true when this address was verified on the account before. It
-    // still forwards nothing until the code confirms this claim.
-    cloudflareVerified: cloudflare.verifiedAt !== null,
+    cloudflareVerified: false,
     expiresIn: CODE_TTL_SECONDS,
   });
 }
