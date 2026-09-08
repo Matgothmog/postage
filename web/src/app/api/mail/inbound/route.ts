@@ -100,20 +100,23 @@ export async function POST(request: Request) {
   // failing open here would make a flood the way through the gate rather than
   // merely the way to run up a bill.
   await purgeOldClassifications();
-  const overBudget = !(await claimClassification(handle, sender));
-  const verdict = overBudget ? classifyFromHeaders(facts) : await classify(facts);
+  const budget = await claimClassification(handle, sender);
+  const verdict = budget ? classifyFromHeaders(facts) : await classify(facts);
 
   // Checked before any pass is spent. This tier is free and grants nothing, so
   // taking a paid use for it would charge someone twice for one delivery.
   //
-  // Held to a higher bar when the verdict is degraded. The header fallback
-  // calls anything transactional-sounding important as long as authentication
-  // did not outright fail, and "no authentication at all" clears that — so a
-  // stranger writing "your verification code" would be delivered free during an
-  // outage. Requiring the sender to actually be who they say closes that
-  // without holding real login codes, which is the one thing this tier exists
-  // to prevent.
-  if (verdict.tier === "important" && (!verdict.degraded || authenticated)) {
+  // Held to a higher bar when the verdict is degraded, and shut entirely when
+  // the sender is the reason it is degraded.
+  //
+  // The header fallback calls anything transactional-sounding important as long
+  // as authentication did not outright fail, so during an outage a sender who
+  // signs their own domain could write "your verification code" and be
+  // delivered free. That is tolerable when the outage is ours — real login
+  // codes have to keep arriving, which is the whole point of this tier. It is
+  // not tolerable when the sender put us here on purpose: their own hourly
+  // slice is theirs to spend, so spending it must not unlock anything.
+  if (verdict.tier === "important" && (!verdict.degraded || (authenticated && budget !== "spent-by-sender"))) {
     return Response.json({
       action: "forward",
       to: inbox.destination,
@@ -125,14 +128,19 @@ export async function POST(request: Request) {
   // A live pass, and the envelope it was earned with. Passes run out, so this
   // is a sender who cleared the gate minutes ago rather than ever.
   //
-  // Budget exhaustion narrows it; a classifier outage does not. The difference
-  // is who caused it, and what the pass can be used for. An unlimited window
-  // plus a spent budget is a licence to deliver anything unread, so that one
-  // shuts. A single paid use cannot flood by construction — it is one message,
-  // already paid for — and refusing it would take the money and issue a fresh
-  // demand for the same message.
+  // Narrowed only when the sender spent their own slice. An unlimited window
+  // plus a budget they exhausted themselves is a licence to deliver anything
+  // unread, so that one shuts. A single paid use cannot flood by construction —
+  // one message, already paid for — and refusing it would take the money and
+  // demand it again.
+  //
+  // A handle's pool being empty is somebody else's doing: anyone can spend it
+  // with forged addresses, and letting that re-challenge everyone who proved
+  // themselves would hand a stranger an hour of leverage over someone's mail.
   if (authenticated && verdict.tier !== "dangerous") {
-    const pass = await spendPass(handle, sender, { countedOnly: overBudget });
+    const pass = await spendPass(handle, sender, {
+      countedOnly: budget === "spent-by-sender",
+    });
     if (pass) {
       return Response.json({
         action: "forward",

@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AddressInfo } from "node:net";
-import { beforeEach, test } from "node:test";
+import { after, beforeEach, test } from "node:test";
 
-process.env.DATABASE_URL = `file:${process.env.TMPDIR ?? "/tmp"}/postage-gate-test.db`;
+// A directory of its own per run. A shared path plus `reset()` means two runs
+// on one machine truncate each other's tables mid-test and fail for reasons
+// that have nothing to do with the code.
+const workspace = mkdtempSync(join(tmpdir(), "postage-gate-"));
+process.env.DATABASE_URL = `file:${join(workspace, "test.db")}`;
 process.env.DATABASE_AUTH_TOKEN = "";
 process.env.MAIL_WORKER_URL = "http://127.0.0.1:9";
 process.env.MAIL_WEBHOOK_SECRET = "test";
@@ -31,6 +38,10 @@ async function seed(token: string, tier: string, sender: string) {
 
 beforeEach(async () => {
   await reset();
+});
+
+after(() => {
+  rmSync(workspace, { recursive: true, force: true });
 });
 
 /// Delivery always fails here: MAIL_WORKER_URL points at a closed port, which

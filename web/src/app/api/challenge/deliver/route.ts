@@ -3,6 +3,7 @@ import {
   challengeByToken,
   claimClassification,
   extendPassIfExpiring,
+  releaseClassificationSlot,
   hasLivePass,
   inboxByHandle,
   refundPass,
@@ -110,6 +111,10 @@ export async function POST(request: Request) {
     // ours. Without it a long outage silently spends a paid sender's fifteen
     // minutes and leaves them with nothing. Only when it is nearly gone, so
     // repeated polling cannot hold a pass open indefinitely.
+    // The slot goes back too: nothing reached the model, and burning twenty of
+    // them on retries during an outage would lock the sender out for the hour
+    // having sent nothing.
+    await releaseClassificationSlot(`paste:${challenge.handle}`, challenge.sender);
     await extendPassIfExpiring(challenge.handle, challenge.sender);
     return Response.json(
       { error: "Cannot check that right now. Try again in a few minutes" },

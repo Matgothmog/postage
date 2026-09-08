@@ -109,12 +109,11 @@ const ADDED_COLUMNS: { table: string; column: string; type: string; backfill?: s
     backfill: `UPDATE challenges SET entitled_at = resolved_at WHERE resolved_at IS NOT NULL`,
   },
   { table: "challenges", column: "settled_by", type: "TEXT" },
-  {
-    table: "challenges",
-    column: "delivered_at",
-    type: "INTEGER",
-    backfill: `UPDATE challenges SET delivered_at = resolved_at WHERE resolved_at IS NOT NULL`,
-  },
+  // Deliberately not backfilled. A settled challenge may well have failed to
+  // deliver and told the sender to paste it back, so claiming it arrived would
+  // show them "delivered" and skip the repair that hands them a way through.
+  // Left null, an old challenge degrades to that repair instead.
+  { table: "challenges", column: "delivered_at", type: "INTEGER" },
   { table: "challenges", column: "held_until", type: "INTEGER" },
 ];
 
@@ -258,7 +257,8 @@ export async function grantPass(
      ON CONFLICT (handle, sender) DO UPDATE SET
        reason = excluded.reason,
        expires_at = excluded.expires_at,
-       uses_left = excluded.uses_left`,
+       uses_left = excluded.uses_left,
+       created_at = excluded.created_at`,
     [handle.toLowerCase(), sender.toLowerCase(), reason, now + PASS_WINDOW_SECONDS, usesLeft, now]
   );
 }
@@ -495,11 +495,16 @@ export async function claimChallenge(token: string, settledBy: string): Promise<
 /// Puts a claimed challenge back. Whatever the claim was taken for did not
 /// happen, and a payment that cannot be made twice must not leave the only way
 /// through it bought closed behind it.
-export async function releaseChallengeClaim(token: string): Promise<void> {
+/// Gives back only the claim this caller took. A blind rollback also cleared an
+/// entitlement another request had taken in the meantime, which let that request
+/// take it a second time and grant a second delivery for one payment.
+export async function releaseChallengeClaim(token: string, settledBy: string): Promise<void> {
   await run(
-    `UPDATE challenges SET resolved_at = NULL, settled_by = NULL, entitled_at = NULL
-     WHERE token = ?`,
-    [token]
+    `UPDATE challenges
+     SET resolved_at = NULL, settled_by = NULL,
+         entitled_at = CASE WHEN ? = 'paid' THEN NULL ELSE entitled_at END
+     WHERE token = ? AND settled_by = ?`,
+    [settledBy, token, settledBy]
   );
 }
 
@@ -589,7 +594,46 @@ export async function purgeOldClassifications(): Promise<void> {
 /// Counting and recording are one statement on purpose. Read-then-write lets a
 /// burst — which is the case the budget exists for — all see room and all spend
 /// it, so the real ceiling becomes the limit plus however many arrived at once.
-export async function claimClassification(handle: string, sender: string): Promise<boolean> {
+/// Why a message was not read, when it was not.
+///
+/// Which limit bit matters, because the two are caused by different people. A
+/// sender can spend their own slice whenever they like, so anything it unlocks
+/// is something they chose. A handle's pool is spent by whoever writes to that
+/// inbox, forged addresses included, so treating it as the recipient's fault
+/// hands a stranger a lever over their mail.
+export type BudgetState = "spent-by-sender" | "spent-by-handle" | null;
+
+export async function claimClassification(
+  handle: string,
+  sender: string
+): Promise<BudgetState> {
+  const now = Math.floor(Date.now() / 1000);
+  const since = now - 60 * 60;
+  const rows = await all<{ forHandle: number; forSender: number }>(
+    `SELECT COUNT(*) AS forHandle,
+            SUM(CASE WHEN sender = ? THEN 1 ELSE 0 END) AS forSender
+     FROM classifications WHERE handle = ? AND at > ?`,
+    [sender.toLowerCase(), handle.toLowerCase(), since]
+  );
+  const counted = rows[0];
+  if (Number(counted?.forSender ?? 0) >= CLASSIFY_PER_SENDER_HOURLY) return "spent-by-sender";
+  if (Number(counted?.forHandle ?? 0) >= CLASSIFY_PER_HANDLE_HOURLY) return "spent-by-handle";
+
+  return (await takeClassificationSlot(handle, sender)) ? null : "spent-by-handle";
+}
+
+/// Hands back the most recent slot taken by this pair, for work that never
+/// reached the model.
+export async function releaseClassificationSlot(handle: string, sender: string): Promise<void> {
+  await run(
+    `DELETE FROM classifications
+     WHERE id = (SELECT id FROM classifications
+                 WHERE handle = ? AND sender = ? ORDER BY at DESC, id DESC LIMIT 1)`,
+    [handle.toLowerCase(), sender.toLowerCase()]
+  );
+}
+
+async function takeClassificationSlot(handle: string, sender: string): Promise<boolean> {
   const now = Math.floor(Date.now() / 1000);
   const since = now - 60 * 60;
   const client = await db();

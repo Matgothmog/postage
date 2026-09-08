@@ -55,7 +55,7 @@ export async function openGate(token: string, lane: Lane): Promise<GateResult> {
     // Nothing was granted before this point on either lane, so giving the claim
     // back leaves the sender exactly as they were rather than holding a settled
     // challenge and nothing to show for it.
-    await releaseChallengeClaim(token).catch(() => {});
+    await releaseChallengeClaim(token, lane).catch(() => {});
     throw cause;
   }
 }
