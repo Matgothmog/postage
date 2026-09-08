@@ -81,10 +81,13 @@ export async function POST(request: Request) {
     return Response.json({ error: detail }, { status: 502 });
   }
 
-  await grantPass(challenge.handle, challenge.sender, "human", null);
+  // Claimed before the pass is minted, not after. Recording personhood waits on
+  // a transaction receipt, so two posts of one token overlap easily, and
+  // granting first would mint two windows from one proof before either lost.
   if (!(await claimChallenge(token))) {
     return Response.json({ status: "cleared", reason: "human", delivered: false });
   }
+  await grantPass(challenge.handle, challenge.sender, "human", null);
 
   return Response.json({
     status: "cleared",

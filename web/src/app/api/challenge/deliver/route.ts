@@ -1,5 +1,5 @@
 import { classify, extractUrls } from "@/lib/classify";
-import { challengeByToken, inboxByHandle, refundPass, spendPass } from "@/lib/db";
+import { challengeByToken, hasLivePass, inboxByHandle, refundPass, spendPass } from "@/lib/db";
 import { relayHeldMessage } from "@/lib/mail";
 
 const MAX_SUBJECT = 200;
@@ -51,9 +51,46 @@ export async function POST(request: Request) {
   const inbox = await inboxByHandle(challenge.handle);
   if (!inbox) return Response.json({ error: "That inbox no longer exists" }, { status: 404 });
 
-  // Taken before the classifier runs. Knowing a token is the only thing this
-  // route asks for, and a token stays settled for good, so classifying first
-  // would let anyone holding a spent one run up model calls in a loop.
+  // Checked without being spent, so the classifier below cannot be run up by
+  // anyone holding a token whose pass is long gone — knowing a token is all
+  // this route asks for, and a token stays settled for good.
+  if (!(await hasLivePass(challenge.handle, challenge.sender))) {
+    return Response.json(
+      { error: "That pass has run out. Prove you are a person again, or pay" },
+      { status: 403 }
+    );
+  }
+
+  const pasted = await classify({
+    from: challenge.sender,
+    to: `${challenge.handle}@usepostage.com`,
+    subject: subject?.trim() ?? "",
+    body: body.trim(),
+    spf: null,
+    dkim: null,
+    dmarc: null,
+    urls: extractUrls(body),
+  });
+
+  // Judged before anything is spent, so a refusal costs the sender nothing and
+  // a false positive does not burn a delivery they paid for.
+  if (pasted.tier === "dangerous") {
+    return Response.json(
+      { error: "That reads as an attempt to deceive the recipient, so it will not be sent" },
+      { status: 403 }
+    );
+  }
+
+  // A verdict from the headers alone cannot say "dangerous" at all, and this
+  // text has no headers to read. Relaying it under our own name while unable to
+  // judge it is how a gateway lends its reputation to whatever it is handed.
+  if (pasted.degraded) {
+    return Response.json(
+      { error: "Cannot check that right now. Try again in a few minutes" },
+      { status: 503 }
+    );
+  }
+
   const pass = await spendPass(challenge.handle, challenge.sender);
   if (!pass) {
     return Response.json(
@@ -63,23 +100,6 @@ export async function POST(request: Request) {
   }
 
   try {
-    const pasted = await classify({
-      from: challenge.sender,
-      to: `${challenge.handle}@usepostage.com`,
-      subject: subject?.trim() ?? "",
-      body: body.trim(),
-      spf: null,
-      dkim: null,
-      dmarc: null,
-      urls: extractUrls(body),
-    });
-    if (pasted.tier === "dangerous") {
-      return Response.json(
-        { error: "That reads as an attempt to deceive the recipient, so it will not be sent" },
-        { status: 403 }
-      );
-    }
-
     await relayHeldMessage({
       to: inbox.destination,
       from: challenge.sender,

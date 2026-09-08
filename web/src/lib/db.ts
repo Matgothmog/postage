@@ -437,10 +437,25 @@ export async function releaseChallengeClaim(token: string): Promise<void> {
 }
 
 /// Gives back a use that was taken for a delivery that never happened.
+///
+/// Only restores a use that was actually spent. A blind increment would land on
+/// whatever pass holds that row by the time it ran, so a sender who cleared a
+/// second challenge while a relay was still in flight would be handed a
+/// delivery nobody paid for.
 export async function refundPass(handle: string, sender: string): Promise<void> {
   await run(
-    `UPDATE passes SET uses_left = uses_left + 1
-     WHERE handle = ? AND sender = ? AND uses_left IS NOT NULL AND expires_at > ?`,
+    `UPDATE passes SET uses_left = 1
+     WHERE handle = ? AND sender = ? AND uses_left = 0 AND expires_at > ?`,
     [handle.toLowerCase(), sender.toLowerCase(), Math.floor(Date.now() / 1000)]
   );
+}
+
+/// Whether a usable pass exists, without spending it.
+export async function hasLivePass(handle: string, sender: string): Promise<boolean> {
+  const rows = await all(
+    `SELECT 1 FROM passes
+     WHERE handle = ? AND sender = ? AND expires_at > ? AND (uses_left IS NULL OR uses_left > 0)`,
+    [handle.toLowerCase(), sender.toLowerCase(), Math.floor(Date.now() / 1000)]
+  );
+  return rows.length > 0;
 }
