@@ -4,10 +4,18 @@ import { CODE_TTL_SECONDS } from "./verification";
 
 const RESEND_ENDPOINT = "https://api.resend.com/emails";
 
-/// Sends the code that proves whoever is claiming a handle can read the address
-/// they are pointing it at. Without this anyone could aim a Postage handle at a
-/// stranger's inbox and have us forward to it.
-export async function sendVerificationCode(to: string, handle: string, code: string): Promise<void> {
+/// One way out for both of the messages Postage writes itself. Neither is a
+/// forward: a released message never passes through here, because it has to
+/// leave as the bytes that arrived.
+interface Outgoing {
+  to: string;
+  subject: string;
+  text: string;
+  /// Where a reply should go, when that is not us.
+  replyTo?: string;
+}
+
+async function send(message: Outgoing, whatFailed: string): Promise<void> {
   const response = await fetch(RESEND_ENDPOINT, {
     method: "POST",
     headers: {
@@ -16,16 +24,24 @@ export async function sendVerificationCode(to: string, handle: string, code: str
     },
     body: JSON.stringify({
       from: required("MAIL_FROM"),
-      to,
-      subject: `${code} is your Postage code`,
-      text: body(handle, code),
+      to: message.to,
+      subject: message.subject,
+      text: message.text,
+      ...(message.replyTo ? { reply_to: message.replyTo } : {}),
     }),
   });
 
-  if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(`Could not send the verification code: ${detail.slice(0, 200)}`);
-  }
+  if (!response.ok) throw new Error(`${whatFailed}: ${(await response.text()).slice(0, 200)}`);
+}
+
+/// Sends the code that proves whoever is claiming a handle can read the address
+/// they are pointing it at. Without this anyone could aim a Postage handle at a
+/// stranger's inbox and have us forward to it.
+export async function sendVerificationCode(to: string, handle: string, code: string): Promise<void> {
+  await send(
+    { to, subject: `${code} is your Postage code`, text: body(handle, code) },
+    "Could not send the verification code"
+  );
 }
 
 function body(handle: string, code: string): string {
@@ -56,16 +72,10 @@ export async function relayHeldMessage(message: {
   subject: string;
   body: string;
 }): Promise<void> {
-  const response = await fetch(RESEND_ENDPOINT, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${required("RESEND_API_KEY")}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      from: required("MAIL_FROM"),
+  await send(
+    {
       to: message.to,
-      reply_to: message.from,
+      replyTo: message.from,
       subject: message.subject,
       text: [
         message.body,
@@ -74,10 +84,7 @@ export async function relayHeldMessage(message: {
         `Sent to ${postageAddress(message.handle)} by ${message.from}, who cleared the gate.`,
         "Replying goes straight to them.",
       ].join("\n"),
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Could not deliver it: ${(await response.text()).slice(0, 200)}`);
-  }
+    },
+    "Could not deliver it"
+  );
 }

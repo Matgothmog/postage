@@ -53,7 +53,6 @@ export async function POST(request: Request) {
     );
   }
 
-
   let nullifier: string;
   try {
     nullifier =
