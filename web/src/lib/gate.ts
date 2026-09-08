@@ -68,8 +68,10 @@ async function settle(challenge: Challenge, token: string, lane: Lane): Promise<
     ? { delivered: true }
     : await releaseHeldMessage(token, challenge.handle);
 
+  // Granted last, and the paid entitlement was already taken by the claim, so
+  // nothing after this can fail and leave the sender holding something the
+  // rollback would not undo.
   await grant(challenge, lane, released.delivered);
-  await markEntitled(token);
   return { status: "cleared", reason: lane, delivered: released.delivered };
 }
 
@@ -104,12 +106,13 @@ async function recover(token: string, before: Challenge, lane: Lane): Promise<Ga
       // A fresh proof was presented to reach here, and that is the price of a
       // window. Re-earning one is the design, not a leak.
       await grantPass(settled.handle, settled.sender, "human", null);
-    } else if (settled.entitled_at == null) {
+    } else if (await markEntitled(token)) {
       // A payment settles onchain forever, so "have they paid" is true for good
-      // and cannot decide this. Only whether this challenge has already handed
-      // over what that payment bought.
+      // and cannot decide this — only whether this challenge has already handed
+      // over what that payment bought. Taking the entitlement is the same
+      // statement as checking for it, because the winner of the claim may still
+      // be inside the delivery it is about to make.
       await addPaidUse(settled.handle, settled.sender);
-      await markEntitled(token);
     }
   }
 

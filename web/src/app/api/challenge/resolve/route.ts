@@ -45,11 +45,23 @@ export async function POST(request: Request) {
 /// so the outermost name tells us nothing at all — an unreachable node and a
 /// stale ABI arrive under the same one. What separates them is further down the
 /// cause chain.
+const TRANSIENT = new Set([
+  "HttpRequestError",
+  "TimeoutError",
+  "SocketClosedError",
+  "RpcRequestError",
+  "LimitExceededRpcError",
+  "InternalRpcError",
+  "ResourceUnavailableRpcError",
+  "ResourceNotFoundRpcError",
+]);
+
 function looksTransient(cause: unknown): boolean {
   for (let error = cause, depth = 0; error instanceof Error && depth < 8; depth += 1) {
-    if (/HttpRequest|Timeout|SocketClosed|Connection|Fetch|RpcError|LimitExceeded/i.test(error.name)) {
-      return true;
-    }
+    // Named rather than pattern-matched on a suffix: "RpcError" also covers
+    // InvalidParams, MethodNotFound and UnknownRpcError, which are exactly the
+    // misconfiguration this is supposed to raise instead of wait on.
+    if (TRANSIENT.has(error.name)) return true;
     error = error.cause;
   }
   return false;

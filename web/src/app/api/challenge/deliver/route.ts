@@ -134,10 +134,14 @@ export async function POST(request: Request) {
       body: body.trim(),
     });
   } catch (cause) {
-    // Nothing was delivered, so the use goes back. Best effort: whatever broke
-    // the relay may well break this too, and the sender should still be told
-    // what actually went wrong rather than being handed a second failure.
-    await refundPass(challenge.handle, challenge.sender).catch(() => {});
+    // Only a counted pass had anything taken from it. An unlimited window is
+    // returned untouched by spendPass, so refunding here would find whatever
+    // row exists by then and add a use nobody spent.
+    if (pass.uses_left !== null) {
+      // Best effort: whatever broke the relay may break this too, and the
+      // sender should still be told what actually went wrong.
+      await refundPass(challenge.handle, challenge.sender).catch(() => {});
+    }
     const detail = cause instanceof Error ? cause.message : "Could not deliver it";
     return Response.json({ error: detail }, { status: 502 });
   }

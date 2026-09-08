@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { beforeEach, test } from "node:test";
 
 process.env.DATABASE_URL = `file:${process.env.TMPDIR ?? "/tmp"}/postage-gate-test.db`;
@@ -6,7 +8,8 @@ process.env.DATABASE_AUTH_TOKEN = "";
 process.env.MAIL_WORKER_URL = "http://127.0.0.1:9";
 process.env.MAIL_WEBHOOK_SECRET = "test";
 
-const { createChallenge, grantPass, hasLivePass, spendPass, markDelivered, reset } = await import("./db");
+const { createChallenge, createInbox, grantPass, hasLivePass, spendPass, markDelivered, reset } =
+  await import("./db");
 const { openGate } = await import("./gate");
 
 const HANDLE = "demo";
@@ -90,15 +93,34 @@ test("a sender holding nothing after a failed delivery is repaired", async () =>
   assert.equal(await hasLivePass(HANDLE, "stuck@x.com"), true);
 });
 
-test("clearing twice at once settles once", async () => {
+/// Releasing is an HTTP call to the mail worker in production, so the winner is
+/// inside it for a long time while the loser is deciding what to do. A test that
+/// lets the winner finish first proves nothing about the case that matters, so
+/// this one holds the release open until both have made their decision.
+test("clearing twice at once settles once, even while the release is slow", async () => {
+  await createInbox(HANDLE, "demo@example.com", "0x" + "11".repeat(20));
   await seed("race1", "commercial", "race@x.com");
 
-  await Promise.all([openGate("race1", "paid"), openGate("race1", "paid")]);
-  await spendPass(HANDLE, "race@x.com");
+  const server = createServer((_request, response) => {
+    setTimeout(() => {
+      response.writeHead(200).end("{}");
+    }, 300);
+  });
+  await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
+  const { port } = server.address() as AddressInfo;
+  process.env.MAIL_WORKER_URL = `http://127.0.0.1:${port}`;
+
+  try {
+    await Promise.all([openGate("race1", "paid"), openGate("race1", "paid")]);
+  } finally {
+    server.close();
+    process.env.MAIL_WORKER_URL = "http://127.0.0.1:9";
+  }
+
   assert.equal(
     await hasLivePass(HANDLE, "race@x.com"),
     false,
-    "two concurrent clearings must not leave two deliveries behind"
+    "the message was delivered, so one payment must leave no spare use behind"
   );
 });
 

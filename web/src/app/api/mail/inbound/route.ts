@@ -125,15 +125,14 @@ export async function POST(request: Request) {
   // A live pass, and the envelope it was earned with. Passes run out, so this
   // is a sender who cleared the gate minutes ago rather than ever.
   //
-  // Budget exhaustion closes it; a classifier outage does not. The difference
-  // is who caused it. Spending the budget is something a sender does, so
-  // honouring a pass afterwards would let one proof plus twenty messages buy
-  // unread delivery for everything that followed. An outage is ours, and
-  // holding every message from every sender who already cleared the gate —
-  // including the ones whose re-verification would be just as unreadable —
-  // punishes them for it.
-  if (authenticated && !overBudget && verdict.tier !== "dangerous") {
-    const pass = await spendPass(handle, sender);
+  // Budget exhaustion narrows it; a classifier outage does not. The difference
+  // is who caused it, and what the pass can be used for. An unlimited window
+  // plus a spent budget is a licence to deliver anything unread, so that one
+  // shuts. A single paid use cannot flood by construction — it is one message,
+  // already paid for — and refusing it would take the money and issue a fresh
+  // demand for the same message.
+  if (authenticated && verdict.tier !== "dangerous") {
+    const pass = await spendPass(handle, sender, { countedOnly: overBudget });
     if (pass) {
       return Response.json({
         action: "forward",

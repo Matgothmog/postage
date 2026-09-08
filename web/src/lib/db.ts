@@ -100,18 +100,30 @@ const SCHEMA = [
 /// `challenges` table predates holding kept answering every held message with a
 /// 500, because the statement meant to erase expired holds named a column it did
 /// not have. Adding a column is not optional work to be done by hand later.
-const ADDED_COLUMNS: { table: string; column: string; type: string }[] = [
-  { table: "challenges", column: "entitled_at", type: "INTEGER" },
+const ADDED_COLUMNS: { table: string; column: string; type: string; backfill?: string }[] = [
+  {
+    table: "challenges",
+    column: "entitled_at",
+    type: "INTEGER",
+    // Anything already settled has had whatever it was going to get.
+    backfill: `UPDATE challenges SET entitled_at = resolved_at WHERE resolved_at IS NOT NULL`,
+  },
   { table: "challenges", column: "settled_by", type: "TEXT" },
-  { table: "challenges", column: "delivered_at", type: "INTEGER" },
+  {
+    table: "challenges",
+    column: "delivered_at",
+    type: "INTEGER",
+    backfill: `UPDATE challenges SET delivered_at = resolved_at WHERE resolved_at IS NOT NULL`,
+  },
   { table: "challenges", column: "held_until", type: "INTEGER" },
 ];
 
 async function addMissingColumns(client: Client): Promise<void> {
-  for (const { table, column, type } of ADDED_COLUMNS) {
+  for (const { table, column, type, backfill } of ADDED_COLUMNS) {
     const existing = await client.execute(`PRAGMA table_info(${table})`);
     if (existing.rows.some((row) => row.name === column)) continue;
     await client.execute(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    if (backfill) await client.execute(backfill);
   }
 }
 
@@ -157,8 +169,13 @@ async function run(sql: string, args: unknown[] = []): Promise<void> {
 /// Empties every table. Test support: the gate's invariants are about what one
 /// clearing leaves behind, which can only be asserted from a known-empty start.
 export async function reset(): Promise<void> {
-  for (const table of ["passes", "challenges", "classifications", "inboxes", "allowlist"]) {
-    await run(`DELETE FROM ${table}`).catch(() => {});
+  const client = await db();
+  const tables = await client.execute({
+    sql: `SELECT name FROM sqlite_master WHERE type = ? AND name NOT LIKE 'sqlite_%'`,
+    args: ["table"],
+  });
+  for (const row of tables.rows) {
+    await client.execute(`DELETE FROM ${String(row.name)}`);
   }
 }
 
@@ -197,11 +214,21 @@ export interface Pass {
 /// Takes one delivery from a live pass. A pass bought by paying carries a
 /// single use and is spent here; one earned by proving personhood carries none,
 /// and lasts until it expires.
-export async function spendPass(handle: string, sender: string): Promise<Pass | null> {
+export async function spendPass(
+  handle: string,
+  sender: string,
+  options: { countedOnly?: boolean } = {}
+): Promise<Pass | null> {
   const rows = await all<Pass>(
     `SELECT reason, expires_at, uses_left FROM passes
-     WHERE handle = ? AND sender = ? AND expires_at > ? AND (uses_left IS NULL OR uses_left > 0)`,
-    [handle.toLowerCase(), sender.toLowerCase(), Math.floor(Date.now() / 1000)]
+     WHERE handle = ? AND sender = ? AND expires_at > ?
+       AND (uses_left > 0 OR (uses_left IS NULL AND ? = 0))`,
+    [
+      handle.toLowerCase(),
+      sender.toLowerCase(),
+      Math.floor(Date.now() / 1000),
+      options.countedOnly ? 1 : 0,
+    ]
   );
   const pass = rows[0];
   if (!pass) return null;
@@ -449,11 +476,18 @@ export async function challengeByToken(token: string): Promise<Challenge | null>
 /// both granting would reset the pass after the first had already spent it —
 /// one payment, two deliveries.
 export async function claimChallenge(token: string, settledBy: string): Promise<boolean> {
+  const now = Math.floor(Date.now() / 1000);
   const client = await db();
   const claimed = await client.execute({
-    sql: `UPDATE challenges SET resolved_at = ?, settled_by = ?
+    // A paid claim takes the entitlement with it. Deciding that separately let
+    // the loser of the race read "nobody has been entitled yet" during the
+    // hundreds of milliseconds the winner spends handing the message to the
+    // worker, and hand out a second delivery for one payment.
+    sql: `UPDATE challenges
+          SET resolved_at = ?, settled_by = ?,
+              entitled_at = CASE WHEN ? = 'paid' THEN ? ELSE entitled_at END
           WHERE token = ? AND resolved_at IS NULL`,
-    args: [Math.floor(Date.now() / 1000), settledBy, token],
+    args: [now, settledBy, settledBy, now, token],
   });
   return claimed.rowsAffected > 0;
 }
@@ -462,7 +496,11 @@ export async function claimChallenge(token: string, settledBy: string): Promise<
 /// happen, and a payment that cannot be made twice must not leave the only way
 /// through it bought closed behind it.
 export async function releaseChallengeClaim(token: string): Promise<void> {
-  await run(`UPDATE challenges SET resolved_at = NULL WHERE token = ?`, [token]);
+  await run(
+    `UPDATE challenges SET resolved_at = NULL, settled_by = NULL, entitled_at = NULL
+     WHERE token = ?`,
+    [token]
+  );
 }
 
 /// Gives back a use that was taken for a delivery that never happened.
@@ -485,11 +523,13 @@ export async function refundPass(handle: string, sender: string): Promise<void> 
 /// Records that this challenge has issued what it owed, so it cannot issue it
 /// again. A payment settles onchain forever, and without this the sender could
 /// spend the delivery it bought and then ask for another.
-export async function markEntitled(token: string): Promise<void> {
-  await run(`UPDATE challenges SET entitled_at = ? WHERE token = ? AND entitled_at IS NULL`, [
-    Math.floor(Date.now() / 1000),
-    token,
-  ]);
+export async function markEntitled(token: string): Promise<boolean> {
+  const client = await db();
+  const marked = await client.execute({
+    sql: `UPDATE challenges SET entitled_at = ? WHERE token = ? AND entitled_at IS NULL`,
+    args: [Math.floor(Date.now() / 1000), token],
+  });
+  return marked.rowsAffected > 0;
 }
 
 export async function markDelivered(token: string): Promise<void> {
@@ -505,17 +545,25 @@ export async function markDelivered(token: string): Promise<void> {
 /// cannot hold a window open forever either.
 const EXTEND_WHEN_UNDER_SECONDS = 5 * 60;
 
+/// The furthest a pass may be carried past when it was earned. An outage should
+/// not cost someone the delivery they paid for, but a window that renews on
+/// demand is not a window — the proof behind it described one moment, and this
+/// is how long that moment is allowed to be stretched.
+const EXTEND_NO_LATER_THAN_SECONDS = 60 * 60;
+
 export async function extendPassIfExpiring(handle: string, sender: string): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
   await run(
     `UPDATE passes SET expires_at = ?
-     WHERE handle = ? AND sender = ? AND expires_at > ? AND expires_at < ?`,
+     WHERE handle = ? AND sender = ? AND expires_at > ? AND expires_at < ?
+       AND created_at > ?`,
     [
       now + PASS_WINDOW_SECONDS,
       handle.toLowerCase(),
       sender.toLowerCase(),
       now,
       now + EXTEND_WHEN_UNDER_SECONDS,
+      now - EXTEND_NO_LATER_THAN_SECONDS,
     ]
   );
 }
