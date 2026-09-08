@@ -5,6 +5,7 @@ import {
   challengeByToken,
   claimChallenge,
   grantPass,
+  hasLivePass,
   linkSenderWallet,
   releaseChallengeClaim,
 } from "@/lib/db";
@@ -36,7 +37,11 @@ export async function POST(request: Request) {
 
   // One statement, so two tabs cannot both believe they are the one settling
   // this. Whoever loses is told the outcome rather than an error.
-  if (!(await claimChallenge(token))) return Response.json(settledOutcome(challenge));
+  if (!(await claimChallenge(token, "paid"))) {
+    // Re-read: this row was loaded before the claim, so whatever the winner
+    // recorded while we were asking is not in it yet.
+    return Response.json(settledOutcome((await challengeByToken(token)) ?? challenge));
+  }
 
   try {
     // Taken from the escrow rather than the request, because whoever calls this
@@ -55,7 +60,12 @@ export async function POST(request: Request) {
     // would hand the sender a second, free message through the paste box.
     const released = await releaseHeldMessage(token, challenge.handle);
     if (!released.delivered) {
-      await grantPass(challenge.handle, challenge.sender, "paid", 1);
+      // Never downgrades. grantPass overwrites the row, so a sender who proved
+      // personhood minutes ago would trade an unlimited window for one use by
+      // paying for a second message.
+      if (!(await hasLivePass(challenge.handle, challenge.sender))) {
+        await grantPass(challenge.handle, challenge.sender, "paid", 1);
+      }
     }
 
     return Response.json({ status: "cleared", reason: "paid", ...released });
@@ -76,7 +86,9 @@ export async function POST(request: Request) {
 /// cause chain.
 function looksTransient(cause: unknown): boolean {
   for (let error = cause, depth = 0; error instanceof Error && depth < 8; depth += 1) {
-    if (/HttpRequest|Timeout|SocketClosed|Connection|Fetch/i.test(error.name)) return true;
+    if (/HttpRequest|Timeout|SocketClosed|Connection|Fetch|RpcError|LimitExceeded/i.test(error.name)) {
+      return true;
+    }
     error = error.cause;
   }
   return false;
@@ -88,9 +100,19 @@ function looksTransient(cause: unknown): boolean {
 /// state cannot answer it: a human pass earned on an earlier message looks
 /// exactly like one granted because delivery failed, and reading it during
 /// another request's work answers about a moment that has already passed.
-function settledOutcome(challenge: { tier: string; delivered_at: number | null }) {
+function settledOutcome(challenge: {
+  tier: string;
+  delivered_at: number | null;
+  settled_by: string | null;
+}) {
   if (challenge.tier === "dangerous") return { status: "charged", reason: "dangerous" };
-  return { status: "cleared", reason: "paid", delivered: challenge.delivered_at !== null };
+  return {
+    status: "cleared",
+    // Which lane opened it, not an assumption. A token cleared for free by
+    // proving personhood would otherwise be reported back as "Paid".
+    reason: challenge.settled_by ?? "paid",
+    delivered: challenge.delivered_at !== null,
+  };
 }
 
 /// The address the escrow recorded as having paid, or null if nobody has.

@@ -31,7 +31,10 @@ export async function releaseHeldMessage(token: string, handle: string): Promise
       body: JSON.stringify({ token, to: inbox.destination }),
     });
     if (response.ok) {
-      await markDelivered(token);
+      // The worker has already sent it. If recording that fails the delivery
+      // still happened, and letting the error escape would reopen the challenge
+      // and hand out a second pass for the same payment.
+      await markDelivered(token).catch(() => {});
       return { delivered: true };
     }
   } catch {

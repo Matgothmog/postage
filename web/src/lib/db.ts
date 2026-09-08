@@ -98,6 +98,7 @@ const SCHEMA = [
 /// 500, because the statement meant to erase expired holds named a column it did
 /// not have. Adding a column is not optional work to be done by hand later.
 const ADDED_COLUMNS: { table: string; column: string; type: string }[] = [
+  { table: "challenges", column: "settled_by", type: "TEXT" },
   { table: "challenges", column: "delivered_at", type: "INTEGER" },
   { table: "challenges", column: "held_until", type: "INTEGER" },
 ];
@@ -376,9 +377,12 @@ export interface Challenge {
   created_at: number;
   resolved_at: number | null;
   delivered_at: number | null;
+  settled_by: string | null;
 }
 
-export async function createChallenge(challenge: Omit<Challenge, "resolved_at" | "delivered_at">): Promise<void> {
+export async function createChallenge(
+  challenge: Omit<Challenge, "resolved_at" | "delivered_at" | "settled_by">
+): Promise<void> {
   await run(
     `INSERT INTO challenges
        (token, handle, sender, message_id, tier, amount, quote_json, held_until, created_at)
@@ -431,11 +435,12 @@ export async function challengeByToken(token: string): Promise<Challenge | null>
 /// the write have to be one statement. Two callers reading "not settled" and
 /// both granting would reset the pass after the first had already spent it —
 /// one payment, two deliveries.
-export async function claimChallenge(token: string): Promise<boolean> {
+export async function claimChallenge(token: string, settledBy: string): Promise<boolean> {
   const client = await db();
   const claimed = await client.execute({
-    sql: `UPDATE challenges SET resolved_at = ? WHERE token = ? AND resolved_at IS NULL`,
-    args: [Math.floor(Date.now() / 1000), token],
+    sql: `UPDATE challenges SET resolved_at = ?, settled_by = ?
+          WHERE token = ? AND resolved_at IS NULL`,
+    args: [Math.floor(Date.now() / 1000), settledBy, token],
   });
   return claimed.rowsAffected > 0;
 }
@@ -492,6 +497,15 @@ export async function extendPass(handle: string, sender: string): Promise<void> 
 /// happens before any pass is consulted.
 export const CLASSIFY_PER_HANDLE_HOURLY = 200;
 export const CLASSIFY_PER_SENDER_HOURLY = 20;
+
+/// Drops rows past the window they are counted over. Called on the way past,
+/// like the held-message purge, rather than left to grow a row per message
+/// forever under a COUNT that every inbound message pays for.
+export async function purgeOldClassifications(): Promise<void> {
+  await run(`DELETE FROM classifications WHERE at <= ?`, [
+    Math.floor(Date.now() / 1000) - 60 * 60,
+  ]);
+}
 
 export async function recordClassification(handle: string, sender: string): Promise<void> {
   await run(`INSERT INTO classifications (handle, sender, at) VALUES (?, ?, ?)`, [

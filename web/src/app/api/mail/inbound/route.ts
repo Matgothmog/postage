@@ -10,6 +10,7 @@ import {
   createChallenge,
   inboxByHandle,
   purgeExpiredHolds,
+  purgeOldClassifications,
   recordClassification,
   spendPass,
   walletForSender,
@@ -117,7 +118,15 @@ export async function POST(request: Request) {
 
   // Checked before any pass is spent. This tier is free and grants nothing, so
   // taking a paid use for it would charge someone twice for one delivery.
-  if (verdict.tier === "important") {
+  //
+  // Held to a higher bar when the verdict is degraded. The header fallback
+  // calls anything transactional-sounding important as long as authentication
+  // did not outright fail, and "no authentication at all" clears that — so a
+  // stranger writing "your verification code" would be delivered free during an
+  // outage. Requiring the sender to actually be who they say closes that
+  // without holding real login codes, which is the one thing this tier exists
+  // to prevent.
+  if (verdict.tier === "important" && (!verdict.degraded || authenticated)) {
     return Response.json({
       action: "forward",
       to: inbox.destination,
@@ -128,7 +137,15 @@ export async function POST(request: Request) {
 
   // A live pass, and the envelope it was earned with. Passes run out, so this
   // is a sender who cleared the gate minutes ago rather than ever.
-  if (authenticated && verdict.tier !== "dangerous") {
+  //
+  // Budget exhaustion closes it; a classifier outage does not. The difference
+  // is who caused it. Spending the budget is something a sender does, so
+  // honouring a pass afterwards would let one proof plus twenty messages buy
+  // unread delivery for everything that followed. An outage is ours, and
+  // holding every message from every sender who already cleared the gate —
+  // including the ones whose re-verification would be just as unreadable —
+  // punishes them for it.
+  if (authenticated && !overBudget && verdict.tier !== "dangerous") {
     const pass = await spendPass(handle, sender);
     if (pass) {
       return Response.json({
@@ -168,6 +185,7 @@ export async function POST(request: Request) {
   const holding = verdict.tier !== "dangerous";
   const heldUntil = receivedAt + HOLD_SECONDS;
   await purgeExpiredHolds();
+  await purgeOldClassifications();
 
   await createChallenge({
     token,
