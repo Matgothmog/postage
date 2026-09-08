@@ -45,7 +45,12 @@ export type GateResult =
 export async function openGate(token: string, lane: Lane): Promise<GateResult> {
   const challenge = await challengeByToken(token);
   if (!challenge) return { status: "unknown" };
-  if (challenge.tier === "dangerous") return { status: "charged", reason: "dangerous" };
+  if (challenge.tier === "dangerous") {
+    // Closed as well as refused. Left open, the page goes on offering to pay for
+    // something no route will deliver, and a second payToSend reverts.
+    await claimChallenge(token, lane);
+    return { status: "charged", reason: "dangerous" };
+  }
 
   if (!(await claimChallenge(token, lane))) return recover(token, challenge, lane);
 

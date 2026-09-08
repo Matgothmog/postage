@@ -76,7 +76,7 @@ export async function POST(request: Request) {
   // Counted against its own pool, not the inbox's. Sharing it let a handful of
   // senders with live passes spend a recipient's whole hourly allowance on
   // refused pastes, after which that inbox stopped being read at all.
-  if (!(await claimClassification(`paste:${challenge.handle}`, challenge.sender))) {
+  if (await claimClassification(`paste:${challenge.handle}`, challenge.sender)) {
     return Response.json(
       { error: "Too much has been sent this hour. Try again later" },
       { status: 429 }

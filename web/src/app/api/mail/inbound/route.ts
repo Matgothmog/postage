@@ -100,7 +100,18 @@ export async function POST(request: Request) {
   // failing open here would make a flood the way through the gate rather than
   // merely the way to run up a bill.
   await purgeOldClassifications();
-  const budget = await claimClassification(handle, sender);
+
+  // Only mail whose sender the receiving server could confirm is worth paying a
+  // model to read, and only it may spend the budget.
+  //
+  // Anyone can put any address on an envelope, so counting unauthenticated mail
+  // let a stranger drain a recipient's hourly pool with forged senders — and a
+  // drained pool is what puts the classifier into its header-only fallback,
+  // where a signed domain and a transactional-sounding subject are delivered
+  // free. That made the outage something an attacker could manufacture and then
+  // walk through. Unauthenticated mail is now judged from its headers and held,
+  // which costs nothing and unlocks nothing.
+  const budget = authenticated ? await claimClassification(handle, sender) : "spent-by-sender";
   const verdict = budget ? classifyFromHeaders(facts) : await classify(facts);
 
   // Checked before any pass is spent. This tier is free and grants nothing, so

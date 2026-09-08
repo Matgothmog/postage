@@ -109,11 +109,16 @@ const ADDED_COLUMNS: { table: string; column: string; type: string; backfill?: s
     backfill: `UPDATE challenges SET entitled_at = resolved_at WHERE resolved_at IS NOT NULL`,
   },
   { table: "challenges", column: "settled_by", type: "TEXT" },
-  // Deliberately not backfilled. A settled challenge may well have failed to
-  // deliver and told the sender to paste it back, so claiming it arrived would
-  // show them "delivered" and skip the repair that hands them a way through.
-  // Left null, an old challenge degrades to that repair instead.
-  { table: "challenges", column: "delivered_at", type: "INTEGER" },
+  {
+    table: "challenges",
+    column: "delivered_at",
+    type: "INTEGER",
+    // Backfilled together with entitled_at, because a challenge settled before
+    // either column existed has to read as closed on both counts. Stamping one
+    // alone tells a legacy sender their message never arrived and then refuses
+    // the paste box the answer sends them to.
+    backfill: `UPDATE challenges SET delivered_at = resolved_at WHERE resolved_at IS NOT NULL`,
+  },
   { table: "challenges", column: "held_until", type: "INTEGER" },
 ];
 
@@ -256,8 +261,14 @@ export async function grantPass(
      VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT (handle, sender) DO UPDATE SET
        reason = excluded.reason,
-       expires_at = excluded.expires_at,
-       uses_left = excluded.uses_left,
+       expires_at = MAX(passes.expires_at, excluded.expires_at),
+       -- Never takes away a delivery already bought. An unlimited window is
+       -- more permissive than a count while it lasts, but overwriting the count
+       -- with it means the payment is gone the moment the window lapses.
+       uses_left = CASE
+         WHEN passes.uses_left IS NOT NULL AND passes.uses_left > 0 THEN passes.uses_left
+         ELSE excluded.uses_left
+       END,
        created_at = excluded.created_at`,
     [handle.toLowerCase(), sender.toLowerCase(), reason, now + PASS_WINDOW_SECONDS, usesLeft, now]
   );
@@ -619,7 +630,21 @@ export async function claimClassification(
   if (Number(counted?.forSender ?? 0) >= CLASSIFY_PER_SENDER_HOURLY) return "spent-by-sender";
   if (Number(counted?.forHandle ?? 0) >= CLASSIFY_PER_HANDLE_HOURLY) return "spent-by-handle";
 
-  return (await takeClassificationSlot(handle, sender)) ? null : "spent-by-handle";
+  if (await takeClassificationSlot(handle, sender)) return null;
+
+  // Lost a race for the last slot. Which limit it was decides what the caller
+  // may still do, so it is looked up rather than assumed: reporting a sender's
+  // own exhaustion as the handle's would unlock the two things that state
+  // exists to shut.
+  const after = await all<{ forHandle: number; forSender: number }>(
+    `SELECT COUNT(*) AS forHandle,
+            SUM(CASE WHEN sender = ? THEN 1 ELSE 0 END) AS forSender
+     FROM classifications WHERE handle = ? AND at > ?`,
+    [sender.toLowerCase(), handle.toLowerCase(), since]
+  );
+  return Number(after[0]?.forSender ?? 0) >= CLASSIFY_PER_SENDER_HOURLY
+    ? "spent-by-sender"
+    : "spent-by-handle";
 }
 
 /// Hands back the most recent slot taken by this pair, for work that never
