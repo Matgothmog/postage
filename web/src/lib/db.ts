@@ -304,6 +304,12 @@ export interface InboxClaim {
   destination: string;
   wallet: string;
   code_hash: string;
+  /// When the emailed code stops being accepted, and until then how long the
+  /// handle is held against another wallet. It is not a deadline on the claim:
+  /// promotion deliberately ignores it, because the code is checked against it
+  /// when it is entered and Cloudflare's own link has no deadline of ours. A
+  /// claim whose code went in at minute fourteen must still go live when its
+  /// owner clicks that link over lunch.
   expires_at: number;
   attempts: number;
   code_verified_at: number | null;

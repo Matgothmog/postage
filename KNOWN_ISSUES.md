@@ -26,18 +26,22 @@ outright.
 
 ## Security
 
-**The worker trusts a header an attacker may control.** Plausible, and the most
-serious thing on this list. `authResults` runs `\b<method>=(\w+)` over the whole
-`Authentication-Results` value, and `Headers.get()` joins duplicate headers with
-`", "`. If Cloudflare does not strip an `Authentication-Results` header the
-sender wrote themselves, and if Cloudflare's own header carries no `dmarc=`
-token, the regex can return the attacker's `dmarc=pass`. That satisfies
-`senderIsAuthenticated()` and takes the pass fast path — delivering with no
-classification and no payment.
+**The worker can still be handed an authentication result Cloudflare never
+stated.** Plausible, and narrowed rather than closed. `Headers.get()` joins
+duplicate `Authentication-Results` headers with `", "`, and a sender may write
+one themselves. `authResults` now believes a method only when every copy of the
+header agrees on it, so contradicting Cloudflare yields nothing where it
+previously yielded the contradiction.
+
+What is left is a message for which Cloudflare stated no result at all: there is
+then nothing to disagree with. That is narrow — a forged claim only buys anything
+if Cloudflare stated neither `dmarc` nor `spf`, because stating either makes the
+two agree (the forgery changed nothing) or disagree (both are dropped).
 
 *Establish first* whether Cloudflare strips attacker-supplied
-`Authentication-Results` headers. If it does not, parse only the header bearing
-Cloudflare's own authserv-id rather than regexing the joined string.
+`Authentication-Results` headers at all. If it does not, the complete fix is to
+parse only the header bearing Cloudflare's own authserv-id, which means finding
+out what that authserv-id is.
 
 **`GET /api/inbox/verify` mutates state.** Verified by reading; it calls
 `settleClaim`, which writes `markCloudflareVerified`, `createInbox` and
@@ -86,23 +90,11 @@ and `GET /api/inbox` reads only `inboxes`, so the user lands back at the start
 with no way to resume. `clearClaim` runs only on success, so abandoned rows keep
 their code hash indefinitely.
 
-**Nothing detects a mail loop.** Verified by reading. `api/mail/inbound` returns
-`inbox.destination` without ever comparing it to the recipient it was called for.
-A destination on our own domain is refused at claim time, so this needs an inbox
-that predates that check or a direct database edit — but nothing stops it
-structurally, and each cycle spends a classify call, a chain read and a challenge
-row.
-
-**`settleClaim` ignores `expires_at`.** Verified by reading. The TTL is enforced
-on the confirm path and skipped on both paths that promote a claim.
-
-**`findDestination` reads one page of fifty.** Verified by reading.
-`ensureDestination` falls back to it when Cloudflare reports an address already
-exists, and `result_info` is ignored. One destination is created per inbox and
-none are ever deleted, so past roughly fifty signups this returns null for older
-addresses and signup fails with Cloudflare's raw duplicate message. Needs
-pagination, and separately a deletion path — the account has a destination cap,
-and reaching it kills signup permanently.
+**There is no way to delete a destination.** Verified by reading. One is created
+per inbox and none are ever removed, and the Cloudflare account has a cap on
+them; reaching it kills signup permanently. `findDestination` now walks every
+page rather than the first fifty, so the lookup no longer fails first — which
+means the cap is now the thing that will actually bite.
 
 ## Unverified against the real thing
 
@@ -127,9 +119,8 @@ has only been read, not run.
 - The code is in the subject line, so it is readable from a lock screen preview
   without opening the mailbox — which is the property it exists to prove. Only on
   the long signup path, which most people will not take.
-- `mail.ts` hardcodes "15 minutes" while `CODE_TTL_SECONDS` is the source of
-  truth, and the `expiresIn` the API returns is dropped client side.
-- Two different `ClaimState` interfaces share a name across files.
+- The `expiresIn` the API returns is dropped client side, so nothing on the
+  confirmation screen says how long the code is good for.
 - The classifier called a plainly personal message `commercial` in testing. It is
   held either way and proving personhood still clears it for nothing, so this
   costs a real sender only if they decline to prove it — but the tier is meant to
