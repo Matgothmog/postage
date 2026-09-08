@@ -1,5 +1,5 @@
 import { classify, extractUrls } from "@/lib/classify";
-import { challengeByToken, inboxByHandle, spendPass } from "@/lib/db";
+import { challengeByToken, inboxByHandle, refundPass, spendPass } from "@/lib/db";
 import { relayHeldMessage } from "@/lib/mail";
 
 const MAX_SUBJECT = 200;
@@ -48,26 +48,12 @@ export async function POST(request: Request) {
     );
   }
 
-  const pasted = await classify({
-    from: challenge.sender,
-    to: `${challenge.handle}@usepostage.com`,
-    subject: subject?.trim() ?? "",
-    body: body.trim(),
-    spf: null,
-    dkim: null,
-    dmarc: null,
-    urls: extractUrls(body),
-  });
-  if (pasted.tier === "dangerous") {
-    return Response.json(
-      { error: "That reads as an attempt to deceive the recipient, so it will not be sent" },
-      { status: 403 }
-    );
-  }
-
   const inbox = await inboxByHandle(challenge.handle);
   if (!inbox) return Response.json({ error: "That inbox no longer exists" }, { status: 404 });
 
+  // Taken before the classifier runs. Knowing a token is the only thing this
+  // route asks for, and a token stays settled for good, so classifying first
+  // would let anyone holding a spent one run up model calls in a loop.
   const pass = await spendPass(challenge.handle, challenge.sender);
   if (!pass) {
     return Response.json(
@@ -77,6 +63,23 @@ export async function POST(request: Request) {
   }
 
   try {
+    const pasted = await classify({
+      from: challenge.sender,
+      to: `${challenge.handle}@usepostage.com`,
+      subject: subject?.trim() ?? "",
+      body: body.trim(),
+      spf: null,
+      dkim: null,
+      dmarc: null,
+      urls: extractUrls(body),
+    });
+    if (pasted.tier === "dangerous") {
+      return Response.json(
+        { error: "That reads as an attempt to deceive the recipient, so it will not be sent" },
+        { status: 403 }
+      );
+    }
+
     await relayHeldMessage({
       to: inbox.destination,
       from: challenge.sender,
@@ -85,6 +88,10 @@ export async function POST(request: Request) {
       body: body.trim(),
     });
   } catch (cause) {
+    // Nothing was delivered, so the use goes back. A sender who paid and then
+    // met an outage would otherwise be left with a settled challenge, a spent
+    // pass and no way through that they could buy again.
+    await refundPass(challenge.handle, challenge.sender);
     const detail = cause instanceof Error ? cause.message : "Could not deliver it";
     return Response.json({ error: detail }, { status: 502 });
   }

@@ -1,7 +1,13 @@
 import { type Hex } from "viem";
 import { publicClient } from "@/lib/client";
 import { POSTAGE_ESCROW, escrowAbi } from "@/lib/contracts";
-import { challengeByToken, grantPass, linkSenderWallet, resolveChallenge } from "@/lib/db";
+import {
+  challengeByToken,
+  claimChallenge,
+  grantPass,
+  linkSenderWallet,
+  releaseChallengeClaim,
+} from "@/lib/db";
 import { releaseHeldMessage } from "@/lib/hold";
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
@@ -20,41 +26,52 @@ export async function POST(request: Request) {
 
   // A settled message stays settled onchain forever, so without this one
   // payment could be redeemed for a fresh pass as often as it was asked for.
-  if (challenge.resolved_at) {
-    return Response.json(
-      { status: "spent", error: "This challenge has already been settled" },
-      { status: 409 }
-    );
-  }
+  // Answering a settled challenge with its own outcome rather than a bare
+  // refusal. The sender may simply have lost the first reply, and telling them
+  // nothing happened would be worse than telling them what did.
+  if (challenge.resolved_at) return Response.json(settledOutcome(challenge.tier));
 
   const payer = await payerOf(challenge.message_id as Hex);
   if (!payer) return Response.json({ status: "pending" });
 
-  // Taken from the escrow rather than the request, because whoever calls this
-  // could otherwise name any wallet and inherit its reputation. The contract
-  // recorded who actually paid.
-  await linkSenderWallet(challenge.sender, payer);
+  // One statement, so two tabs cannot both believe they are the one settling
+  // this. Whoever loses is told the outcome rather than an error.
+  if (!(await claimChallenge(token))) return Response.json(settledOutcome(challenge.tier));
 
-  if (challenge.tier === "dangerous") {
-    // The money is taken and the message still does not arrive. Paying here is
-    // a penalty, not a price.
-    await resolveChallenge(token);
-    return Response.json({ status: "charged", reason: "dangerous" });
+  try {
+    // Taken from the escrow rather than the request, because whoever calls this
+    // could otherwise name any wallet and inherit its reputation. The contract
+    // recorded who actually paid.
+    await linkSenderWallet(challenge.sender, payer);
+
+    if (challenge.tier === "dangerous") {
+      // The money is taken and the message still does not arrive. Paying here
+      // is a penalty, not a price.
+      return Response.json({ status: "charged", reason: "dangerous" });
+    }
+
+    await grantPass(challenge.handle, challenge.sender, "paid", 1);
+    return Response.json({
+      status: "cleared",
+      reason: "paid",
+      ...(await releaseHeldMessage(token, challenge.handle)),
+    });
+  } catch (cause) {
+    // The payment is onchain and cannot be made a second time, so a challenge
+    // claimed for work that then failed has to be openable again. Otherwise the
+    // sender has bought silence.
+    await releaseChallengeClaim(token);
+    throw cause;
   }
+}
 
-  await grantPass(challenge.handle, challenge.sender, "paid", 1);
-
-  // Marked settled only once the pass exists. Stamping it first would mean a
-  // failure anywhere below left the challenge closed with nothing granted: the
-  // payment is already onchain and cannot be made again, so every retry would
-  // answer "already settled" and the sender would have paid for silence.
-  await resolveChallenge(token);
-
-  return Response.json({
-    status: "cleared",
-    reason: "paid",
-    ...(await releaseHeldMessage(token, challenge.handle)),
-  });
+/// What a challenge that is already settled should say. Dangerous mail was
+/// charged and not delivered; anything else was cleared, and the held copy is
+/// long gone, so the sender is pointed at the paste box rather than told their
+/// payment failed.
+function settledOutcome(tier: string) {
+  if (tier === "dangerous") return { status: "charged", reason: "dangerous" };
+  return { status: "cleared", reason: "paid", delivered: false };
 }
 
 /// The address the escrow recorded as having paid, or null if nobody has.

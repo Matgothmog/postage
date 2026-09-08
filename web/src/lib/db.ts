@@ -189,8 +189,8 @@ export async function spendPass(handle: string, sender: string): Promise<Pass | 
   const client = await db();
   const spent = await client.execute({
     sql: `UPDATE passes SET uses_left = uses_left - 1
-          WHERE handle = ? AND sender = ? AND uses_left > 0`,
-    args: [handle.toLowerCase(), sender.toLowerCase()],
+          WHERE handle = ? AND sender = ? AND uses_left > 0 AND expires_at > ?`,
+    args: [handle.toLowerCase(), sender.toLowerCase(), Math.floor(Date.now() / 1000)],
   });
   return spent.rowsAffected > 0 ? pass : null;
 }
@@ -414,9 +414,33 @@ export async function challengeByToken(token: string): Promise<Challenge | null>
   return rows[0] ?? null;
 }
 
-export async function resolveChallenge(token: string): Promise<void> {
-  await run(`UPDATE challenges SET resolved_at = ? WHERE token = ? AND resolved_at IS NULL`, [
-    Math.floor(Date.now() / 1000),
-    token,
-  ]);
+/// Claims a challenge, and says whether this caller is the one who got it.
+///
+/// The link arrives by email and opening it twice is ordinary, so the check and
+/// the write have to be one statement. Two callers reading "not settled" and
+/// both granting would reset the pass after the first had already spent it —
+/// one payment, two deliveries.
+export async function claimChallenge(token: string): Promise<boolean> {
+  const client = await db();
+  const claimed = await client.execute({
+    sql: `UPDATE challenges SET resolved_at = ? WHERE token = ? AND resolved_at IS NULL`,
+    args: [Math.floor(Date.now() / 1000), token],
+  });
+  return claimed.rowsAffected > 0;
+}
+
+/// Puts a claimed challenge back. Whatever the claim was taken for did not
+/// happen, and a payment that cannot be made twice must not leave the only way
+/// through it bought closed behind it.
+export async function releaseChallengeClaim(token: string): Promise<void> {
+  await run(`UPDATE challenges SET resolved_at = NULL WHERE token = ?`, [token]);
+}
+
+/// Gives back a use that was taken for a delivery that never happened.
+export async function refundPass(handle: string, sender: string): Promise<void> {
+  await run(
+    `UPDATE passes SET uses_left = uses_left + 1
+     WHERE handle = ? AND sender = ? AND uses_left IS NOT NULL AND expires_at > ?`,
+    [handle.toLowerCase(), sender.toLowerCase(), Math.floor(Date.now() / 1000)]
+  );
 }

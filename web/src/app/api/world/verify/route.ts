@@ -2,7 +2,7 @@ import { type Hex, createWalletClient, getAddress, http, keccak256, stringToByte
 import { privateKeyToAccount } from "viem/accounts";
 import { publicClient } from "@/lib/client";
 import { HUMAN_REGISTRY, chain, registryAbi } from "@/lib/contracts";
-import { challengeByToken, grantPass, resolveChallenge } from "@/lib/db";
+import { challengeByToken, claimChallenge, grantPass } from "@/lib/db";
 import { identityMode, required } from "@/lib/env";
 import { releaseHeldMessage } from "@/lib/hold";
 
@@ -44,23 +44,21 @@ export async function POST(request: Request) {
   const challenge = await challengeByToken(token);
   if (!challenge) return Response.json({ error: "Unknown challenge" }, { status: 404 });
 
-  // One proof, one clearing. Without this the same token could be posted back
-  // repeatedly to mint a fresh fifteen minute pass from a single proof, which
-  // is the opposite of what a short window is for.
-  if (challenge.resolved_at) {
-    return Response.json(
-      { status: "spent", error: "This challenge has already been answered" },
-      { status: 409 }
-    );
-  }
-
-  // Being a person is not a defence against phishing, so this route stays shut
-  // for mail the classifier called dangerous.
+  // Judged before the replay guard, so an already-answered dangerous token is
+  // still refused as dangerous rather than reported as cleared.
   if (challenge.tier === "dangerous") {
     return Response.json(
       { error: "This will not be delivered whoever sends it. Being a person does not change that" },
       { status: 403 }
     );
+  }
+
+  // One proof, one clearing: posting the same token back must not mint a fresh
+  // window from a single proof. Answering with the outcome rather than an error
+  // matters because recording personhood waits on a transaction, so a slow
+  // reply and an impatient reload are ordinary. The pass is already theirs.
+  if (challenge.resolved_at) {
+    return Response.json({ status: "cleared", reason: "human", delivered: false });
   }
 
   let nullifier: string;
@@ -84,7 +82,9 @@ export async function POST(request: Request) {
   }
 
   await grantPass(challenge.handle, challenge.sender, "human", null);
-  await resolveChallenge(token);
+  if (!(await claimChallenge(token))) {
+    return Response.json({ status: "cleared", reason: "human", delivered: false });
+  }
 
   return Response.json({
     status: "cleared",

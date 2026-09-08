@@ -95,6 +95,17 @@ export async function POST(request: Request) {
   // to deliver anything at all.
   const verdict = await classify(facts);
 
+  // Checked before any pass is spent. This tier is free and grants nothing, so
+  // taking a paid use for it would charge someone twice for one delivery.
+  if (verdict.tier === "important") {
+    return Response.json({
+      action: "forward",
+      to: inbox.destination,
+      reason: verdict.tier,
+      verdict,
+    });
+  }
+
   // A live pass, and the envelope it was earned with. Passes run out, so this
   // is a sender who cleared the gate minutes ago rather than ever.
   if (authenticated && verdict.tier !== "dangerous") {
@@ -107,17 +118,6 @@ export async function POST(request: Request) {
         verdict,
       });
     }
-  }
-
-  // The only tier that is never held. It grants no pass, because the next
-  // message from the same sender has to earn its own way through.
-  if (verdict.tier === "important") {
-    return Response.json({
-      action: "forward",
-      to: inbox.destination,
-      reason: verdict.tier,
-      verdict,
-    });
   }
 
   // A sender who has paid before is priced on that history rather than as a
