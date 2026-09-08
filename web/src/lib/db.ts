@@ -176,6 +176,14 @@ function db(): Promise<Client> {
   return ready;
 }
 
+/// Seconds, which is what every timestamp column here holds. This was written
+/// out by hand twenty-one times, and one `Date.now()` among them would have
+/// stored milliseconds into a column the next query reads as seconds — an
+/// expiry fifty thousand years out that nothing would ever report.
+function now(): number {
+  return Math.floor(Date.now() / 1000);
+}
+
 async function all<T>(sql: string, args: unknown[] = []): Promise<T[]> {
   const client = await db();
   const result = await client.execute({ sql, args: args as never });
@@ -208,7 +216,7 @@ export async function createInbox(
   await run(
     `INSERT INTO inboxes (handle, destination, wallet, created_at) VALUES (?, ?, ?, ?)
      ON CONFLICT (handle) DO UPDATE SET destination = excluded.destination, wallet = excluded.wallet`,
-    [handle.toLowerCase(), destination.toLowerCase(), wallet?.toLowerCase() ?? null, Math.floor(Date.now() / 1000)]
+    [handle.toLowerCase(), destination.toLowerCase(), wallet?.toLowerCase() ?? null, now()]
   );
 }
 
@@ -247,7 +255,7 @@ export async function spendPass(
     [
       handle.toLowerCase(),
       sender.toLowerCase(),
-      Math.floor(Date.now() / 1000),
+      now(),
       options.countedOnly ? 1 : 0,
     ]
   );
@@ -261,7 +269,7 @@ export async function spendPass(
   const spent = await client.execute({
     sql: `UPDATE passes SET uses_left = uses_left - 1
           WHERE handle = ? AND sender = ? AND uses_left > 0 AND expires_at > ?`,
-    args: [handle.toLowerCase(), sender.toLowerCase(), Math.floor(Date.now() / 1000)],
+    args: [handle.toLowerCase(), sender.toLowerCase(), now()],
   });
   return spent.rowsAffected > 0 ? pass : null;
 }
@@ -272,7 +280,7 @@ export async function grantPass(
   reason: string,
   usesLeft: number | null
 ): Promise<void> {
-  const now = Math.floor(Date.now() / 1000);
+  const at = now();
   await run(
     `INSERT INTO passes (handle, sender, reason, expires_at, uses_left, created_at)
      VALUES (?, ?, ?, ?, ?, ?)
@@ -287,7 +295,7 @@ export async function grantPass(
          ELSE excluded.uses_left
        END,
        created_at = excluded.created_at`,
-    [handle.toLowerCase(), sender.toLowerCase(), reason, now + PASS_WINDOW_SECONDS, usesLeft, now]
+    [handle.toLowerCase(), sender.toLowerCase(), reason, at + PASS_WINDOW_SECONDS, usesLeft, at]
   );
 }
 
@@ -329,7 +337,7 @@ export async function startClaim(
       claim.expires_at,
       claim.cf_address_id,
       claim.cf_verified_at,
-      Math.floor(Date.now() / 1000),
+      now(),
     ]
   );
 }
@@ -337,14 +345,14 @@ export async function startClaim(
 export async function recordClaimSend(destination: string): Promise<void> {
   await run(`INSERT INTO claim_sends (destination, sent_at) VALUES (?, ?)`, [
     destination.toLowerCase(),
-    Math.floor(Date.now() / 1000),
+    now(),
   ]);
 }
 
 export async function recentClaimsTo(destination: string, windowSeconds: number): Promise<number> {
   const rows = await all<{ n: number }>(
     `SELECT COUNT(*) AS n FROM claim_sends WHERE destination = ? AND sent_at > ?`,
-    [destination.toLowerCase(), Math.floor(Date.now() / 1000) - windowSeconds]
+    [destination.toLowerCase(), now() - windowSeconds]
   );
   return Number(rows[0]?.n ?? 0);
 }
@@ -370,7 +378,7 @@ export async function consumeAttempt(handle: string, max: number): Promise<boole
 
 export async function markCodeVerified(handle: string): Promise<void> {
   await run(`UPDATE inbox_claims SET code_verified_at = ? WHERE handle = ? AND code_verified_at IS NULL`, [
-    Math.floor(Date.now() / 1000),
+    now(),
     handle.toLowerCase(),
   ]);
 }
@@ -411,7 +419,7 @@ export async function linkSenderWallet(sender: string, wallet: string): Promise<
   await run(
     `INSERT INTO sender_wallets (sender, wallet, linked_at) VALUES (?, ?, ?)
      ON CONFLICT (sender) DO UPDATE SET wallet = excluded.wallet, linked_at = excluded.linked_at`,
-    [sender.toLowerCase(), wallet.toLowerCase(), Math.floor(Date.now() / 1000)]
+    [sender.toLowerCase(), wallet.toLowerCase(), now()]
   );
 }
 
@@ -476,7 +484,7 @@ export async function claimHold(token: string): Promise<boolean> {
   const client = await db();
   const result = await client.execute({
     sql: `UPDATE challenges SET held_until = NULL WHERE token = ? AND held_until > ?`,
-    args: [token, Math.floor(Date.now() / 1000)],
+    args: [token, now()],
   });
   return result.rowsAffected > 0;
 }
@@ -488,7 +496,7 @@ export async function claimHold(token: string): Promise<boolean> {
 export async function purgeExpiredHolds(): Promise<void> {
   await run(
     `UPDATE challenges SET held_until = NULL WHERE held_until IS NOT NULL AND held_until <= ?`,
-    [Math.floor(Date.now() / 1000)]
+    [now()]
   );
 }
 
@@ -504,7 +512,7 @@ export async function challengeByToken(token: string): Promise<Challenge | null>
 /// both granting would reset the pass after the first had already spent it —
 /// one payment, two deliveries.
 export async function claimChallenge(token: string, settledBy: string): Promise<boolean> {
-  const now = Math.floor(Date.now() / 1000);
+  const at = now();
   const client = await db();
   const claimed = await client.execute({
     // A paid claim takes the entitlement with it. Deciding that separately let
@@ -515,7 +523,7 @@ export async function claimChallenge(token: string, settledBy: string): Promise<
           SET resolved_at = ?, settled_by = ?,
               entitled_at = CASE WHEN ? = 'paid' THEN ? ELSE entitled_at END
           WHERE token = ? AND resolved_at IS NULL`,
-    args: [now, settledBy, settledBy, now, token],
+    args: [at, settledBy, settledBy, at, token],
   });
   return claimed.rowsAffected > 0;
 }
@@ -547,7 +555,7 @@ export async function refundPass(handle: string, sender: string): Promise<void> 
   await run(
     `UPDATE passes SET uses_left = uses_left + 1
      WHERE handle = ? AND sender = ? AND uses_left IS NOT NULL AND expires_at > ?`,
-    [handle.toLowerCase(), sender.toLowerCase(), Math.floor(Date.now() / 1000)]
+    [handle.toLowerCase(), sender.toLowerCase(), now()]
   );
 }
 
@@ -558,7 +566,7 @@ export async function markEntitled(token: string): Promise<boolean> {
   const client = await db();
   const marked = await client.execute({
     sql: `UPDATE challenges SET entitled_at = ? WHERE token = ? AND entitled_at IS NULL`,
-    args: [Math.floor(Date.now() / 1000), token],
+    args: [now(), token],
   });
   return marked.rowsAffected > 0;
 }
@@ -568,7 +576,7 @@ export async function markEntitled(token: string): Promise<boolean> {
 /// earlier message looks the same as one granted because delivery failed.
 export async function markDelivered(token: string): Promise<void> {
   await run(`UPDATE challenges SET delivered_at = ? WHERE token = ?`, [
-    Math.floor(Date.now() / 1000),
+    now(),
     token,
   ]);
 }
@@ -586,18 +594,18 @@ const EXTEND_WHEN_UNDER_SECONDS = 5 * 60;
 const EXTEND_NO_LATER_THAN_SECONDS = 60 * 60;
 
 export async function extendPassIfExpiring(handle: string, sender: string): Promise<void> {
-  const now = Math.floor(Date.now() / 1000);
+  const at = now();
   await run(
     `UPDATE passes SET expires_at = ?
      WHERE handle = ? AND sender = ? AND expires_at > ? AND expires_at < ?
        AND created_at > ?`,
     [
-      now + PASS_WINDOW_SECONDS,
+      at + PASS_WINDOW_SECONDS,
       handle.toLowerCase(),
       sender.toLowerCase(),
-      now,
-      now + EXTEND_WHEN_UNDER_SECONDS,
-      now - EXTEND_NO_LATER_THAN_SECONDS,
+      at,
+      at + EXTEND_WHEN_UNDER_SECONDS,
+      at - EXTEND_NO_LATER_THAN_SECONDS,
     ]
   );
 }
@@ -614,7 +622,7 @@ export const CLASSIFY_PER_SENDER_HOURLY = 20;
 /// forever under a COUNT that every inbound message pays for.
 export async function purgeOldClassifications(): Promise<void> {
   await run(`DELETE FROM classifications WHERE at <= ?`, [
-    Math.floor(Date.now() / 1000) - 60 * 60,
+    now() - 60 * 60,
   ]);
 }
 
@@ -649,7 +657,7 @@ async function whichLimitBit(handle: string, sender: string): Promise<BudgetStat
   const rows = await all<{ forSender: number }>(
     `SELECT SUM(CASE WHEN sender = ? THEN 1 ELSE 0 END) AS forSender
      FROM classifications WHERE handle = ? AND at > ?`,
-    [sender.toLowerCase(), handle.toLowerCase(), Math.floor(Date.now() / 1000) - 60 * 60]
+    [sender.toLowerCase(), handle.toLowerCase(), now() - 60 * 60]
   );
   return Number(rows[0]?.forSender ?? 0) >= CLASSIFY_PER_SENDER_HOURLY
     ? "spent-by-sender"
@@ -668,8 +676,8 @@ export async function releaseClassificationSlot(handle: string, sender: string):
 }
 
 async function takeClassificationSlot(handle: string, sender: string): Promise<boolean> {
-  const now = Math.floor(Date.now() / 1000);
-  const since = now - 60 * 60;
+  const at = now();
+  const since = at - 60 * 60;
   const inbox = handle.toLowerCase();
   const writer = sender.toLowerCase();
 
@@ -682,7 +690,7 @@ async function takeClassificationSlot(handle: string, sender: string): Promise<b
             AND (SELECT COUNT(*) FROM classifications
                  WHERE handle = ? AND sender = ? AND at > ?) < ?`,
     args: [
-      inbox, writer, now,
+      inbox, writer, at,
       inbox, since, CLASSIFY_PER_HANDLE_HOURLY,
       inbox, writer, since, CLASSIFY_PER_SENDER_HOURLY,
     ],
@@ -695,12 +703,12 @@ async function takeClassificationSlot(handle: string, sender: string): Promise<b
 /// use, and a sender with neither gets one. Overwriting instead would let a
 /// second payment land on a pass that already had a use and buy nothing.
 export async function addPaidUse(handle: string, sender: string): Promise<void> {
-  const now = Math.floor(Date.now() / 1000);
+  const at = now();
   const client = await db();
   const topped = await client.execute({
     sql: `UPDATE passes SET uses_left = uses_left + 1, expires_at = ?
           WHERE handle = ? AND sender = ? AND expires_at > ? AND uses_left IS NOT NULL`,
-    args: [now + PASS_WINDOW_SECONDS, handle.toLowerCase(), sender.toLowerCase(), now],
+    args: [at + PASS_WINDOW_SECONDS, handle.toLowerCase(), sender.toLowerCase(), at],
   });
   if (topped.rowsAffected > 0) return;
 
@@ -711,7 +719,7 @@ export async function addPaidUse(handle: string, sender: string): Promise<void> 
   const extended = await client.execute({
     sql: `UPDATE passes SET expires_at = ?
           WHERE handle = ? AND sender = ? AND expires_at > ? AND uses_left IS NULL`,
-    args: [now + PASS_WINDOW_SECONDS, handle.toLowerCase(), sender.toLowerCase(), now],
+    args: [at + PASS_WINDOW_SECONDS, handle.toLowerCase(), sender.toLowerCase(), at],
   });
   if (extended.rowsAffected > 0) return;
 
@@ -723,7 +731,7 @@ export async function hasLivePass(handle: string, sender: string): Promise<boole
   const rows = await all(
     `SELECT 1 FROM passes
      WHERE handle = ? AND sender = ? AND expires_at > ? AND (uses_left IS NULL OR uses_left > 0)`,
-    [handle.toLowerCase(), sender.toLowerCase(), Math.floor(Date.now() / 1000)]
+    [handle.toLowerCase(), sender.toLowerCase(), now()]
   );
   return rows.length > 0;
 }
