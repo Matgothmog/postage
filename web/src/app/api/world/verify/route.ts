@@ -2,7 +2,7 @@ import { type Hex, createWalletClient, getAddress, http, keccak256, stringToByte
 import { privateKeyToAccount } from "viem/accounts";
 import { publicClient } from "@/lib/client";
 import { HUMAN_REGISTRY, chain, registryAbi } from "@/lib/contracts";
-import { challengeByToken, claimChallenge, grantPass } from "@/lib/db";
+import { challengeByToken, claimChallenge, grantPass, releaseChallengeClaim } from "@/lib/db";
 import { identityMode, required } from "@/lib/env";
 import { releaseHeldMessage } from "@/lib/hold";
 
@@ -58,7 +58,11 @@ export async function POST(request: Request) {
   // matters because recording personhood waits on a transaction, so a slow
   // reply and an impatient reload are ordinary. The pass is already theirs.
   if (challenge.resolved_at) {
-    return Response.json({ status: "cleared", reason: "human", delivered: false });
+    return Response.json({
+      status: "cleared",
+      reason: "human",
+      delivered: challenge.delivered_at !== null,
+    });
   }
 
   let nullifier: string;
@@ -85,9 +89,23 @@ export async function POST(request: Request) {
   // a transaction receipt, so two posts of one token overlap easily, and
   // granting first would mint two windows from one proof before either lost.
   if (!(await claimChallenge(token))) {
-    return Response.json({ status: "cleared", reason: "human", delivered: false });
+    const settled = await challengeByToken(token);
+    return Response.json({
+      status: "cleared",
+      reason: "human",
+      delivered: settled?.delivered_at !== null && settled?.delivered_at !== undefined,
+    });
   }
-  await grantPass(challenge.handle, challenge.sender, "human", null);
+
+  try {
+    await grantPass(challenge.handle, challenge.sender, "human", null);
+  } catch (cause) {
+    // Claimed for a pass that was never minted. Left as it stands the sender
+    // has proved they are a person, holds nothing, and every retry tells them
+    // it is already answered.
+    await releaseChallengeClaim(token);
+    throw cause;
+  }
 
   return Response.json({
     status: "cleared",

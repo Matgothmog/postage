@@ -1,14 +1,16 @@
 import { randomUUID } from "node:crypto";
 import type { Hex } from "viem";
 import { challengeMail } from "@/lib/challenge-email";
-import { classify, extractUrls, type MailFacts } from "@/lib/classify";
+import { classify, extractUrls, type MailFacts, type Verdict } from "@/lib/classify";
 import { publicClient } from "@/lib/client";
 import { POSTAGE_ESCROW, escrowAbi } from "@/lib/contracts";
 import {
   HOLD_SECONDS,
+  classificationBudgetSpent,
   createChallenge,
   inboxByHandle,
   purgeExpiredHolds,
+  recordClassification,
   spendPass,
   walletForSender,
 } from "@/lib/db";
@@ -25,6 +27,18 @@ interface InboundPayload {
   spf?: string;
   dkim?: string;
   dmarc?: string;
+}
+
+/// Stands in for a verdict when too much has already been read this hour. It
+/// charges rather than blocks, and never claims to have found deception, since
+/// nothing actually looked.
+function floodedVerdict(): Verdict {
+  return {
+    tier: "commercial",
+    confidence: 0,
+    reasons: ["More mail arrived this hour than this inbox reads, so it was not judged"],
+    degraded: true,
+  };
 }
 
 /// Whether the receiving MTA could confirm the envelope sender is who it says.
@@ -93,7 +107,13 @@ export async function POST(request: Request) {
   // and a person who proved they were a person can still be phishing. Skipping
   // the classifier here would have made a single proof a fifteen minute licence
   // to deliver anything at all.
-  const verdict = await classify(facts);
+  // Past the hourly budget the model is not asked at all and the message is
+  // held as ordinary automated mail. Held rather than delivered, because
+  // failing open here would make a flood the way through the gate rather than
+  // merely the way to run up a bill.
+  const overBudget = await classificationBudgetSpent(handle, sender);
+  const verdict = overBudget ? floodedVerdict() : await classify(facts);
+  if (!overBudget) await recordClassification(handle, sender);
 
   // Checked before any pass is spent. This tier is free and grants nothing, so
   // taking a paid use for it would charge someone twice for one delivery.

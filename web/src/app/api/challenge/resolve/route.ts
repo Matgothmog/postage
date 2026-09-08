@@ -5,7 +5,6 @@ import {
   challengeByToken,
   claimChallenge,
   grantPass,
-  hasLivePass,
   linkSenderWallet,
   releaseChallengeClaim,
 } from "@/lib/db";
@@ -30,14 +29,14 @@ export async function POST(request: Request) {
   // Answering a settled challenge with its own outcome rather than a bare
   // refusal. The sender may simply have lost the first reply, and telling them
   // nothing happened would be worse than telling them what did.
-  if (challenge.resolved_at) return Response.json(await settledOutcome(challenge));
+  if (challenge.resolved_at) return Response.json(settledOutcome(challenge));
 
   const payer = await payerOf(challenge.message_id as Hex);
   if (!payer) return Response.json({ status: "pending" });
 
   // One statement, so two tabs cannot both believe they are the one settling
   // this. Whoever loses is told the outcome rather than an error.
-  if (!(await claimChallenge(token))) return Response.json(await settledOutcome(challenge));
+  if (!(await claimChallenge(token))) return Response.json(settledOutcome(challenge));
 
   try {
     // Taken from the escrow rather than the request, because whoever calls this
@@ -69,21 +68,29 @@ export async function POST(request: Request) {
   }
 }
 
-/// A read that failed because of what we asked, rather than whether we could
-/// reach anyone to ask it.
-function looksLikeMisconfiguration(cause: unknown): boolean {
-  const name = cause instanceof Error ? cause.name : "";
-  return /Abi|ContractFunction|Decode/i.test(name);
+/// Whether a failed read was the network rather than the request.
+///
+/// viem wraps every `readContract` failure in a ContractFunctionExecutionError,
+/// so the outermost name tells us nothing at all — an unreachable node and a
+/// stale ABI arrive under the same one. What separates them is further down the
+/// cause chain.
+function looksTransient(cause: unknown): boolean {
+  for (let error = cause, depth = 0; error instanceof Error && depth < 8; depth += 1) {
+    if (/HttpRequest|Timeout|SocketClosed|Connection|Fetch/i.test(error.name)) return true;
+    error = error.cause;
+  }
+  return false;
 }
 
 /// What a challenge that is already settled should say. Dangerous mail was
-/// charged and not delivered. Anything else was cleared, and whether the held
-/// message went is read off the pass rather than guessed: a live one is the
-/// way back in that only exists when delivery failed.
-async function settledOutcome(challenge: { tier: string; handle: string; sender: string }) {
+/// charged and not delivered; anything else was cleared, and whether the held
+/// message actually went is read off the challenge rather than inferred. Pass
+/// state cannot answer it: a human pass earned on an earlier message looks
+/// exactly like one granted because delivery failed, and reading it during
+/// another request's work answers about a moment that has already passed.
+function settledOutcome(challenge: { tier: string; delivered_at: number | null }) {
   if (challenge.tier === "dangerous") return { status: "charged", reason: "dangerous" };
-  const pending = await hasLivePass(challenge.handle, challenge.sender);
-  return { status: "cleared", reason: "paid", delivered: !pending };
+  return { status: "cleared", reason: "paid", delivered: challenge.delivered_at !== null };
 }
 
 /// The address the escrow recorded as having paid, or null if nobody has.
@@ -105,7 +112,7 @@ async function payerOf(messageId: Hex): Promise<string | null> {
     // address or an ABI that drifted from the deployed contract would otherwise
     // read exactly like nobody having paid, and every sender whose money had
     // already left their wallet would be told to keep waiting.
-    if (looksLikeMisconfiguration(cause)) throw cause;
+    if (!looksTransient(cause)) throw cause;
     console.error("Could not read the escrow settlement", cause);
     return null;
   }

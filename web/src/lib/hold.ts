@@ -1,4 +1,4 @@
-import { claimHold, inboxByHandle } from "./db";
+import { claimHold, inboxByHandle, markDelivered } from "./db";
 import { required } from "./env";
 
 export type Release =
@@ -30,7 +30,10 @@ export async function releaseHeldMessage(token: string, handle: string): Promise
       },
       body: JSON.stringify({ token, to: inbox.destination }),
     });
-    if (response.ok) return { delivered: true };
+    if (response.ok) {
+      await markDelivered(token);
+      return { delivered: true };
+    }
   } catch {
     // The gate is open either way; the sender can paste it back in.
   }

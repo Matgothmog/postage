@@ -1,5 +1,12 @@
 import { classify, extractUrls } from "@/lib/classify";
-import { challengeByToken, hasLivePass, inboxByHandle, refundPass, spendPass } from "@/lib/db";
+import {
+  challengeByToken,
+  extendPass,
+  hasLivePass,
+  inboxByHandle,
+  refundPass,
+  spendPass,
+} from "@/lib/db";
 import { relayHeldMessage } from "@/lib/mail";
 
 const MAX_SUBJECT = 200;
@@ -85,6 +92,10 @@ export async function POST(request: Request) {
   // text has no headers to read. Relaying it under our own name while unable to
   // judge it is how a gateway lends its reputation to whatever it is handed.
   if (pasted.degraded) {
+    // The window is pushed back out, because the reason we cannot judge this is
+    // ours. Without it a long outage silently spends a paid sender's fifteen
+    // minutes and leaves them with nothing.
+    await extendPass(challenge.handle, challenge.sender);
     return Response.json(
       { error: "Cannot check that right now. Try again in a few minutes" },
       { status: 503 }
@@ -108,10 +119,10 @@ export async function POST(request: Request) {
       body: body.trim(),
     });
   } catch (cause) {
-    // Nothing was delivered, so the use goes back. A sender who paid and then
-    // met an outage would otherwise be left with a settled challenge, a spent
-    // pass and no way through that they could buy again.
-    await refundPass(challenge.handle, challenge.sender);
+    // Nothing was delivered, so the use goes back. Best effort: whatever broke
+    // the relay may well break this too, and the sender should still be told
+    // what actually went wrong rather than being handed a second failure.
+    await refundPass(challenge.handle, challenge.sender).catch(() => {});
     const detail = cause instanceof Error ? cause.message : "Could not deliver it";
     return Response.json({ error: detail }, { status: 502 });
   }

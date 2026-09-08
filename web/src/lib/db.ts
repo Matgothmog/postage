@@ -44,6 +44,15 @@ const SCHEMA = [
      cf_verified_at INTEGER,
      created_at INTEGER NOT NULL
    )`,
+  /// One row per message we paid a model to read. Kept only long enough to cap
+  /// what a flood can cost.
+  `CREATE TABLE IF NOT EXISTS classifications (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     handle TEXT NOT NULL,
+     sender TEXT NOT NULL,
+     at INTEGER NOT NULL
+   )`,
+  `CREATE INDEX IF NOT EXISTS classifications_recent ON classifications (handle, at)`,
   /// Every address we have asked to confirm, kept only long enough to throttle.
   /// Claims are keyed on handle, so they cannot answer how often one mailbox
   /// has been mailed.
@@ -89,6 +98,7 @@ const SCHEMA = [
 /// 500, because the statement meant to erase expired holds named a column it did
 /// not have. Adding a column is not optional work to be done by hand later.
 const ADDED_COLUMNS: { table: string; column: string; type: string }[] = [
+  { table: "challenges", column: "delivered_at", type: "INTEGER" },
   { table: "challenges", column: "held_until", type: "INTEGER" },
 ];
 
@@ -365,9 +375,10 @@ export interface Challenge {
   quote_json: string;
   created_at: number;
   resolved_at: number | null;
+  delivered_at: number | null;
 }
 
-export async function createChallenge(challenge: Omit<Challenge, "resolved_at">): Promise<void> {
+export async function createChallenge(challenge: Omit<Challenge, "resolved_at" | "delivered_at">): Promise<void> {
   await run(
     `INSERT INTO challenges
        (token, handle, sender, message_id, tier, amount, quote_json, held_until, created_at)
@@ -447,6 +458,62 @@ export async function refundPass(handle: string, sender: string): Promise<void> 
     `UPDATE passes SET uses_left = 1
      WHERE handle = ? AND sender = ? AND uses_left = 0 AND expires_at > ?`,
     [handle.toLowerCase(), sender.toLowerCase(), Math.floor(Date.now() / 1000)]
+  );
+}
+
+/// Records that the held message actually reached the recipient, so nobody has
+/// to guess afterwards. Pass state cannot answer this: a human pass from an
+/// earlier message looks the same as one granted because delivery failed.
+export async function markDelivered(token: string): Promise<void> {
+  await run(`UPDATE challenges SET delivered_at = ? WHERE token = ?`, [
+    Math.floor(Date.now() / 1000),
+    token,
+  ]);
+}
+
+/// Pushes a pass's expiry back out. Used when the gate is willing but something
+/// on our side is not, so an outage cannot quietly run out the clock on someone
+/// who has already paid.
+export async function extendPass(handle: string, sender: string): Promise<void> {
+  await run(
+    `UPDATE passes SET expires_at = ? WHERE handle = ? AND sender = ? AND expires_at > ?`,
+    [
+      Math.floor(Date.now() / 1000) + PASS_WINDOW_SECONDS,
+      handle.toLowerCase(),
+      sender.toLowerCase(),
+      Math.floor(Date.now() / 1000),
+    ]
+  );
+}
+
+/// What one handle, and one sender writing to it, may cost in model calls per
+/// hour. Reading every message is what makes the gate work, but nothing else
+/// stands between a flood and an unbounded bill, because classification now
+/// happens before any pass is consulted.
+export const CLASSIFY_PER_HANDLE_HOURLY = 200;
+export const CLASSIFY_PER_SENDER_HOURLY = 20;
+
+export async function recordClassification(handle: string, sender: string): Promise<void> {
+  await run(`INSERT INTO classifications (handle, sender, at) VALUES (?, ?, ?)`, [
+    handle.toLowerCase(),
+    sender.toLowerCase(),
+    Math.floor(Date.now() / 1000),
+  ]);
+}
+
+export async function classificationBudgetSpent(handle: string, sender: string): Promise<boolean> {
+  const since = Math.floor(Date.now() / 1000) - 60 * 60;
+  const rows = await all<{ forHandle: number; forSender: number }>(
+    `SELECT COUNT(*) AS forHandle,
+            SUM(CASE WHEN sender = ? THEN 1 ELSE 0 END) AS forSender
+     FROM classifications WHERE handle = ? AND at > ?`,
+    [sender.toLowerCase(), handle.toLowerCase(), since]
+  );
+  const counted = rows[0];
+  if (!counted) return false;
+  return (
+    Number(counted.forHandle) >= CLASSIFY_PER_HANDLE_HOURLY ||
+    Number(counted.forSender ?? 0) >= CLASSIFY_PER_SENDER_HOURLY
   );
 }
 
