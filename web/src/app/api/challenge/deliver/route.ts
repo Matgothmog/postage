@@ -34,6 +34,16 @@ export async function POST(request: Request) {
     return Response.json({ error: "Clear the gate first" }, { status: 403 });
   }
 
+  // The third way out of a challenge, and the one that forgot. Paying a
+  // dangerous verdict is a penalty, not a purchase, so this route must not sell
+  // what the other two refuse to give away.
+  if (challenge.tier === "dangerous") {
+    return Response.json(
+      { error: "This will not be delivered whoever sends it, and paying did not buy that" },
+      { status: 403 }
+    );
+  }
+
   const inbox = await inboxByHandle(challenge.handle);
   if (!inbox) return Response.json({ error: "That inbox no longer exists" }, { status: 404 });
 

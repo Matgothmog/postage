@@ -104,6 +104,8 @@ let ready: Promise<Client> | null = null;
 
 function db(): Promise<Client> {
   if (ready) return ready;
+  // Cleared on failure, or one unreachable moment at cold start would reject
+  // every query for the life of the process, long after the database recovered.
   ready = (async () => {
     const client = createClient({
       url: process.env.DATABASE_URL ?? "file:.data/postage.db",
@@ -113,6 +115,9 @@ function db(): Promise<Client> {
     await addMissingColumns(client);
     return client;
   })();
+  ready.catch(() => {
+    ready = null;
+  });
   return ready;
 }
 
@@ -170,14 +175,17 @@ export async function spendPass(handle: string, sender: string): Promise<Pass | 
   );
   const pass = rows[0];
   if (!pass) return null;
+  if (pass.uses_left === null) return pass;
 
-  if (pass.uses_left !== null) {
-    await run(
-      `UPDATE passes SET uses_left = uses_left - 1 WHERE handle = ? AND sender = ? AND uses_left > 0`,
-      [handle.toLowerCase(), sender.toLowerCase()]
-    );
-  }
-  return pass;
+  // Spent by the same conditional update `consumeAttempt` uses, so two messages
+  // arriving together cannot both read one remaining use and both be delivered.
+  const client = await db();
+  const spent = await client.execute({
+    sql: `UPDATE passes SET uses_left = uses_left - 1
+          WHERE handle = ? AND sender = ? AND uses_left > 0`,
+    args: [handle.toLowerCase(), sender.toLowerCase()],
+  });
+  return spent.rowsAffected > 0 ? pass : null;
 }
 
 export async function grantPass(

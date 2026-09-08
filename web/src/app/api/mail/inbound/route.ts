@@ -77,15 +77,6 @@ export async function POST(request: Request) {
   const sender = from.toLowerCase();
   const authenticated = senderIsAuthenticated(payload);
 
-  // A live pass, and the envelope it was earned with. Passes run out, so this
-  // is a sender who cleared the gate minutes ago rather than ever.
-  if (authenticated) {
-    const pass = await spendPass(handle, sender);
-    if (pass) {
-      return Response.json({ action: "forward", to: inbox.destination, reason: pass.reason });
-    }
-  }
-
   const facts: MailFacts = {
     from: sender,
     to,
@@ -97,7 +88,26 @@ export async function POST(request: Request) {
     urls: extractUrls(payload.body ?? ""),
   };
 
+  // Read before any pass is honoured. A pass says this sender got through the
+  // gate a few minutes ago; it says nothing about what they have written since,
+  // and a person who proved they were a person can still be phishing. Skipping
+  // the classifier here would have made a single proof a fifteen minute licence
+  // to deliver anything at all.
   const verdict = await classify(facts);
+
+  // A live pass, and the envelope it was earned with. Passes run out, so this
+  // is a sender who cleared the gate minutes ago rather than ever.
+  if (authenticated && verdict.tier !== "dangerous") {
+    const pass = await spendPass(handle, sender);
+    if (pass) {
+      return Response.json({
+        action: "forward",
+        to: inbox.destination,
+        reason: pass.reason,
+        verdict,
+      });
+    }
+  }
 
   // The only tier that is never held. It grants no pass, because the next
   // message from the same sender has to earn its own way through.

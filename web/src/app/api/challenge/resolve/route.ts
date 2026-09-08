@@ -1,84 +1,68 @@
-import { type Hex, isAddress } from "viem";
+import { type Hex } from "viem";
 import { publicClient } from "@/lib/client";
-import { HUMAN_REGISTRY, POSTAGE_ESCROW, escrowAbi, registryAbi } from "@/lib/contracts";
+import { POSTAGE_ESCROW, escrowAbi } from "@/lib/contracts";
 import { challengeByToken, grantPass, linkSenderWallet, resolveChallenge } from "@/lib/db";
 import { releaseHeldMessage } from "@/lib/hold";
 
-/// A credential lasts 90 days onchain, so simply holding one proves a person
-/// verified at some point — not that anyone is here now. Requiring the
-/// attestation to be nearly its full length makes it evidence of the last few
-/// minutes, which is what a gate in front of an inbox actually needs.
-const CREDENTIAL_LIFETIME_SECONDS = 90 * 24 * 60 * 60;
-const PROOF_FRESHNESS_SECONDS = 10 * 60;
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
-/// A sender clears the gate one of two ways, and both are checked against the
-/// chain rather than taken on the browser's word: they proved personhood just
-/// now, or their payment for this exact message has settled.
+/// Settles the paying half of a challenge. Personhood is not handled here:
+/// proving it needs no wallet and lives in `/api/world/verify`, which checks a
+/// proof rather than reading a credential off an address the caller named.
 ///
-/// Clearing it grants a pass that runs out. Personhood opens a short window,
-/// because a proof describes a moment rather than an address. Paying buys one
-/// delivery, because that is what was paid for.
+/// Paying buys one delivery, because that is what was paid for.
 export async function POST(request: Request) {
-  const { token, wallet } = (await request.json()) as { token?: string; wallet?: string };
-  if (!token || !wallet || !isAddress(wallet)) {
-    return Response.json({ error: "token and a valid wallet are required" }, { status: 400 });
-  }
+  const { token } = (await request.json()) as { token?: string };
+  if (!token) return Response.json({ error: "A challenge token is required" }, { status: 400 });
 
   const challenge = await challengeByToken(token);
   if (!challenge) return Response.json({ error: "Unknown challenge" }, { status: 404 });
 
-  const dangerous = challenge.tier === "dangerous";
-
-  // Deception is not something being a person excuses, so this route stays shut
-  // however convincingly the sender verifies.
-  if (!dangerous && (await verifiedJustNow(wallet))) {
-    await grantPass(challenge.handle, challenge.sender, "human", null);
-    await resolveChallenge(token);
-    return Response.json({
-      status: "cleared",
-      reason: "human",
-      ...(await releaseHeldMessage(token, challenge.handle)),
-    });
+  // A settled message stays settled onchain forever, so without this one
+  // payment could be redeemed for a fresh pass as often as it was asked for.
+  if (challenge.resolved_at) {
+    return Response.json({ status: "spent", reason: "Already settled" }, { status: 409 });
   }
 
-  if (await hasPaid(challenge.message_id as Hex)) {
-    await linkSenderWallet(challenge.sender, wallet);
-    await resolveChallenge(token);
+  const payer = await payerOf(challenge.message_id as Hex);
+  if (!payer) return Response.json({ status: "pending" });
 
-    if (dangerous) {
-      // The money is taken and the message still does not arrive. Paying here
-      // is a penalty, not a price.
-      return Response.json({ status: "charged", reason: "dangerous" });
-    }
+  await resolveChallenge(token);
 
-    await grantPass(challenge.handle, challenge.sender, "paid", 1);
-    return Response.json({
-      status: "cleared",
-      reason: "paid",
-      ...(await releaseHeldMessage(token, challenge.handle)),
-    });
+  // Taken from the escrow rather than the request, because whoever calls this
+  // could otherwise name any wallet and inherit its reputation. The contract
+  // recorded who actually paid.
+  await linkSenderWallet(challenge.sender, payer);
+
+  if (challenge.tier === "dangerous") {
+    // The money is taken and the message still does not arrive. Paying here is
+    // a penalty, not a price.
+    return Response.json({ status: "charged", reason: "dangerous" });
   }
 
-  return Response.json({ status: "pending" });
+  await grantPass(challenge.handle, challenge.sender, "paid", 1);
+  return Response.json({
+    status: "cleared",
+    reason: "paid",
+    ...(await releaseHeldMessage(token, challenge.handle)),
+  });
 }
 
-async function verifiedJustNow(wallet: string): Promise<boolean> {
-  const humanUntil = await publicClient.readContract({
-    address: HUMAN_REGISTRY,
-    abi: registryAbi,
-    functionName: "humanUntil",
-    args: [wallet as Hex],
-  });
-
-  const now = Math.floor(Date.now() / 1000);
-  return Number(humanUntil) > now + CREDENTIAL_LIFETIME_SECONDS - PROOF_FRESHNESS_SECONDS;
-}
-
-async function hasPaid(messageId: Hex): Promise<boolean> {
-  return publicClient.readContract({
-    address: POSTAGE_ESCROW,
-    abi: escrowAbi,
-    functionName: "settled",
-    args: [messageId],
-  });
+/// The address the escrow recorded as having paid, or null if nobody has.
+///
+/// A chain that cannot be read right now is a payment we cannot see yet, which
+/// is what "pending" means. Throwing here would tell a sender who had just paid
+/// that something was wrong with them.
+async function payerOf(messageId: Hex): Promise<string | null> {
+  try {
+    const [, , payer] = await publicClient.readContract({
+      address: POSTAGE_ESCROW,
+      abi: escrowAbi,
+      functionName: "settlementOf",
+      args: [messageId],
+    });
+    return payer && payer !== ZERO_ADDRESS ? payer : null;
+  } catch {
+    return null;
+  }
 }
