@@ -72,7 +72,10 @@ export async function POST(request: Request) {
   // The same budget the inbound path answers to. A human pass is unlimited for
   // fifteen minutes, so without this anyone holding one could post bodies in a
   // loop and every one would be a model call nothing counted.
-  if (!(await claimClassification(challenge.handle, challenge.sender))) {
+  // Counted against its own pool, not the inbox's. Sharing it let a handful of
+  // senders with live passes spend a recipient's whole hourly allowance on
+  // refused pastes, after which that inbox stopped being read at all.
+  if (!(await claimClassification(`paste:${challenge.handle}`, challenge.sender))) {
     return Response.json(
       { error: "Too much has been sent this hour. Try again later" },
       { status: 429 }

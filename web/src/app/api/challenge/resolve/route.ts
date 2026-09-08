@@ -26,7 +26,11 @@ export async function POST(request: Request) {
   // way. The money left their wallet either way, and forgetting it prices their
   // next message as a stranger's.
   if (payer) await linkSenderWallet(challenge.sender, payer);
-  if (!payer && !challenge.resolved_at) return Response.json({ status: "pending" });
+
+  // No payment, no paid lane — settled or not. Letting an already-settled
+  // challenge through here would hand a delivery to anyone who knew a token
+  // that had been answered, without paying for anything.
+  if (!payer) return Response.json({ status: "pending" });
 
   const result = await openGate(token, "paid");
   if (result.status === "unknown") {

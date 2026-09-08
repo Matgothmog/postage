@@ -4,6 +4,7 @@ import {
   claimChallenge,
   grantPass,
   hasLivePass,
+  markEntitled,
   releaseChallengeClaim,
   type Challenge,
 } from "./db";
@@ -60,20 +61,29 @@ export async function openGate(token: string, lane: Lane): Promise<GateResult> {
 }
 
 async function settle(challenge: Challenge, token: string, lane: Lane): Promise<GateResult> {
-  if (lane === "human") {
-    // The window comes first and the message goes inside it, because the window
-    // is what was earned. Delivering is not what a proof buys; being able to is.
-    await grantPass(challenge.handle, challenge.sender, "human", null);
-    const released = await releaseHeldMessage(token, challenge.handle);
-    return { status: "cleared", reason: "human", delivered: released.delivered };
-  }
+  // The message goes out before anything is granted, on both lanes. Granting
+  // first leaves a pass standing if this throws, and the rollback below would
+  // then reopen a challenge whose sender is already holding what it owed.
+  const released = challenge.delivered_at != null
+    ? { delivered: true }
+    : await releaseHeldMessage(token, challenge.handle);
 
-  // The message goes first and a use is granted only if it did not, because a
-  // payment buys one delivery. Granting as well as delivering would hand the
-  // sender a second message they never paid for.
-  const released = await releaseHeldMessage(token, challenge.handle);
-  if (!released.delivered) await addPaidUse(challenge.handle, challenge.sender);
-  return { status: "cleared", reason: "paid", delivered: released.delivered };
+  await grant(challenge, lane, released.delivered);
+  await markEntitled(token);
+  return { status: "cleared", reason: lane, delivered: released.delivered };
+}
+
+/// What each lane is owed once the message has been dealt with.
+///
+/// A proof buys a window, so it is opened whether or not the held message went:
+/// being able to write is the thing that was earned. A payment buys one
+/// delivery, so it owes nothing further if that delivery already happened.
+async function grant(challenge: Challenge, lane: Lane, delivered: boolean): Promise<void> {
+  if (lane === "human") {
+    await grantPass(challenge.handle, challenge.sender, "human", null);
+    return;
+  }
+  if (!delivered) await addPaidUse(challenge.handle, challenge.sender);
 }
 
 /// Someone else settled this, or we did and the answer was lost. Report what
@@ -87,9 +97,20 @@ async function recover(token: string, before: Challenge, lane: Lane): Promise<Ga
   if (settled.tier === "dangerous") return { status: "charged", reason: "dangerous" };
 
   const delivered = settled.delivered_at != null;
-  if (!delivered && !(await hasLivePass(settled.handle, settled.sender))) {
-    if (lane === "human") await grantPass(settled.handle, settled.sender, "human", null);
-    else await addPaidUse(settled.handle, settled.sender);
+  const holdsNothing = !(await hasLivePass(settled.handle, settled.sender));
+
+  if (!delivered && holdsNothing) {
+    if (lane === "human") {
+      // A fresh proof was presented to reach here, and that is the price of a
+      // window. Re-earning one is the design, not a leak.
+      await grantPass(settled.handle, settled.sender, "human", null);
+    } else if (settled.entitled_at == null) {
+      // A payment settles onchain forever, so "have they paid" is true for good
+      // and cannot decide this. Only whether this challenge has already handed
+      // over what that payment bought.
+      await addPaidUse(settled.handle, settled.sender);
+      await markEntitled(token);
+    }
   }
 
   return { status: "cleared", reason: settled.settled_by ?? lane, delivered };

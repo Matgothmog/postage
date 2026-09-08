@@ -101,6 +101,7 @@ const SCHEMA = [
 /// 500, because the statement meant to erase expired holds named a column it did
 /// not have. Adding a column is not optional work to be done by hand later.
 const ADDED_COLUMNS: { table: string; column: string; type: string }[] = [
+  { table: "challenges", column: "entitled_at", type: "INTEGER" },
   { table: "challenges", column: "settled_by", type: "TEXT" },
   { table: "challenges", column: "delivered_at", type: "INTEGER" },
   { table: "challenges", column: "held_until", type: "INTEGER" },
@@ -151,6 +152,14 @@ async function all<T>(sql: string, args: unknown[] = []): Promise<T[]> {
 async function run(sql: string, args: unknown[] = []): Promise<void> {
   const client = await db();
   await client.execute({ sql, args: args as never });
+}
+
+/// Empties every table. Test support: the gate's invariants are about what one
+/// clearing leaves behind, which can only be asserted from a known-empty start.
+export async function reset(): Promise<void> {
+  for (const table of ["passes", "challenges", "classifications", "inboxes", "allowlist"]) {
+    await run(`DELETE FROM ${table}`).catch(() => {});
+  }
 }
 
 export async function createInbox(
@@ -380,11 +389,12 @@ export interface Challenge {
   created_at: number;
   resolved_at: number | null;
   delivered_at: number | null;
+  entitled_at: number | null;
   settled_by: string | null;
 }
 
 export async function createChallenge(
-  challenge: Omit<Challenge, "resolved_at" | "delivered_at" | "settled_by">
+  challenge: Omit<Challenge, "resolved_at" | "delivered_at" | "entitled_at" | "settled_by">
 ): Promise<void> {
   await run(
     `INSERT INTO challenges
@@ -463,8 +473,8 @@ export async function releaseChallengeClaim(token: string): Promise<void> {
 /// delivery nobody paid for.
 export async function refundPass(handle: string, sender: string): Promise<void> {
   await run(
-    `UPDATE passes SET uses_left = 1
-     WHERE handle = ? AND sender = ? AND uses_left = 0 AND expires_at > ?`,
+    `UPDATE passes SET uses_left = uses_left + 1
+     WHERE handle = ? AND sender = ? AND uses_left IS NOT NULL AND expires_at > ?`,
     [handle.toLowerCase(), sender.toLowerCase(), Math.floor(Date.now() / 1000)]
   );
 }
@@ -472,6 +482,16 @@ export async function refundPass(handle: string, sender: string): Promise<void> 
 /// Records that the held message actually reached the recipient, so nobody has
 /// to guess afterwards. Pass state cannot answer this: a human pass from an
 /// earlier message looks the same as one granted because delivery failed.
+/// Records that this challenge has issued what it owed, so it cannot issue it
+/// again. A payment settles onchain forever, and without this the sender could
+/// spend the delivery it bought and then ask for another.
+export async function markEntitled(token: string): Promise<void> {
+  await run(`UPDATE challenges SET entitled_at = ? WHERE token = ? AND entitled_at IS NULL`, [
+    Math.floor(Date.now() / 1000),
+    token,
+  ]);
+}
+
 export async function markDelivered(token: string): Promise<void> {
   await run(`UPDATE challenges SET delivered_at = ? WHERE token = ?`, [
     Math.floor(Date.now() / 1000),
@@ -562,7 +582,17 @@ export async function addPaidUse(handle: string, sender: string): Promise<void> 
   });
   if (topped.rowsAffected > 0) return;
 
-  if (await hasLivePass(handle, sender)) return;
+  // An unlimited window is already better than a use, so it is not replaced.
+  // It is pushed out instead, because the payment has to buy something: without
+  // this a sender who paid a minute before their free window lapsed would be
+  // left holding nothing for money that has already left their wallet.
+  const extended = await client.execute({
+    sql: `UPDATE passes SET expires_at = ?
+          WHERE handle = ? AND sender = ? AND expires_at > ? AND uses_left IS NULL`,
+    args: [now + PASS_WINDOW_SECONDS, handle.toLowerCase(), sender.toLowerCase(), now],
+  });
+  if (extended.rowsAffected > 0) return;
+
   await grantPass(handle, sender, "paid", 1);
 }
 
