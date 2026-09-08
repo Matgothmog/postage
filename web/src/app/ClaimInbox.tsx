@@ -384,11 +384,12 @@ function FinishClaim({
           {claim.cloudflareVerified ? null : stalled ? (
             <div className="mt-2">
               <p className="text-sm leading-relaxed text-ink-soft">
-                We have stopped watching for it. Clicking the link Cloudflare sent still works — reload
-                this page afterwards and you are done.
+                We have stopped watching for it. Clicking the link Cloudflare sent is still worth
+                doing and is remembered — but finishing from here means starting again, which is
+                quick and skips nothing you have already done.
               </p>
               <button onClick={onRestart} className={`${quietButton} -ml-3 mt-1`}>
-                Or start again with a new code
+                Start again
               </button>
             </div>
           ) : claim.codeVerified ? (

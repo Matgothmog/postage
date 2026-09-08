@@ -17,6 +17,7 @@ changing.
 - [x] Round 5: verify the copied ABIs against the artifacts; correct KNOWN_ISSUES
 - [x] Round 6: side effects out of state updaters
 - [x] Round 7: converge — build, typecheck, lint, 17 node tests, 40 forge tests
+- [x] Round 8: cap the Cloudflare polling, bind the code to its wallet, limit claims
 
 ## Decisions
 
@@ -36,6 +37,22 @@ changing.
   against `contracts/out/*.json` and is in sync; trimming it by hand is editing a
   generated artifact for a cosmetic win.
 
+- The Cloudflare question is rationed per claim, not per caller. Rejected:
+  authenticating the poller, which would mean a signature prompt every four
+  seconds on the one screen that is meant to need nothing; and making the route
+  read-only, which leaves nothing to promote the claim and hands the user a page
+  that never turns green.
+- `attachDestination` counts as a check, because `ensureDestination` asked
+  Cloudflare the same question moments earlier. Without it every signup spent two
+  calls to learn one thing.
+- Confirming a code requires the wallet the claim was started with, proved by
+  Privy identity token or by signature — the same two proofs the claim itself
+  takes. Checked before the attempt is counted, so a stranger cannot burn the
+  real claimer's five guesses.
+- Claims are limited per wallet as well as per destination, at five an hour. The
+  destination limit is blind to one wallet naming a fresh address each time,
+  which is exactly the shape that drains the Cloudflare destination cap.
+
 ## Surprises
 
 - `KNOWN_ISSUES` listed "`settleClaim` ignores `expires_at`" as a verified
@@ -49,6 +66,11 @@ changing.
   had never run. It does now, and it passes.
 - Returning 409 for "this inbox has no wallet" made the worker tell the sender's
   server to retry, forever, over a permanent condition.
+- The app had no way to configure its RPC endpoint, so it used the public one in
+  Arc's chain definition — shared with everyone else using that chain. Every held
+  message reads `effectiveFloor` through it, and the test suite was the first
+  thing to be rate limited off it. `ARC_RPC_URL` now overrides it, and the
+  inbound test answers its own `eth_call` rather than reaching the network.
 
 ## Summary
 
@@ -69,11 +91,12 @@ Tests: added the authenticated-sender half of the free-tier rule and renamed the
 test that claimed to be it. 17 node tests, 40 forge tests, `next build`, `tsc`
 and `eslint` all green.
 
-Not done: World ID in the browser; `GET /api/inbox/verify` still promotes a claim
-on an unauthenticated read; the long signup's code confirmation is still not
-bound to a wallet; no rate limiting beyond claim emails; no scheduled job, so a
-claim still strands if the tab closes; no destination deletion path.
+Not done: World ID in the browser; no scheduled job, so a claim still strands if
+the tab closes — which is now visible, because a claim that spends its Cloudflare
+budget says so and offers to start again; no destination deletion path, which is
+the next thing the account cap will break; no rate limiting outside the claim
+path.
 
-Follow-ups: the three above marked as needing a schema change or an auth
-decision; a `typescript` devDependency for the worker so it has its own
-typecheck script.
+Follow-ups: a `typescript` devDependency for the worker so it has its own
+typecheck script; `web/src/lib/contracts.ts` could lose ~1000 lines of unused
+ABI, though it was checked against the artifacts and is not stale.
