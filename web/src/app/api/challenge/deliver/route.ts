@@ -3,10 +3,10 @@ import {
   challengeByToken,
   claimClassification,
   extendPassIfExpiring,
-  releaseClassificationSlot,
   hasLivePass,
   inboxByHandle,
   refundPass,
+  releaseClassificationSlot,
   spendPass,
 } from "@/lib/db";
 import { postageAddress } from "@/lib/handle";

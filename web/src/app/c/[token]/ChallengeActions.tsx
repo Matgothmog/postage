@@ -44,7 +44,7 @@ export function ChallengeActions({
   lane: "choosing" | "paying";
 }) {
   const [lane, setLane] = useState(dangerous ? "choosing" : initialLane);
-  const [busy, setBusy] = useState<"human" | "pay" | null>(null);
+  const [verifying, setVerifying] = useState(false);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
 
   if (outcome?.kind === "charged") {
@@ -79,7 +79,7 @@ export function ChallengeActions({
   /// No wallet anywhere on this path. Proving personhood is not a payment, so
   /// it should not need an account to make one.
   async function verifyHuman() {
-    setBusy("human");
+    setVerifying(true);
     setOutcome(null);
     try {
       const response = await fetch("/api/world/verify", {
@@ -97,7 +97,7 @@ export function ChallengeActions({
     } catch (cause) {
       setOutcome({ kind: "error", message: asMessage(cause) });
     } finally {
-      setBusy(null);
+      setVerifying(false);
     }
   }
 
@@ -114,8 +114,8 @@ export function ChallengeActions({
 
   return (
     <div className="mt-8 space-y-3">
-      <button onClick={verifyHuman} disabled={busy !== null} className={`${primaryButton} w-full`}>
-        {busy === "human" ? "Verifying" : "A person wrote this"}
+      <button onClick={verifyHuman} disabled={verifying} className={`${primaryButton} w-full`}>
+        {verifying ? "Verifying" : "A person wrote this"}
       </button>
       <p className="px-1 text-xs leading-relaxed text-ink-faint">
         Prove it with World ID and your message is delivered. Free, no wallet, nothing to install
@@ -126,7 +126,7 @@ export function ChallengeActions({
         <>
           <button
             onClick={() => setLane("paying")}
-            disabled={busy !== null}
+            disabled={verifying}
             className="w-full rounded-xl border border-rule-strong bg-card px-5 py-3 text-sm font-medium text-ink transition hover:border-ink disabled:opacity-40"
           >
             A machine sent this — pay {formatUsdc(BigInt(quote.amount))}
