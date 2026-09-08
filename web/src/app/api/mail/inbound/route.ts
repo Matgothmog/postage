@@ -1,17 +1,16 @@
 import { randomUUID } from "node:crypto";
 import type { Hex } from "viem";
 import { challengeMail } from "@/lib/challenge-email";
-import { classify, extractUrls, type MailFacts, type Verdict } from "@/lib/classify";
+import { classify, classifyFromHeaders, extractUrls, type MailFacts } from "@/lib/classify";
 import { publicClient } from "@/lib/client";
 import { POSTAGE_ESCROW, escrowAbi } from "@/lib/contracts";
 import {
   HOLD_SECONDS,
-  classificationBudgetSpent,
+  claimClassification,
   createChallenge,
   inboxByHandle,
   purgeExpiredHolds,
   purgeOldClassifications,
-  recordClassification,
   spendPass,
   walletForSender,
 } from "@/lib/db";
@@ -28,18 +27,6 @@ interface InboundPayload {
   spf?: string;
   dkim?: string;
   dmarc?: string;
-}
-
-/// Stands in for a verdict when too much has already been read this hour. It
-/// charges rather than blocks, and never claims to have found deception, since
-/// nothing actually looked.
-function floodedVerdict(): Verdict {
-  return {
-    tier: "commercial",
-    confidence: 0,
-    reasons: ["More mail arrived this hour than this inbox reads, so it was not judged"],
-    degraded: true,
-  };
 }
 
 /// Whether the receiving MTA could confirm the envelope sender is who it says.
@@ -112,9 +99,9 @@ export async function POST(request: Request) {
   // held as ordinary automated mail. Held rather than delivered, because
   // failing open here would make a flood the way through the gate rather than
   // merely the way to run up a bill.
-  const overBudget = await classificationBudgetSpent(handle, sender);
-  const verdict = overBudget ? floodedVerdict() : await classify(facts);
-  if (!overBudget) await recordClassification(handle, sender);
+  await purgeOldClassifications();
+  const overBudget = !(await claimClassification(handle, sender));
+  const verdict = overBudget ? classifyFromHeaders(facts) : await classify(facts);
 
   // Checked before any pass is spent. This tier is free and grants nothing, so
   // taking a paid use for it would charge someone twice for one delivery.
@@ -185,7 +172,6 @@ export async function POST(request: Request) {
   const holding = verdict.tier !== "dangerous";
   const heldUntil = receivedAt + HOLD_SECONDS;
   await purgeExpiredHolds();
-  await purgeOldClassifications();
 
   await createChallenge({
     token,

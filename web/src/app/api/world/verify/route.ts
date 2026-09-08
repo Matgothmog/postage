@@ -2,7 +2,13 @@ import { type Hex, createWalletClient, getAddress, http, keccak256, stringToByte
 import { privateKeyToAccount } from "viem/accounts";
 import { publicClient } from "@/lib/client";
 import { HUMAN_REGISTRY, chain, registryAbi } from "@/lib/contracts";
-import { challengeByToken, claimChallenge, grantPass, releaseChallengeClaim } from "@/lib/db";
+import {
+  challengeByToken,
+  claimChallenge,
+  grantPass,
+  hasLivePass,
+  releaseChallengeClaim,
+} from "@/lib/db";
 import { identityMode, required } from "@/lib/env";
 import { releaseHeldMessage } from "@/lib/hold";
 
@@ -53,17 +59,6 @@ export async function POST(request: Request) {
     );
   }
 
-  // One proof, one clearing: posting the same token back must not mint a fresh
-  // window from a single proof. Answering with the outcome rather than an error
-  // matters because recording personhood waits on a transaction, so a slow
-  // reply and an impatient reload are ordinary. The pass is already theirs.
-  if (challenge.resolved_at) {
-    return Response.json({
-      status: "cleared",
-      reason: "human",
-      delivered: challenge.delivered_at !== null,
-    });
-  }
 
   let nullifier: string;
   try {
@@ -88,12 +83,24 @@ export async function POST(request: Request) {
   // Claimed before the pass is minted, not after. Recording personhood waits on
   // a transaction receipt, so two posts of one token overlap easily, and
   // granting first would mint two windows from one proof before either lost.
+  // Answered already. That is not a reason to turn someone away: recording
+  // personhood waits on a transaction, so a slow reply and an impatient reload
+  // are ordinary, and a hold that lapsed leaves them needing a pass to paste
+  // what they wrote. The guard that matters is above — a fresh proof had to be
+  // presented to get this far — so what is left is to make sure they hold what
+  // that proof earned, without minting a second window on top of a live one.
   if (!(await claimChallenge(token, "human"))) {
     const settled = await challengeByToken(token);
+    if (
+      settled?.delivered_at == null &&
+      !(await hasLivePass(challenge.handle, challenge.sender))
+    ) {
+      await grantPass(challenge.handle, challenge.sender, "human", null);
+    }
     return Response.json({
       status: "cleared",
-      reason: "human",
-      delivered: settled?.delivered_at !== null && settled?.delivered_at !== undefined,
+      reason: settled?.settled_by ?? "human",
+      delivered: settled?.delivered_at != null,
     });
   }
 
@@ -103,7 +110,7 @@ export async function POST(request: Request) {
     // Claimed for a pass that was never minted. Left as it stands the sender
     // has proved they are a person, holds nothing, and every retry tells them
     // it is already answered.
-    await releaseChallengeClaim(token);
+    await releaseChallengeClaim(token).catch(() => {});
     throw cause;
   }
 

@@ -1,11 +1,10 @@
 import { classify, extractUrls } from "@/lib/classify";
 import {
   challengeByToken,
-  classificationBudgetSpent,
-  extendPass,
+  claimClassification,
+  extendPassIfExpiring,
   hasLivePass,
   inboxByHandle,
-  recordClassification,
   refundPass,
   spendPass,
 } from "@/lib/db";
@@ -73,13 +72,12 @@ export async function POST(request: Request) {
   // The same budget the inbound path answers to. A human pass is unlimited for
   // fifteen minutes, so without this anyone holding one could post bodies in a
   // loop and every one would be a model call nothing counted.
-  if (await classificationBudgetSpent(challenge.handle, challenge.sender)) {
+  if (!(await claimClassification(challenge.handle, challenge.sender))) {
     return Response.json(
       { error: "Too much has been sent this hour. Try again later" },
       { status: 429 }
     );
   }
-  await recordClassification(challenge.handle, challenge.sender);
 
   const pasted = await classify({
     from: challenge.sender,
@@ -107,8 +105,9 @@ export async function POST(request: Request) {
   if (pasted.degraded) {
     // The window is pushed back out, because the reason we cannot judge this is
     // ours. Without it a long outage silently spends a paid sender's fifteen
-    // minutes and leaves them with nothing.
-    await extendPass(challenge.handle, challenge.sender);
+    // minutes and leaves them with nothing. Only when it is nearly gone, so
+    // repeated polling cannot hold a pass open indefinitely.
+    await extendPassIfExpiring(challenge.handle, challenge.sender);
     return Response.json(
       { error: "Cannot check that right now. Try again in a few minutes" },
       { status: 503 }

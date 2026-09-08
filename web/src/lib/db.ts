@@ -53,6 +53,9 @@ const SCHEMA = [
      at INTEGER NOT NULL
    )`,
   `CREATE INDEX IF NOT EXISTS classifications_recent ON classifications (handle, at)`,
+  /// The purge filters on age alone, which the composite index above cannot
+  /// answer without reading the table.
+  `CREATE INDEX IF NOT EXISTS classifications_by_age ON classifications (at)`,
   /// Every address we have asked to confirm, kept only long enough to throttle.
   /// Claims are keyed on handle, so they cannot answer how often one mailbox
   /// has been mailed.
@@ -476,17 +479,23 @@ export async function markDelivered(token: string): Promise<void> {
   ]);
 }
 
-/// Pushes a pass's expiry back out. Used when the gate is willing but something
-/// on our side is not, so an outage cannot quietly run out the clock on someone
-/// who has already paid.
-export async function extendPass(handle: string, sender: string): Promise<void> {
+/// Pushes a pass's expiry back out, but only once it is nearly gone. Used when
+/// the gate is willing and something on our side is not, so an outage cannot
+/// quietly run out the clock on someone who has already paid — while polling
+/// cannot hold a window open forever either.
+const EXTEND_WHEN_UNDER_SECONDS = 5 * 60;
+
+export async function extendPassIfExpiring(handle: string, sender: string): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
   await run(
-    `UPDATE passes SET expires_at = ? WHERE handle = ? AND sender = ? AND expires_at > ?`,
+    `UPDATE passes SET expires_at = ?
+     WHERE handle = ? AND sender = ? AND expires_at > ? AND expires_at < ?`,
     [
-      Math.floor(Date.now() / 1000) + PASS_WINDOW_SECONDS,
+      now + PASS_WINDOW_SECONDS,
       handle.toLowerCase(),
       sender.toLowerCase(),
-      Math.floor(Date.now() / 1000),
+      now,
+      now + EXTEND_WHEN_UNDER_SECONDS,
     ]
   );
 }
@@ -507,28 +516,54 @@ export async function purgeOldClassifications(): Promise<void> {
   ]);
 }
 
-export async function recordClassification(handle: string, sender: string): Promise<void> {
-  await run(`INSERT INTO classifications (handle, sender, at) VALUES (?, ?, ?)`, [
-    handle.toLowerCase(),
-    sender.toLowerCase(),
-    Math.floor(Date.now() / 1000),
-  ]);
+/// Takes a slice of the hourly budget, and says whether there was one to take.
+///
+/// Counting and recording are one statement on purpose. Read-then-write lets a
+/// burst — which is the case the budget exists for — all see room and all spend
+/// it, so the real ceiling becomes the limit plus however many arrived at once.
+export async function claimClassification(handle: string, sender: string): Promise<boolean> {
+  const now = Math.floor(Date.now() / 1000);
+  const since = now - 60 * 60;
+  const client = await db();
+  const claimed = await client.execute({
+    sql: `INSERT INTO classifications (handle, sender, at)
+          SELECT ?, ?, ?
+          WHERE (SELECT COUNT(*) FROM classifications WHERE handle = ? AND at > ?)
+                  < ?
+            AND (SELECT COUNT(*) FROM classifications WHERE handle = ? AND sender = ? AND at > ?)
+                  < ?`,
+    args: [
+      handle.toLowerCase(),
+      sender.toLowerCase(),
+      now,
+      handle.toLowerCase(),
+      since,
+      CLASSIFY_PER_HANDLE_HOURLY,
+      handle.toLowerCase(),
+      sender.toLowerCase(),
+      since,
+      CLASSIFY_PER_SENDER_HOURLY,
+    ],
+  });
+  return claimed.rowsAffected > 0;
 }
 
-export async function classificationBudgetSpent(handle: string, sender: string): Promise<boolean> {
-  const since = Math.floor(Date.now() / 1000) - 60 * 60;
-  const rows = await all<{ forHandle: number; forSender: number }>(
-    `SELECT COUNT(*) AS forHandle,
-            SUM(CASE WHEN sender = ? THEN 1 ELSE 0 END) AS forSender
-     FROM classifications WHERE handle = ? AND at > ?`,
-    [sender.toLowerCase(), handle.toLowerCase(), since]
-  );
-  const counted = rows[0];
-  if (!counted) return false;
-  return (
-    Number(counted.forHandle) >= CLASSIFY_PER_HANDLE_HOURLY ||
-    Number(counted.forSender ?? 0) >= CLASSIFY_PER_SENDER_HOURLY
-  );
+/// Adds one paid delivery. Never reduces what is already there: an unlimited
+/// window earned by proving personhood is left alone, a counted pass gains a
+/// use, and a sender with neither gets one. Overwriting instead would let a
+/// second payment land on a pass that already had a use and buy nothing.
+export async function addPaidUse(handle: string, sender: string): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  const client = await db();
+  const topped = await client.execute({
+    sql: `UPDATE passes SET uses_left = uses_left + 1, expires_at = ?
+          WHERE handle = ? AND sender = ? AND expires_at > ? AND uses_left IS NOT NULL`,
+    args: [now + PASS_WINDOW_SECONDS, handle.toLowerCase(), sender.toLowerCase(), now],
+  });
+  if (topped.rowsAffected > 0) return;
+
+  if (await hasLivePass(handle, sender)) return;
+  await grantPass(handle, sender, "paid", 1);
 }
 
 /// Whether a usable pass exists, without spending it.

@@ -3,9 +3,8 @@ import { publicClient } from "@/lib/client";
 import { POSTAGE_ESCROW, escrowAbi } from "@/lib/contracts";
 import {
   challengeByToken,
+  addPaidUse,
   claimChallenge,
-  grantPass,
-  hasLivePass,
   linkSenderWallet,
   releaseChallengeClaim,
 } from "@/lib/db";
@@ -30,9 +29,14 @@ export async function POST(request: Request) {
   // Answering a settled challenge with its own outcome rather than a bare
   // refusal. The sender may simply have lost the first reply, and telling them
   // nothing happened would be worse than telling them what did.
-  if (challenge.resolved_at) return Response.json(settledOutcome(challenge));
-
   const payer = await payerOf(challenge.message_id as Hex);
+
+  // Recorded even when the challenge was settled some other way. The money left
+  // their wallet either way, and forgetting it prices their next message as a
+  // stranger's.
+  if (payer) await linkSenderWallet(challenge.sender, payer);
+
+  if (challenge.resolved_at) return Response.json(settledOutcome(challenge));
   if (!payer) return Response.json({ status: "pending" });
 
   // One statement, so two tabs cannot both believe they are the one settling
@@ -44,11 +48,6 @@ export async function POST(request: Request) {
   }
 
   try {
-    // Taken from the escrow rather than the request, because whoever calls this
-    // could otherwise name any wallet and inherit its reputation. The contract
-    // recorded who actually paid.
-    await linkSenderWallet(challenge.sender, payer);
-
     if (challenge.tier === "dangerous") {
       // The money is taken and the message still does not arrive. Paying here
       // is a penalty, not a price.
@@ -59,21 +58,14 @@ export async function POST(request: Request) {
     // buys one delivery: granting a use as well as delivering the held message
     // would hand the sender a second, free message through the paste box.
     const released = await releaseHeldMessage(token, challenge.handle);
-    if (!released.delivered) {
-      // Never downgrades. grantPass overwrites the row, so a sender who proved
-      // personhood minutes ago would trade an unlimited window for one use by
-      // paying for a second message.
-      if (!(await hasLivePass(challenge.handle, challenge.sender))) {
-        await grantPass(challenge.handle, challenge.sender, "paid", 1);
-      }
-    }
+    if (!released.delivered) await addPaidUse(challenge.handle, challenge.sender);
 
     return Response.json({ status: "cleared", reason: "paid", ...released });
   } catch (cause) {
     // The payment is onchain and cannot be made a second time, so a challenge
     // claimed for work that then failed has to be openable again. Otherwise the
     // sender has bought silence.
-    await releaseChallengeClaim(token);
+    await releaseChallengeClaim(token).catch(() => {});
     throw cause;
   }
 }
