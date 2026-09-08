@@ -13,7 +13,7 @@ export const quietButton =
 export const field =
   "w-full rounded-xl border border-rule bg-card px-4 py-3 text-[15px] text-ink outline-none transition placeholder:text-ink-faint focus:border-ink";
 
-export function Wordmark({ href = "/" }: { href?: string }) {
+function Wordmark({ href = "/" }: { href?: string }) {
   return (
     <Link href={href} className="group inline-flex items-center gap-2.5">
       <span className="grid h-6 w-6 place-items-center rounded-[5px] bg-stamp text-[11px] font-bold text-white">

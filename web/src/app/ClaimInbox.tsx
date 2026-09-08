@@ -3,16 +3,17 @@
 import { useIdentityToken, useSignMessage } from "@privy-io/react-auth";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Callout, field, primaryButton, quietButton, secondaryButton } from "@/components/chrome";
+import { MAIL_DOMAIN, handleOf, postageAddress } from "@/lib/handle";
 import { claimStatement } from "@/lib/statements";
 
-export interface ClaimState {
+export interface ClaimProgress {
   handle: string;
   destination: string;
   codeVerified: boolean;
   cloudflareVerified: boolean;
 }
 
-interface ClaimReply extends ClaimState {
+interface ClaimReply extends ClaimProgress {
   live: boolean;
   error?: string;
 }
@@ -41,7 +42,7 @@ async function signClaim(
 /// Turns an email address into the handle its owner would probably have picked,
 /// so the field arrives filled in rather than empty.
 function suggestHandle(email: string | null): string {
-  const local = email?.split("@")[0]?.toLowerCase() ?? "";
+  const local = email ? handleOf(email) : "";
   const cleaned = local
     .replace(/[^a-z0-9._-]/g, "")
     .replace(/\.{2,}/g, ".")
@@ -58,7 +59,7 @@ export function ClaimInbox({
   email: string | null;
   onLive: () => void;
 }) {
-  const [claim, setClaim] = useState<ClaimState | null>(null);
+  const [claim, setClaim] = useState<ClaimProgress | null>(null);
 
   if (!claim) {
     return <PickHandle wallet={wallet} email={email} onStarted={setClaim} onLive={onLive} />;
@@ -76,7 +77,7 @@ function PickHandle({
 }: {
   wallet: string;
   email: string | null;
-  onStarted: (claim: ClaimState) => void;
+  onStarted: (claim: ClaimProgress) => void;
   onLive: () => void;
 }) {
   const { identityToken } = useIdentityToken();
@@ -147,7 +148,7 @@ function PickHandle({
             className="w-full bg-transparent px-4 py-3 font-mono text-[15px] text-ink outline-none placeholder:text-ink-faint"
           />
           <span className="grid shrink-0 place-items-center border-l border-rule px-4 font-mono text-[15px] text-ink-faint">
-            @usepostage.com
+            @{MAIL_DOMAIN}
           </span>
         </div>
 
@@ -188,7 +189,7 @@ function PickHandle({
         </div>
 
         <button onClick={create} disabled={saving || !ready} className={`${primaryButton} mt-6 w-full`}>
-          {saving ? "Claiming" : `Claim ${name || "your"}@usepostage.com`}
+          {saving ? "Claiming" : `Claim ${postageAddress(name || "your")}`}
         </button>
         {error && <p className="mt-3 text-sm text-stamp">{error}</p>}
       </div>
@@ -210,8 +211,8 @@ function FinishClaim({
   onLive,
   onRestart,
 }: {
-  claim: ClaimState;
-  onClaim: (claim: ClaimState) => void;
+  claim: ClaimProgress;
+  onClaim: (claim: ClaimProgress) => void;
   onLive: () => void;
   onRestart: () => void;
 }) {
@@ -221,14 +222,19 @@ function FinishClaim({
   const [busy, setBusy] = useState(false);
   const inFlight = useRef<AbortController | null>(null);
 
+  /// Only writes back a step that actually moved. An unconditional write is a
+  /// new object every four seconds, which re-runs the effect below and restarts
+  /// the interval it just set — the poll then never reaches its own deadline.
   const apply = useCallback(
     (next: { codeVerified: boolean; cloudflareVerified: boolean; live: boolean }) => {
       if (next.live) return onLive();
-      onClaim({
-        ...claim,
-        codeVerified: claim.codeVerified || next.codeVerified,
-        cloudflareVerified: claim.cloudflareVerified || next.cloudflareVerified,
-      });
+
+      const codeVerified = claim.codeVerified || next.codeVerified;
+      const cloudflareVerified = claim.cloudflareVerified || next.cloudflareVerified;
+      if (codeVerified === claim.codeVerified && cloudflareVerified === claim.cloudflareVerified) {
+        return;
+      }
+      onClaim({ ...claim, codeVerified, cloudflareVerified });
     },
     [claim, onClaim, onLive]
   );
@@ -286,7 +292,7 @@ function FinishClaim({
         Almost yours
       </p>
       <h1 className="mt-4 text-3xl font-semibold tracking-[-0.03em] text-ink">
-        <span className="font-mono text-[1.6rem]">{claim.handle}@usepostage.com</span>
+        <span className="font-mono text-[1.6rem]">{postageAddress(claim.handle)}</span>
       </h1>
       <p className="mt-3 text-[15px] leading-relaxed text-ink-soft">
         Check <span className="font-mono text-ink">{claim.destination}</span>.{" "}

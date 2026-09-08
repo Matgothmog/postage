@@ -9,6 +9,7 @@ import {
   refundPass,
   spendPass,
 } from "@/lib/db";
+import { postageAddress } from "@/lib/handle";
 import { relayHeldMessage } from "@/lib/mail";
 
 const MAX_SUBJECT = 200;
@@ -85,7 +86,7 @@ export async function POST(request: Request) {
 
   const pasted = await classify({
     from: challenge.sender,
-    to: `${challenge.handle}@usepostage.com`,
+    to: postageAddress(challenge.handle),
     subject: subject?.trim() ?? "",
     body: body.trim(),
     spf: null,

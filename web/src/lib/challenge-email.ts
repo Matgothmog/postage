@@ -1,4 +1,5 @@
 import { formatUsdc } from "./format";
+import { postageAddress } from "./handle";
 
 export interface ChallengeMail {
   subject: string;
@@ -23,7 +24,7 @@ export interface ChallengeMailFacts {
 /// machine - and each answer is a link. Nothing here asks them to write their
 /// message again, because we still have it.
 export function challengeMail(facts: ChallengeMailFacts): ChallengeMail {
-  const inbox = `${facts.handle}@usepostage.com`;
+  const inbox = postageAddress(facts.handle);
   const price = formatUsdc(facts.amount);
   const deadline = holdWindow(facts.heldUntil);
 

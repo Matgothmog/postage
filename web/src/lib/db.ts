@@ -88,11 +88,14 @@ const SCHEMA = [
      quote_json TEXT NOT NULL,
      held_until INTEGER,
      created_at INTEGER NOT NULL,
-     resolved_at INTEGER
+     resolved_at INTEGER,
+     entitled_at INTEGER,
+     delivered_at INTEGER,
+     settled_by TEXT
    )`,
 ];
 
-/// Columns added to a table that already existed somewhere.
+/// Columns for a table that already exists somewhere without them.
 ///
 /// `CREATE TABLE IF NOT EXISTS` does nothing at all to a table that is already
 /// there, so every column added after a database was first created is a column
@@ -100,6 +103,11 @@ const SCHEMA = [
 /// `challenges` table predates holding kept answering every held message with a
 /// 500, because the statement meant to erase expired holds named a column it did
 /// not have. Adding a column is not optional work to be done by hand later.
+///
+/// Every column here is also in `SCHEMA` above, so a database created today is
+/// correct without running any of this. Listing it twice is the price of the two
+/// cases being genuinely different: one describes the shape, the other repairs
+/// a database that was made before the shape said so.
 const ADDED_COLUMNS: { table: string; column: string; type: string; backfill?: string }[] = [
   {
     table: "challenges",
@@ -123,11 +131,20 @@ const ADDED_COLUMNS: { table: string; column: string; type: string; backfill?: s
 ];
 
 async function addMissingColumns(client: Client): Promise<void> {
+  const known = new Map<string, Set<string>>();
+
   for (const { table, column, type, backfill } of ADDED_COLUMNS) {
-    const existing = await client.execute(`PRAGMA table_info(${table})`);
-    if (existing.rows.some((row) => row.name === column)) continue;
+    let columns = known.get(table);
+    if (!columns) {
+      const existing = await client.execute(`PRAGMA table_info(${table})`);
+      columns = new Set(existing.rows.map((row) => String(row.name)));
+      known.set(table, columns);
+    }
+    if (columns.has(column)) continue;
+
     await client.execute(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
     if (backfill) await client.execute(backfill);
+    columns.add(column);
   }
 }
 
@@ -506,6 +523,7 @@ export async function claimChallenge(token: string, settledBy: string): Promise<
 /// Puts a claimed challenge back. Whatever the claim was taken for did not
 /// happen, and a payment that cannot be made twice must not leave the only way
 /// through it bought closed behind it.
+///
 /// Gives back only the claim this caller took. A blind rollback also cleared an
 /// entitlement another request had taken in the meantime, which let that request
 /// take it a second time and grant a second delivery for one payment.
@@ -533,9 +551,6 @@ export async function refundPass(handle: string, sender: string): Promise<void> 
   );
 }
 
-/// Records that the held message actually reached the recipient, so nobody has
-/// to guess afterwards. Pass state cannot answer this: a human pass from an
-/// earlier message looks the same as one granted because delivery failed.
 /// Records that this challenge has issued what it owed, so it cannot issue it
 /// again. A payment settles onchain forever, and without this the sender could
 /// spend the delivery it bought and then ask for another.
@@ -548,6 +563,9 @@ export async function markEntitled(token: string): Promise<boolean> {
   return marked.rowsAffected > 0;
 }
 
+/// Records that the held message actually reached the recipient, so nobody has
+/// to guess afterwards. Pass state cannot answer this: a human pass from an
+/// earlier message looks the same as one granted because delivery failed.
 export async function markDelivered(token: string): Promise<void> {
   await run(`UPDATE challenges SET delivered_at = ? WHERE token = ?`, [
     Math.floor(Date.now() / 1000),
@@ -600,11 +618,6 @@ export async function purgeOldClassifications(): Promise<void> {
   ]);
 }
 
-/// Takes a slice of the hourly budget, and says whether there was one to take.
-///
-/// Counting and recording are one statement on purpose. Read-then-write lets a
-/// burst — which is the case the budget exists for — all see room and all spend
-/// it, so the real ceiling becomes the limit plus however many arrived at once.
 /// Why a message was not read, when it was not.
 ///
 /// Which limit bit matters, because the two are caused by different people. A
@@ -614,35 +627,31 @@ export async function purgeOldClassifications(): Promise<void> {
 /// hands a stranger a lever over their mail.
 export type BudgetState = "spent-by-sender" | "spent-by-handle" | null;
 
+/// Takes a slice of the hourly budget, and says whether there was one to take.
+///
+/// Counting and recording are one statement on purpose. Read-then-write lets a
+/// burst — which is the case the budget exists for — all see room and all spend
+/// it, so the real ceiling becomes the limit plus however many arrived at once.
+/// That statement is also the only place the thresholds are compared, so asking
+/// first would be the same rule written twice with a race between them.
 export async function claimClassification(
   handle: string,
   sender: string
 ): Promise<BudgetState> {
-  const now = Math.floor(Date.now() / 1000);
-  const since = now - 60 * 60;
-  const rows = await all<{ forHandle: number; forSender: number }>(
-    `SELECT COUNT(*) AS forHandle,
-            SUM(CASE WHEN sender = ? THEN 1 ELSE 0 END) AS forSender
-     FROM classifications WHERE handle = ? AND at > ?`,
-    [sender.toLowerCase(), handle.toLowerCase(), since]
-  );
-  const counted = rows[0];
-  if (Number(counted?.forSender ?? 0) >= CLASSIFY_PER_SENDER_HOURLY) return "spent-by-sender";
-  if (Number(counted?.forHandle ?? 0) >= CLASSIFY_PER_HANDLE_HOURLY) return "spent-by-handle";
-
   if (await takeClassificationSlot(handle, sender)) return null;
+  return await whichLimitBit(handle, sender);
+}
 
-  // Lost a race for the last slot. Which limit it was decides what the caller
-  // may still do, so it is looked up rather than assumed: reporting a sender's
-  // own exhaustion as the handle's would unlock the two things that state
-  // exists to shut.
-  const after = await all<{ forHandle: number; forSender: number }>(
-    `SELECT COUNT(*) AS forHandle,
-            SUM(CASE WHEN sender = ? THEN 1 ELSE 0 END) AS forSender
+/// Which of the two ceilings refused the slot. Looked up rather than assumed:
+/// reporting a sender's own exhaustion as the handle's would unlock the two
+/// things that state exists to shut.
+async function whichLimitBit(handle: string, sender: string): Promise<BudgetState> {
+  const rows = await all<{ forSender: number }>(
+    `SELECT SUM(CASE WHEN sender = ? THEN 1 ELSE 0 END) AS forSender
      FROM classifications WHERE handle = ? AND at > ?`,
-    [sender.toLowerCase(), handle.toLowerCase(), since]
+    [sender.toLowerCase(), handle.toLowerCase(), Math.floor(Date.now() / 1000) - 60 * 60]
   );
-  return Number(after[0]?.forSender ?? 0) >= CLASSIFY_PER_SENDER_HOURLY
+  return Number(rows[0]?.forSender ?? 0) >= CLASSIFY_PER_SENDER_HOURLY
     ? "spent-by-sender"
     : "spent-by-handle";
 }
@@ -661,25 +670,21 @@ export async function releaseClassificationSlot(handle: string, sender: string):
 async function takeClassificationSlot(handle: string, sender: string): Promise<boolean> {
   const now = Math.floor(Date.now() / 1000);
   const since = now - 60 * 60;
+  const inbox = handle.toLowerCase();
+  const writer = sender.toLowerCase();
+
   const client = await db();
   const claimed = await client.execute({
     sql: `INSERT INTO classifications (handle, sender, at)
           SELECT ?, ?, ?
-          WHERE (SELECT COUNT(*) FROM classifications WHERE handle = ? AND at > ?)
-                  < ?
-            AND (SELECT COUNT(*) FROM classifications WHERE handle = ? AND sender = ? AND at > ?)
-                  < ?`,
+          WHERE (SELECT COUNT(*) FROM classifications
+                 WHERE handle = ? AND at > ?) < ?
+            AND (SELECT COUNT(*) FROM classifications
+                 WHERE handle = ? AND sender = ? AND at > ?) < ?`,
     args: [
-      handle.toLowerCase(),
-      sender.toLowerCase(),
-      now,
-      handle.toLowerCase(),
-      since,
-      CLASSIFY_PER_HANDLE_HOURLY,
-      handle.toLowerCase(),
-      sender.toLowerCase(),
-      since,
-      CLASSIFY_PER_SENDER_HOURLY,
+      inbox, writer, now,
+      inbox, since, CLASSIFY_PER_HANDLE_HOURLY,
+      inbox, writer, since, CLASSIFY_PER_SENDER_HOURLY,
     ],
   });
   return claimed.rowsAffected > 0;

@@ -1,18 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
-
-export const TIERS = ["human", "important", "commercial", "dangerous"] as const;
-export type Tier = (typeof TIERS)[number];
-
-/// Tier index as the escrow enum orders them. Kept adjacent to TIERS so the two
-/// cannot drift apart silently.
-export const TIER_INDEX: Record<Tier, number> = {
-  human: 0,
-  important: 1,
-  commercial: 2,
-  dangerous: 3,
-};
+import { TIERS, type Tier } from "./tiers";
 
 export interface MailFacts {
   from: string;

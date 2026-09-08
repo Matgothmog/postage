@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { SiteFooter, SiteHeader, quietButton } from "@/components/chrome";
 import { challengeByToken } from "@/lib/db";
 import { formatUsdc } from "@/lib/format";
+import { postageAddress } from "@/lib/handle";
 import { ChallengeActions } from "./ChallengeActions";
 
 interface StoredQuote {
@@ -32,7 +33,7 @@ export default async function ChallengePage({ params, searchParams }: PageProps<
         <h1 className="text-2xl font-semibold tracking-[-0.02em] text-ink">Already answered</h1>
         <p className="mt-3 text-[15px] leading-relaxed text-ink-soft">
           Whatever you sent to{" "}
-          <span className="font-mono text-ink">{challenge.handle}@usepostage.com</span> has been
+          <span className="font-mono text-ink">{postageAddress(challenge.handle)}</span> has been
           dealt with. A pass lasts fifteen minutes, so writing again later means answering again.
         </p>
         <Advert />
@@ -57,13 +58,13 @@ export default async function ChallengePage({ params, searchParams }: PageProps<
         ) : held ? (
           <>
             Your message to{" "}
-            <span className="font-mono text-ink">{challenge.handle}@usepostage.com</span> is still
+            <span className="font-mono text-ink">{postageAddress(challenge.handle)}</span> is still
             here, exactly as you sent it. Answer this and we deliver it — you do not write it twice.
           </>
         ) : (
           <>
             Your message to{" "}
-            <span className="font-mono text-ink">{challenge.handle}@usepostage.com</span> was
+            <span className="font-mono text-ink">{postageAddress(challenge.handle)}</span> was
             refused. Answer this and the next one goes straight through.
           </>
         )}

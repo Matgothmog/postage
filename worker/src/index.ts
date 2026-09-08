@@ -44,10 +44,27 @@ interface Verdict {
 /// a floor under it, so nothing can be stored indefinitely by omission.
 const FALLBACK_HOLD_SECONDS = 24 * 60 * 60;
 
+/// What the receiving MTA concluded about the sender, read out of
+/// `Authentication-Results`.
+///
+/// A sender may write this header themselves, and `Headers.get()` joins every
+/// copy into one string with ", ", so a naive scan of that string can return
+/// whichever copy happens to mention the method first. Cloudflare's own is the
+/// one that means anything; the rest are the sender's claims about the sender.
+///
+/// We cannot tell them apart from here, so a method is only believed when every
+/// copy agrees on it. A sender who adds `dmarc=pass` to a message Cloudflare
+/// marked `dmarc=fail` now contradicts it and gets nothing, where before they
+/// could have taken the answer. What is left is a domain for which Cloudflare
+/// records no result at all — there is nothing to disagree with, so a forged
+/// claim still stands. Closing that needs Cloudflare's authserv-id, which is
+/// not established. Legitimate mail is unaffected either way: relays add
+/// results for their own hop and do not restate this one.
 function authResults(header: string | null): { spf: string | null; dkim: string | null; dmarc: string | null } {
   const read = (method: string) => {
-    const found = header?.match(new RegExp(`\\b${method}=(\\w+)`, "i"));
-    return found ? found[1].toLowerCase() : null;
+    const found = header?.matchAll(new RegExp(`\\b${method}=(\\w+)`, "gi")) ?? [];
+    const claimed = new Set([...found].map((match) => match[1].toLowerCase()));
+    return claimed.size === 1 ? [...claimed][0] : null;
   };
   return { spf: read("spf"), dkim: read("dkim"), dmarc: read("dmarc") };
 }

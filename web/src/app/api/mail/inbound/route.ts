@@ -15,6 +15,7 @@ import {
   walletForSender,
 } from "@/lib/db";
 import { required } from "@/lib/env";
+import { handleOf, isOurs } from "@/lib/handle";
 import { quote } from "@/lib/pricing";
 import { messageIdFor, signQuote } from "@/lib/quote";
 import { gatherSignals } from "@/lib/reputation";
@@ -68,12 +69,28 @@ export async function POST(request: Request) {
   const { from, to } = payload;
   if (!from || !to) return Response.json({ error: "from and to are required" }, { status: 400 });
 
-  const handle = to.split("@")[0]?.toLowerCase() ?? "";
+  const handle = handleOf(to);
   const inbox = await inboxByHandle(handle);
   if (!inbox) return Response.json({ action: "reject", reason: "unknown_inbox" }, { status: 404 });
 
   if (!inbox.wallet) {
     return Response.json({ error: "Inbox has no wallet to be paid at" }, { status: 409 });
+  }
+
+  // Forwarding to our own domain sends the message straight back in, and every
+  // lap spends a classify call, a chain read and a challenge row. Claiming one
+  // is refused, so reaching here needs an inbox that predates that check or a
+  // row edited by hand — but nothing else stops it, and a loop nobody notices
+  // is a bill nobody agreed to.
+  if (isOurs(inbox.destination)) {
+    return Response.json(
+      {
+        action: "reject",
+        reason: "loop",
+        bounce: "That address forwards back to this domain, so nothing can be delivered.",
+      },
+      { status: 409 }
+    );
   }
 
   const sender = from.toLowerCase();
@@ -90,17 +107,19 @@ export async function POST(request: Request) {
     urls: extractUrls(payload.body ?? ""),
   };
 
+  // Dropped on the way past rather than by a job nobody runs, so the table the
+  // budget counts over stays the size of one hour.
+  await purgeOldClassifications();
+
   // Read before any pass is honoured. A pass says this sender got through the
   // gate a few minutes ago; it says nothing about what they have written since,
   // and a person who proved they were a person can still be phishing. Skipping
   // the classifier here would have made a single proof a fifteen minute licence
-  // to deliver anything at all.
-  // Past the hourly budget the model is not asked at all and the message is
-  // held as ordinary automated mail. Held rather than delivered, because
-  // failing open here would make a flood the way through the gate rather than
-  // merely the way to run up a bill.
-  await purgeOldClassifications();
-
+  // to deliver anything at all. Past the hourly budget the model is not asked at
+  // all and the message is held as ordinary automated mail — held rather than
+  // delivered, because failing open would make a flood the way through the gate
+  // rather than merely the way to run up a bill.
+  //
   // Only mail whose sender the receiving server could confirm is worth paying a
   // model to read, and only it may spend the budget.
   //

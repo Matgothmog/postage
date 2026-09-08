@@ -8,6 +8,7 @@ import { StampCard, field, primaryButton, secondaryButton } from "@/components/c
 import { publicClient } from "@/lib/client";
 import { POSTAGE_ESCROW, USDC_DECIMALS, escrowAbi } from "@/lib/contracts";
 import { formatUsdc, parseUsdc, shortAddress } from "@/lib/format";
+import { postageAddress } from "@/lib/handle";
 
 export interface Inbox {
   handle: string;
@@ -87,7 +88,7 @@ export function InboxPanel({ inbox, wallet }: { inbox: Inbox; wallet: string }) 
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-stamp">Live</p>
           <h1 className="mt-4 font-mono text-2xl break-all text-ink sm:text-[1.7rem]">
-            {inbox.handle}@usepostage.com
+            {postageAddress(inbox.handle)}
           </h1>
           <p className="mt-2 text-[15px] text-ink-soft">
             Forwards to <span className="font-mono text-ink">{inbox.destination}</span>, untouched.
@@ -96,7 +97,7 @@ export function InboxPanel({ inbox, wallet }: { inbox: Inbox; wallet: string }) 
         </div>
         <div className="hidden shrink-0 sm:block">
           <StampCard
-            handle={`${inbox.handle}@usepostage.com`}
+            handle={postageAddress(inbox.handle)}
             price={standing ? formatUsdc(standing.floor) : "—"}
             caption="Hand this out instead of your own"
           />

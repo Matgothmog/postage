@@ -2,7 +2,7 @@ import { createHmac } from "node:crypto";
 import type { Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { POSTAGE_ESCROW, chain } from "./contracts";
-import { TIER_INDEX, type Tier } from "./classify";
+import { TIER_INDEX, type Tier } from "./tiers";
 import { required } from "./env";
 
 /// How long a sender has to act on a price before it must be requoted. Short

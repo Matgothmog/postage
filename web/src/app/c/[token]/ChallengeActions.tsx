@@ -6,6 +6,8 @@ import { encodeFunctionData } from "viem";
 import { Callout, field, primaryButton, quietButton } from "@/components/chrome";
 import { POSTAGE_ESCROW, escrowAbi } from "@/lib/contracts";
 import { formatUsdc } from "@/lib/format";
+import { postageAddress } from "@/lib/handle";
+import { tierIndexOf } from "@/lib/tiers";
 
 interface Quote {
   messageId: string;
@@ -15,8 +17,6 @@ interface Quote {
   expiresAt: number;
   signature: string;
 }
-
-const TIER_INDEX: Record<string, number> = { human: 0, important: 1, commercial: 2, dangerous: 3 };
 
 /// Long enough to cover a block on Arc and the indexing behind it, short
 /// enough that a genuine failure still surfaces while the sender is looking.
@@ -168,7 +168,7 @@ function PayLane({
     const response = await fetch("/api/challenge/resolve", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token, wallet: wallet.address }),
+      body: JSON.stringify({ token }),
     });
     const result = (await response.json()) as {
       status?: string;
@@ -208,7 +208,7 @@ function PayLane({
           args: [
             quote.messageId as `0x${string}`,
             quote.inbox as `0x${string}`,
-            TIER_INDEX[quote.tier] ?? 2,
+            tierIndexOf(quote.tier),
             BigInt(quote.amount),
             quote.expiresAt,
             quote.signature as `0x${string}`,
@@ -309,7 +309,7 @@ function Deliver({ token, handle, reason }: { token: string; handle: string; rea
         value={body}
         onChange={(event) => setBody(event.target.value)}
         rows={7}
-        placeholder={`Paste what you wrote to ${handle}@usepostage.com`}
+        placeholder={`Paste what you wrote to ${postageAddress(handle)}`}
         className={`${field} resize-y`}
       />
       <button

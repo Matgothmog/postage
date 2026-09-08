@@ -19,6 +19,8 @@ interface Envelope<T> {
   success: boolean;
   errors: { code: number; message: string }[];
   result: T;
+  /// Present on list responses only.
+  result_info?: { page: number; per_page: number; total_count: number };
 }
 
 async function call<T>(path: string, init?: RequestInit): Promise<Envelope<T>> {
@@ -83,11 +85,29 @@ export async function ensureDestination(email: string): Promise<Destination> {
   throw new Error(created.errors?.[0]?.message ?? "Cloudflare refused the destination address");
 }
 
-export async function findDestination(email: string): Promise<Destination | null> {
+const PER_PAGE = 50;
+
+/// Every page, not the first one. One destination is created per inbox and none
+/// are ever deleted, so a single page stopped answering for older addresses at
+/// roughly the fiftieth signup — and the caller reads a miss as "Cloudflare
+/// refused the address", which is a signup that fails for good.
+async function findDestination(email: string): Promise<Destination | null> {
   const wanted = email.toLowerCase();
-  const listed = await call<Address[]>(`/email/routing/addresses?per_page=50&direction=desc`);
-  const match = listed.result?.find((address) => address.email.toLowerCase() === wanted);
-  return match ? toDestination(match) : null;
+
+  for (let page = 1; ; page += 1) {
+    const listed = await call<Address[]>(
+      `/email/routing/addresses?per_page=${PER_PAGE}&page=${page}&direction=desc`
+    );
+    const addresses = listed.result ?? [];
+
+    const match = addresses.find((address) => address.email.toLowerCase() === wanted);
+    if (match) return toDestination(match);
+
+    // Stops on a short page as well as on the count, so a response without
+    // `result_info` cannot turn this into an unbounded loop.
+    const seen = (listed.result_info?.page ?? page) * PER_PAGE;
+    if (addresses.length < PER_PAGE || seen >= (listed.result_info?.total_count ?? 0)) return null;
+  }
 }
 
 export async function destinationStatus(id: string): Promise<Destination | null> {

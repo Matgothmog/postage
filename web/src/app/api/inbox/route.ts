@@ -12,13 +12,13 @@ import {
   recordClaimSend,
   startClaim,
 } from "@/lib/db";
+import { isOurs } from "@/lib/handle";
 import { sendVerificationCode } from "@/lib/mail";
 import { type PrivyIdentity, readIdentity } from "@/lib/privy";
 import { CODE_TTL_SECONDS, generateCode, hashCode } from "@/lib/verification";
 
 const HANDLE = /^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$/;
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
-const OUR_DOMAIN = "usepostage.com";
 
 /// Addresses the service itself relies on. A user holding `hello` would receive
 /// every reply and bounce to our own verification mail, which is where other
@@ -71,7 +71,7 @@ export async function GET(request: Request) {
   return Response.json({ inbox: await inboxByWallet(wallet) });
 }
 
-/// Starts a claim on handle@usepostage.com. Nothing is forwarded yet, and the
+/// Starts a claim on the handle. Nothing is forwarded yet, and the
 /// handle only becomes an inbox once two separate things are true.
 ///
 /// Somebody has to prove they are asking for their own wallet, and that they can
@@ -204,9 +204,7 @@ function validate(handle: string, destination: string): string | null {
   if (RESERVED.has(handle)) return "That name is reserved";
 
   if (!destination || !EMAIL.test(destination)) return "A valid destination address is required";
-  if (destination.endsWith(`@${OUR_DOMAIN}`)) {
-    return "Forward to an inbox you already read, not back to Postage";
-  }
+  if (isOurs(destination)) return "Forward to an inbox you already read, not back to Postage";
   return null;
 }
 

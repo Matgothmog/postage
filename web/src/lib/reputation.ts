@@ -1,9 +1,10 @@
 import { ENS_SUBGRAPH, queryNetwork, queryPostage } from "./graph";
 
+/// What a price is allowed to move on. Personhood is deliberately absent:
+/// proving it clears the message in front of you rather than discounting the
+/// next one, so a wallet does not carry it. Every field here is read by
+/// `quote`; anything nothing reads is a query nobody should pay for.
 export interface SenderSignals {
-  wallet: string;
-  /// From our Subgraph, mirrored off the onchain World ID attestation.
-  isHuman: boolean;
   paidCount: number;
   spamReports: number;
   spamRate: number;
@@ -18,7 +19,6 @@ const POSTAGE_HISTORY = `
       paidCount
       spamReports
       spamRate
-      humanUntil
     }
   }
 `;
@@ -26,7 +26,6 @@ const POSTAGE_HISTORY = `
 const ENS_OWNED = `
   query NamesOwned($wallet: String!) {
     domains(first: 5, where: { owner: $wallet }) {
-      name
       createdAt
     }
   }
@@ -37,12 +36,11 @@ interface PostageResult {
     paidCount: number;
     spamReports: number;
     spamRate: string;
-    humanUntil: string | null;
   } | null;
 }
 
 interface EnsResult {
-  domains: { name: string; createdAt: string }[];
+  domains: { createdAt: string }[];
 }
 
 /// Both lookups are independent, and a failure in either should soften the
@@ -58,11 +56,7 @@ export async function gatherSignals(wallet: string): Promise<SenderSignals> {
   const sender = history.status === "fulfilled" ? history.value.sender : null;
   const domains = ens.status === "fulfilled" ? ens.value.domains : [];
 
-  const humanUntil = sender?.humanUntil ? Number(sender.humanUntil) : 0;
-
   return {
-    wallet: id,
-    isHuman: humanUntil > Math.floor(Date.now() / 1000),
     paidCount: sender?.paidCount ?? 0,
     spamReports: sender?.spamReports ?? 0,
     spamRate: sender ? Number(sender.spamRate) : 0,

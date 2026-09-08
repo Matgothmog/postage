@@ -1,4 +1,6 @@
 import { required } from "./env";
+import { postageAddress } from "./handle";
+import { CODE_TTL_SECONDS } from "./verification";
 
 const RESEND_ENDPOINT = "https://api.resend.com/emails";
 
@@ -30,14 +32,14 @@ function body(handle: string, code: string): string {
   return [
     `Your code is ${code}.`,
     "",
-    `Someone asked us to forward ${handle}@usepostage.com to this address.`,
+    `Someone asked us to forward ${postageAddress(handle)} to this address.`,
     "Enter the code to confirm it was you.",
     "",
     "Cloudflare, who carries the mail, has sent a separate email asking you to",
     "confirm the same thing. Both are needed before anything is forwarded here.",
     "",
     "If you were not expecting this, ignore both. Nothing reaches you unless you",
-    "confirm, and the code expires in 15 minutes.",
+    `confirm, and the code expires in ${CODE_TTL_SECONDS / 60} minutes.`,
   ].join("\n");
 }
 
@@ -69,7 +71,7 @@ export async function relayHeldMessage(message: {
         message.body,
         "",
         "—",
-        `Sent to ${message.handle}@usepostage.com by ${message.from}, who cleared the gate.`,
+        `Sent to ${postageAddress(message.handle)} by ${message.from}, who cleared the gate.`,
         "Replying goes straight to them.",
       ].join("\n"),
     }),

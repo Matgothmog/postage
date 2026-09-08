@@ -1,10 +1,11 @@
-/// What a wallet signs to prove a request is really from it. Kept free of
-/// imports so the browser can build the same string the server will verify.
+/// What a wallet signs to prove a request is really from it. Both ends build the
+/// same string, so this pulls in nothing but the domain constant.
+import { postageAddress } from "./handle";
 
 export function claimStatement(handle: string, destination: string, wallet: string, issuedAt: number): string {
   return [
     "Postage: claim an address",
-    `Handle: ${handle.toLowerCase()}@usepostage.com`,
+    `Handle: ${postageAddress(handle)}`,
     `Forward to: ${destination.toLowerCase()}`,
     `Wallet: ${wallet.toLowerCase()}`,
     `Issued: ${issuedAt}`,

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { StampCard, secondaryButton } from "@/components/chrome";
+import { postageAddress } from "@/lib/handle";
 
 const TIERS = [
   {
@@ -66,7 +67,7 @@ export function Landing({ cta }: { cta: ReactNode }) {
             </span>
           </h1>
           <p className="mt-7 max-w-xl text-[17px] leading-relaxed text-ink-soft">
-            Give out <span className="font-mono text-ink">you@usepostage.com</span> instead of your
+            Give out <span className="font-mono text-ink">{postageAddress("you")}</span> instead of your
             own address. Everything sent there is read, judged, and forwarded to the inbox you
             already use — untouched. Mail from a person arrives free. Mail from a machine pays you
             first.
@@ -85,7 +86,7 @@ export function Landing({ cta }: { cta: ReactNode }) {
 
         <div className="flex justify-center lg:justify-end">
           <StampCard
-            handle="you@usepostage.com"
+            handle={postageAddress("you")}
             price="$0.01"
             caption="What a stranger pays to reach you"
           />

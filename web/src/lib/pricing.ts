@@ -1,4 +1,4 @@
-import type { Tier } from "./classify";
+import type { Tier } from "./tiers";
 import type { SenderSignals } from "./reputation";
 
 export interface Quote {

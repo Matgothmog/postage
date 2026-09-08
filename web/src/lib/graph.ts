@@ -2,7 +2,7 @@ import { required } from "./env";
 
 /// Subgraphs published on the decentralized network, queried through the
 /// gateway. These give a sender's history outside Postage.
-const ENS_SUBGRAPH = "5XqPmWe6gjyrJtFn9cLy237i4cWw2j9HcUJEXsP5qGtH";
+export const ENS_SUBGRAPH = "5XqPmWe6gjyrJtFn9cLy237i4cWw2j9HcUJEXsP5qGtH";
 
 interface GraphResponse<T> {
   data?: T;
@@ -35,5 +35,3 @@ export function queryNetwork<T>(subgraphId: string, document: string, variables?
   const gateway = `https://gateway.thegraph.com/api/${required("GRAPH_API_KEY")}/subgraphs/id/${subgraphId}`;
   return query<T>(gateway, document, variables);
 }
-
-export { ENS_SUBGRAPH };
