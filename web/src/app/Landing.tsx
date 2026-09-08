@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { StampCard, secondaryButton } from "@/components/chrome";
 import { postageAddress } from "@/lib/handle";
 
-const TIERS = [
+const TIER_COPY = [
   {
     tone: "text-good",
     what: "Something you are waiting for",
@@ -104,7 +104,7 @@ export function Landing({ cta }: { cta: ReactNode }) {
           </p>
 
           <div className="mt-10 grid gap-px overflow-hidden rounded-2xl border border-rule bg-rule sm:grid-cols-2">
-            {TIERS.map((tier) => (
+            {TIER_COPY.map((tier) => (
               <div key={tier.what} className="bg-card p-6">
                 <p className={`text-[15px] font-medium ${tier.tone}`}>{tier.what}</p>
                 <p className="mt-1 text-sm text-ink-faint">{tier.detail}</p>
