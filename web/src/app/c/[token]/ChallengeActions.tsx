@@ -180,6 +180,11 @@ function PayLane({
       return { kind: "cleared", reason: result.reason ?? "paid", delivered: result.delivered === true };
     }
     if (result.status === "charged") return { kind: "charged" };
+    // Settled already is a final answer, so it must not be retried as though
+    // the payment were still landing.
+    if (result.status === "spent") {
+      return { kind: "cleared", reason: "paid", delivered: false };
+    }
     return { kind: "error", message: result.error ?? "Not cleared yet" };
   }
 

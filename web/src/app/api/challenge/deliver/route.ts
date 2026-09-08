@@ -1,3 +1,4 @@
+import { classify, extractUrls } from "@/lib/classify";
 import { challengeByToken, inboxByHandle, spendPass } from "@/lib/db";
 import { relayHeldMessage } from "@/lib/mail";
 
@@ -34,12 +35,32 @@ export async function POST(request: Request) {
     return Response.json({ error: "Clear the gate first" }, { status: 403 });
   }
 
-  // The third way out of a challenge, and the one that forgot. Paying a
-  // dangerous verdict is a penalty, not a purchase, so this route must not sell
-  // what the other two refuse to give away.
+  // What was pasted is not what was judged. The verdict on this token describes
+  // the message that was held; the box below it accepts anything, and the pass
+  // that authorises the send belongs to the sender rather than to this token —
+  // so a benign message cleared earlier would otherwise carry a phishing one
+  // through here. Both are checked: the tier this token was given, and the
+  // words actually about to be delivered.
   if (challenge.tier === "dangerous") {
     return Response.json(
       { error: "This will not be delivered whoever sends it, and paying did not buy that" },
+      { status: 403 }
+    );
+  }
+
+  const pasted = await classify({
+    from: challenge.sender,
+    to: `${challenge.handle}@usepostage.com`,
+    subject: subject?.trim() ?? "",
+    body: body.trim(),
+    spf: null,
+    dkim: null,
+    dmarc: null,
+    urls: extractUrls(body),
+  });
+  if (pasted.tier === "dangerous") {
+    return Response.json(
+      { error: "That reads as an attempt to deceive the recipient, so it will not be sent" },
       { status: 403 }
     );
   }

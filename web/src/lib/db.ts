@@ -111,8 +111,15 @@ function db(): Promise<Client> {
       url: process.env.DATABASE_URL ?? "file:.data/postage.db",
       authToken: process.env.DATABASE_AUTH_TOKEN,
     });
-    for (const statement of SCHEMA) await client.execute(statement);
-    await addMissingColumns(client);
+    try {
+      for (const statement of SCHEMA) await client.execute(statement);
+      await addMissingColumns(client);
+    } catch (cause) {
+      // The connection opened even though setting it up did not, so it has to
+      // be given back rather than left for the retry to leak one per attempt.
+      client.close();
+      throw cause;
+    }
     return client;
   })();
   ready.catch(() => {

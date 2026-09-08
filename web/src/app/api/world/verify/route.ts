@@ -44,6 +44,16 @@ export async function POST(request: Request) {
   const challenge = await challengeByToken(token);
   if (!challenge) return Response.json({ error: "Unknown challenge" }, { status: 404 });
 
+  // One proof, one clearing. Without this the same token could be posted back
+  // repeatedly to mint a fresh fifteen minute pass from a single proof, which
+  // is the opposite of what a short window is for.
+  if (challenge.resolved_at) {
+    return Response.json(
+      { status: "spent", error: "This challenge has already been answered" },
+      { status: 409 }
+    );
+  }
+
   // Being a person is not a defence against phishing, so this route stays shut
   // for mail the classifier called dangerous.
   if (challenge.tier === "dangerous") {

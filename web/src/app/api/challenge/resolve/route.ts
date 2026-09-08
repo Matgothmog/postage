@@ -21,13 +21,14 @@ export async function POST(request: Request) {
   // A settled message stays settled onchain forever, so without this one
   // payment could be redeemed for a fresh pass as often as it was asked for.
   if (challenge.resolved_at) {
-    return Response.json({ status: "spent", reason: "Already settled" }, { status: 409 });
+    return Response.json(
+      { status: "spent", error: "This challenge has already been settled" },
+      { status: 409 }
+    );
   }
 
   const payer = await payerOf(challenge.message_id as Hex);
   if (!payer) return Response.json({ status: "pending" });
-
-  await resolveChallenge(token);
 
   // Taken from the escrow rather than the request, because whoever calls this
   // could otherwise name any wallet and inherit its reputation. The contract
@@ -37,10 +38,18 @@ export async function POST(request: Request) {
   if (challenge.tier === "dangerous") {
     // The money is taken and the message still does not arrive. Paying here is
     // a penalty, not a price.
+    await resolveChallenge(token);
     return Response.json({ status: "charged", reason: "dangerous" });
   }
 
   await grantPass(challenge.handle, challenge.sender, "paid", 1);
+
+  // Marked settled only once the pass exists. Stamping it first would mean a
+  // failure anywhere below left the challenge closed with nothing granted: the
+  // payment is already onchain and cannot be made again, so every retry would
+  // answer "already settled" and the sender would have paid for silence.
+  await resolveChallenge(token);
+
   return Response.json({
     status: "cleared",
     reason: "paid",
@@ -62,7 +71,11 @@ async function payerOf(messageId: Hex): Promise<string | null> {
       args: [messageId],
     });
     return payer && payer !== ZERO_ADDRESS ? payer : null;
-  } catch {
+  } catch (cause) {
+    // A wrong address or a stale ABI reads exactly like nobody having paid, and
+    // would leave every sender staring at "not cleared yet" with nothing said
+    // anywhere. Unreachable is a fine reason to wait; misconfigured is not.
+    console.error("Could not read the escrow settlement", cause);
     return null;
   }
 }
