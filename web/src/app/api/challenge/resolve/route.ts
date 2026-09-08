@@ -1,22 +1,18 @@
 import { type Hex } from "viem";
 import { publicClient } from "@/lib/client";
 import { POSTAGE_ESCROW, escrowAbi } from "@/lib/contracts";
-import {
-  challengeByToken,
-  addPaidUse,
-  claimChallenge,
-  linkSenderWallet,
-  releaseChallengeClaim,
-} from "@/lib/db";
-import { releaseHeldMessage } from "@/lib/hold";
+import { challengeByToken, linkSenderWallet } from "@/lib/db";
+import { openGate } from "@/lib/gate";
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
-/// Settles the paying half of a challenge. Personhood is not handled here:
-/// proving it needs no wallet and lives in `/api/world/verify`, which checks a
-/// proof rather than reading a credential off an address the caller named.
+/// Settles the paying half of a challenge: prove the payment landed, then hand
+/// off. What clearing actually does lives in `lib/gate`, so that both lanes
+/// answer to one description of it rather than two that drift.
 ///
-/// Paying buys one delivery, because that is what was paid for.
+/// Personhood is not handled here. Proving it needs no wallet and lives in
+/// `/api/world/verify`, which checks a proof rather than reading a credential
+/// off an address the caller named.
 export async function POST(request: Request) {
   const { token } = (await request.json()) as { token?: string };
   if (!token) return Response.json({ error: "A challenge token is required" }, { status: 400 });
@@ -24,50 +20,19 @@ export async function POST(request: Request) {
   const challenge = await challengeByToken(token);
   if (!challenge) return Response.json({ error: "Unknown challenge" }, { status: 404 });
 
-  // A settled message stays settled onchain forever, so without this one
-  // payment could be redeemed for a fresh pass as often as it was asked for.
-  // Answering a settled challenge with its own outcome rather than a bare
-  // refusal. The sender may simply have lost the first reply, and telling them
-  // nothing happened would be worse than telling them what did.
   const payer = await payerOf(challenge.message_id as Hex);
 
-  // Recorded even when the challenge was settled some other way. The money left
-  // their wallet either way, and forgetting it prices their next message as a
-  // stranger's.
+  // Recorded even when the challenge turns out to have been settled some other
+  // way. The money left their wallet either way, and forgetting it prices their
+  // next message as a stranger's.
   if (payer) await linkSenderWallet(challenge.sender, payer);
+  if (!payer && !challenge.resolved_at) return Response.json({ status: "pending" });
 
-  if (challenge.resolved_at) return Response.json(settledOutcome(challenge));
-  if (!payer) return Response.json({ status: "pending" });
-
-  // One statement, so two tabs cannot both believe they are the one settling
-  // this. Whoever loses is told the outcome rather than an error.
-  if (!(await claimChallenge(token, "paid"))) {
-    // Re-read: this row was loaded before the claim, so whatever the winner
-    // recorded while we were asking is not in it yet.
-    return Response.json(settledOutcome((await challengeByToken(token)) ?? challenge));
+  const result = await openGate(token, "paid");
+  if (result.status === "unknown") {
+    return Response.json({ error: "Unknown challenge" }, { status: 404 });
   }
-
-  try {
-    if (challenge.tier === "dangerous") {
-      // The money is taken and the message still does not arrive. Paying here
-      // is a penalty, not a price.
-      return Response.json({ status: "charged", reason: "dangerous" });
-    }
-
-    // Released first, and a pass granted only if it did not go. One payment
-    // buys one delivery: granting a use as well as delivering the held message
-    // would hand the sender a second, free message through the paste box.
-    const released = await releaseHeldMessage(token, challenge.handle);
-    if (!released.delivered) await addPaidUse(challenge.handle, challenge.sender);
-
-    return Response.json({ status: "cleared", reason: "paid", ...released });
-  } catch (cause) {
-    // The payment is onchain and cannot be made a second time, so a challenge
-    // claimed for work that then failed has to be openable again. Otherwise the
-    // sender has bought silence.
-    await releaseChallengeClaim(token).catch(() => {});
-    throw cause;
-  }
+  return Response.json(result);
 }
 
 /// Whether a failed read was the network rather than the request.
@@ -84,27 +49,6 @@ function looksTransient(cause: unknown): boolean {
     error = error.cause;
   }
   return false;
-}
-
-/// What a challenge that is already settled should say. Dangerous mail was
-/// charged and not delivered; anything else was cleared, and whether the held
-/// message actually went is read off the challenge rather than inferred. Pass
-/// state cannot answer it: a human pass earned on an earlier message looks
-/// exactly like one granted because delivery failed, and reading it during
-/// another request's work answers about a moment that has already passed.
-function settledOutcome(challenge: {
-  tier: string;
-  delivered_at: number | null;
-  settled_by: string | null;
-}) {
-  if (challenge.tier === "dangerous") return { status: "charged", reason: "dangerous" };
-  return {
-    status: "cleared",
-    // Which lane opened it, not an assumption. A token cleared for free by
-    // proving personhood would otherwise be reported back as "Paid".
-    reason: challenge.settled_by ?? "paid",
-    delivered: challenge.delivered_at !== null,
-  };
 }
 
 /// The address the escrow recorded as having paid, or null if nobody has.

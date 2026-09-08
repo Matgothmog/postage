@@ -2,15 +2,9 @@ import { type Hex, createWalletClient, getAddress, http, keccak256, stringToByte
 import { privateKeyToAccount } from "viem/accounts";
 import { publicClient } from "@/lib/client";
 import { HUMAN_REGISTRY, chain, registryAbi } from "@/lib/contracts";
-import {
-  challengeByToken,
-  claimChallenge,
-  grantPass,
-  hasLivePass,
-  releaseChallengeClaim,
-} from "@/lib/db";
+import { challengeByToken } from "@/lib/db";
+import { openGate } from "@/lib/gate";
 import { identityMode, required } from "@/lib/env";
-import { releaseHeldMessage } from "@/lib/hold";
 
 /// Matches the Selfie Check credential lifetime, so the free lane lapses when
 /// the credential does rather than outliving it.
@@ -80,48 +74,12 @@ export async function POST(request: Request) {
     return Response.json({ error: detail }, { status: 502 });
   }
 
-  // Claimed before the pass is minted, not after. Recording personhood waits on
-  // a transaction receipt, so two posts of one token overlap easily, and
-  // granting first would mint two windows from one proof before either lost.
-  // Answered already. That is not a reason to turn someone away: recording
-  // personhood waits on a transaction, so a slow reply and an impatient reload
-  // are ordinary, and a hold that lapsed leaves them needing a pass to paste
-  // what they wrote. The guard that matters is above — a fresh proof had to be
-  // presented to get this far — so what is left is to make sure they hold what
-  // that proof earned, without minting a second window on top of a live one.
-  if (!(await claimChallenge(token, "human"))) {
-    const settled = await challengeByToken(token);
-    if (
-      settled?.delivered_at == null &&
-      !(await hasLivePass(challenge.handle, challenge.sender))
-    ) {
-      await grantPass(challenge.handle, challenge.sender, "human", null);
-    }
-    return Response.json({
-      status: "cleared",
-      reason: settled?.settled_by ?? "human",
-      delivered: settled?.delivered_at != null,
-    });
+  const result = await openGate(token, "human");
+  if (result.status === "unknown") {
+    return Response.json({ error: "Unknown challenge" }, { status: 404 });
   }
 
-  try {
-    await grantPass(challenge.handle, challenge.sender, "human", null);
-  } catch (cause) {
-    // Claimed for a pass that was never minted. Left as it stands the sender
-    // has proved they are a person, holds nothing, and every retry tells them
-    // it is already answered.
-    await releaseChallengeClaim(token).catch(() => {});
-    throw cause;
-  }
-
-  return Response.json({
-    status: "cleared",
-    reason: "human",
-    identity,
-    nullifierHash,
-    expiresAt,
-    ...(await releaseHeldMessage(token, challenge.handle)),
-  });
+  return Response.json({ ...result, identity, nullifierHash, expiresAt });
 }
 
 /// An address standing for a person rather than an account. Derived from the
