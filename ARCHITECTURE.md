@@ -230,6 +230,13 @@ answerable only by the person reading that mailbox. The long way — a wallet
 signature and an emailed code — still exists for forwarding somewhere other than
 where you sign in.
 
+Both halves are required at both ends of the long way, and the second one is
+easy to leave out. The code proves somebody can read the address; it says nothing
+about who is claiming. A claim names the wallet the inbox's earnings accrue to,
+so entering a code has to be answered for by that wallet too — otherwise mailing
+a stranger a code they did not ask for, and getting them to type it, hands them
+the mail and somebody else the money.
+
 ## The vault closes the loop
 
 ```

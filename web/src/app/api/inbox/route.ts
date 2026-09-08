@@ -8,6 +8,8 @@ import {
   inboxByHandle,
   inboxByWallet,
   markCodeVerified,
+  purgeOldClaimSends,
+  recentClaimsFrom,
   recentClaimsTo,
   recordClaimSend,
   startClaim,
@@ -33,6 +35,18 @@ const RESERVED = new Set([
 /// one stranger mail it, from a sender whose reputation we depend on, so without
 /// this an unauthenticated loop is an email bomb aimed at anyone.
 const MAX_CLAIMS_PER_DESTINATION = 3;
+
+/// And one wallet can only start so many, whatever addresses it names. The
+/// destination limit does not see this at all: naming a fresh address every time
+/// passes it every time, and each claim that reaches a code registers a
+/// Cloudflare destination — which the account has a hard cap on, which nothing
+/// deletes, and which signup stops working for good on reaching.
+///
+/// Set above what anyone needs. Claiming a handle is one claim; getting the
+/// address wrong twice and fixing it is three. It is a ceiling on farming, not a
+/// budget anybody should feel.
+const MAX_CLAIMS_PER_WALLET = 5;
+
 const THROTTLE_WINDOW_SECONDS = 60 * 60;
 
 /// A signed-in session that owns the wallet it is claiming for. This is the
@@ -117,9 +131,19 @@ export async function POST(request: Request) {
   const taken = await unavailableTo(name, wallet);
   if (taken) return Response.json({ error: taken }, { status: 409 });
 
+  // Dropped on the way past, so the table both counts run over stays the size of
+  // the window rather than growing a row per signup attempt forever.
+  await purgeOldClaimSends(THROTTLE_WINDOW_SECONDS);
+
   if ((await recentClaimsTo(address, THROTTLE_WINDOW_SECONDS)) >= MAX_CLAIMS_PER_DESTINATION) {
     return Response.json(
       { error: "That address has been asked to confirm too many times. Try again later" },
+      { status: 429 }
+    );
+  }
+  if ((await recentClaimsFrom(wallet, THROTTLE_WINDOW_SECONDS)) >= MAX_CLAIMS_PER_WALLET) {
+    return Response.json(
+      { error: "That wallet has claimed too many addresses this hour. Try again later" },
       { status: 429 }
     );
   }
@@ -127,7 +151,7 @@ export async function POST(request: Request) {
   // Counted before anything is sent rather than after. A claim that mails the
   // address and then fails has still mailed it, and a throttle that only counts
   // successes does not throttle that.
-  await recordClaimSend(address);
+  await recordClaimSend(address, wallet);
 
   const alreadyRead = signedIn?.email === address;
   if (!alreadyRead) {

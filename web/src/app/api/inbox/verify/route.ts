@@ -1,3 +1,4 @@
+import { confirmStatement, holdsWallet } from "@/lib/auth";
 import { settleClaim } from "@/lib/claims";
 import { ensureDestination } from "@/lib/cloudflare";
 import { attachDestination, claimByHandle, consumeAttempt, markCodeVerified } from "@/lib/db";
@@ -23,16 +24,39 @@ export async function GET(request: Request) {
     codeVerified: state.codeVerified,
     cloudflareVerified: state.cloudflareVerified,
     live: state.live,
+    stalled: state.stalled,
   });
 }
 
 /// Confirms the claimer can read the address they pointed the handle at.
+///
+/// The code proves the address; it does not prove who is claiming. Both are
+/// needed, because a claim names a wallet and that wallet ends up holding the
+/// inbox's `earnings` and its `setFloorPrice`. Without this the code was the
+/// whole of it, so anyone who could get a stranger to type a code they had been
+/// sent unasked completed a claim on a wallet the sender of that code chose: the
+/// mail would arrive at the victim, and the money would not.
+///
+/// So the caller has to hold the wallet the claim was started with. The person
+/// who started it does; whoever tricked someone into reading a code does not.
 export async function POST(request: Request) {
   const { handle, code } = (await request.json()) as { handle?: string; code?: string };
   if (!handle || !code) return Response.json({ error: "handle and code are required" }, { status: 400 });
 
   const claim = await claimByHandle(handle);
   if (!claim) return Response.json({ error: "Nothing is being claimed here" }, { status: 404 });
+
+  // Before the attempt is counted, so failing to prove the wallet cannot burn
+  // the real claimer's guesses.
+  const proven = await holdsWallet(request, claim.wallet, (at) =>
+    confirmStatement(claim.handle, claim.wallet, at)
+  );
+  if (!proven) {
+    return Response.json(
+      { error: "Sign in with the wallet that started this claim to confirm it" },
+      { status: 401 }
+    );
+  }
 
   if (claim.expires_at <= Math.floor(Date.now() / 1000)) {
     return Response.json({ error: "That code has expired. Start again to get a new one" }, { status: 410 });
@@ -75,5 +99,6 @@ export async function POST(request: Request) {
     codeVerified: true,
     cloudflareVerified: state?.cloudflareVerified ?? false,
     live: state?.live ?? false,
+    stalled: state?.stalled ?? false,
   });
 }

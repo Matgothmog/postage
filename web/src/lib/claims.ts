@@ -2,9 +2,11 @@ import { destinationStatus } from "./cloudflare";
 import {
   type InboxClaim,
   claimByHandle,
+  cloudflareChecksExhausted,
   clearClaim,
   createInbox,
   markCloudflareVerified,
+  takeCloudflareCheck,
 } from "./db";
 
 export interface ClaimState {
@@ -12,6 +14,10 @@ export interface ClaimState {
   codeVerified: boolean;
   cloudflareVerified: boolean;
   live: boolean;
+  /// The claim has asked Cloudflare as often as it may and never been
+  /// confirmed. Nothing will ask again, so a page polling this should stop and
+  /// say so rather than spin on a state that can no longer change.
+  stalled: boolean;
 }
 
 /// Brings a claim up to date against Cloudflare and promotes it to a real inbox
@@ -27,12 +33,25 @@ export async function settleClaim(handle: string): Promise<ClaimState | null> {
   if (!claim) return null;
 
   let cloudflareVerified = claim.cf_verified_at !== null;
+  let stalled = false;
+
+  // Asked only when this claim has a slot for it. The call spends an
+  // account-wide Cloudflare quota and the route that leads here is polled by an
+  // anonymous browser, so the question is rationed per claim rather than per
+  // request — see `takeCloudflareCheck`.
   if (!cloudflareVerified && claim.cf_address_id) {
     const addressId = claim.cf_address_id;
-    const current = await destinationStatus(addressId);
-    if (current?.verifiedAt != null) {
-      await markCloudflareVerified(claim.handle, addressId, current.verifiedAt);
-      cloudflareVerified = true;
+
+    if (await takeCloudflareCheck(claim.handle)) {
+      const current = await destinationStatus(addressId);
+      if (current?.verifiedAt != null) {
+        await markCloudflareVerified(claim.handle, addressId, current.verifiedAt);
+        cloudflareVerified = true;
+      }
+    } else {
+      // Refused, and only a refusal can mean the budget is gone — being inside
+      // the interval is the ordinary case and costs nothing to establish.
+      stalled = await cloudflareChecksExhausted(claim.handle);
     }
   }
 
@@ -43,5 +62,5 @@ export async function settleClaim(handle: string): Promise<ClaimState | null> {
     await clearClaim(claim.handle);
   }
 
-  return { claim, codeVerified, cloudflareVerified, live };
+  return { claim, codeVerified, cloudflareVerified, live, stalled };
 }

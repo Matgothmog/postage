@@ -43,32 +43,34 @@ two agree (the forgery changed nothing) or disagree (both are dropped).
 parse only the header bearing Cloudflare's own authserv-id, which means finding
 out what that authserv-id is.
 
-**`GET /api/inbox/verify` mutates state.** Verified by reading; it calls
-`settleClaim`, which writes `markCloudflareVerified`, `createInbox` and
-`clearClaim`. An anonymous caller can therefore enumerate in-flight claims by
-status code, drive a stranger's claim live, and spend one Cloudflare API call per
-request against an account-wide rate limit. The polling needs to be either
-authenticated or read-only with promotion moved elsewhere.
+**`GET /api/inbox/verify` still promotes a claim on an unauthenticated read.**
+Verified by reading, and no longer the item it was. It calls `settleClaim`, which
+writes `markCloudflareVerified`, `createInbox` and `clearClaim`, so an anonymous
+caller can enumerate in-flight claims by status code and drive one live.
 
-**Confirming a code is not bound to a wallet.** Verified by reading. `POST
-/api/inbox/verify` takes `{handle, code}` and nothing else, so someone who
-receives an unsolicited code and enters it completes a claim whose wallet the
-attacker chose: mail reaches the victim, while the attacker's wallet holds
-`earnings` and `setFloorPrice`. The short signup does not touch this path, but
-the long one still does.
+Driving it live is the outcome the claim's own owner is waiting for, and it needs
+both halves — a code only they received, and a link only they can click — so it
+is not a way in. What the route did cost was one Cloudflare API call per request,
+against a limit belonging to the whole account. That is now rationed per claim
+rather than per request: at most one call every `CF_CHECK_INTERVAL_SECONDS`, and
+at most `CF_CHECK_BUDGET` for the life of a claim. A thousand simultaneous
+pollers cost what one does, and no claim can be made to answer questions forever.
+
+What is left is the enumeration, against handles that are published on purpose.
 
 **A verification code is recoverable from the database in seconds.** Verified:
 holding both `inbox_claims` and `MESSAGE_ID_SECRET`, the six digit code behind a
 stored hash was recovered by exhausting all 10^6 candidates in 3.4 seconds. Not a
 new way in — anyone with both already owns the system — but the stored hash is
-not a barrier, and the server side attempt cap is the only thing protecting a
-code. Never expose the hash, and do not add a client side check against it.
+not a barrier. What protects a code is the server side attempt cap and, now, that
+a code alone completes nothing. Never expose the hash, and do not add a client
+side check against it.
 
-**Nothing rate limits anything except claim emails.** Verified by reading. The
-three-per-hour throttle on `POST /api/inbox` covers the email bomb. Every other
-route — `/api/mail/inbound` behind its shared secret, `/api/challenge/resolve`,
-`/api/world/verify`, which spends real gas, and the worker's `/release`, which
-spends a Mailgun send — has no limit at all.
+**Most routes have no rate limit.** Verified by reading. The claim path now has
+three: three per destination per hour, five per wallet per hour, and the
+Cloudflare ration above. Everything else has none — `/api/mail/inbound` behind
+its shared secret, `/api/challenge/resolve`, `/api/world/verify`, which spends
+real gas, and the worker's `/release`, which spends a Mailgun send.
 
 ## Correctness
 

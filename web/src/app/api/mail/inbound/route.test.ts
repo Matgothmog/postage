@@ -1,8 +1,27 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, beforeEach, test } from "node:test";
+
+/// Every held message reads `effectiveFloor` off the chain. Answered here rather
+/// than by the public RPC in the chain definition, which is shared with everyone
+/// else using it and rate limits accordingly — these tests are about what the
+/// gateway decides, and a verdict should not depend on somebody else's traffic.
+const FLOOR = 10n ** 16n;
+const rpc = createServer((request, response) => {
+  let body = "";
+  request.on("data", (chunk) => (body += chunk));
+  request.on("end", () => {
+    const { id } = JSON.parse(body) as { id: number };
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ jsonrpc: "2.0", id, result: `0x${FLOOR.toString(16).padStart(64, "0")}` }));
+  });
+});
+await new Promise<void>((ready) => rpc.listen(0, "127.0.0.1", ready));
+process.env.ARC_RPC_URL = `http://127.0.0.1:${(rpc.address() as AddressInfo).port}`;
 
 const workspace = mkdtempSync(join(tmpdir(), "postage-inbound-"));
 process.env.DATABASE_URL = `file:${join(workspace, "test.db")}`;
@@ -39,6 +58,7 @@ beforeEach(async () => {
 });
 
 after(() => {
+  rpc.close();
   rmSync(workspace, { recursive: true, force: true });
 });
 

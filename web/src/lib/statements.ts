@@ -15,3 +15,14 @@ export function claimStatement(handle: string, destination: string, wallet: stri
 export function readStatement(wallet: string, issuedAt: number): string {
   return ["Postage: read my inbox", `Wallet: ${wallet.toLowerCase()}`, `Issued: ${issuedAt}`].join("\n");
 }
+
+/// Names the handle as well as the wallet, so a signature collected for one
+/// claim cannot confirm another.
+export function confirmStatement(handle: string, wallet: string, issuedAt: number): string {
+  return [
+    "Postage: confirm my code",
+    `Handle: ${postageAddress(handle)}`,
+    `Wallet: ${wallet.toLowerCase()}`,
+    `Issued: ${issuedAt}`,
+  ].join("\n");
+}

@@ -4,7 +4,7 @@ import { useIdentityToken, useSignMessage } from "@privy-io/react-auth";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Callout, field, primaryButton, quietButton, secondaryButton } from "@/components/chrome";
 import { MAIL_DOMAIN, handleOf, postageAddress } from "@/lib/handle";
-import { claimStatement } from "@/lib/statements";
+import { claimStatement, confirmStatement } from "@/lib/statements";
 
 export interface ClaimProgress {
   handle: string;
@@ -19,6 +19,30 @@ interface ClaimReply extends ClaimProgress {
 }
 
 type SignMessage = ReturnType<typeof useSignMessage>["signMessage"];
+
+/// Headers proving the wallet to the server, by whichever route this session
+/// has. Privy's identity token already names the wallets it minted; a session
+/// without one signs a statement saying what it is about to do. The address
+/// alone proves nothing — it is public, and every gated sender is handed one.
+async function walletProof(
+  identityToken: string | null,
+  signMessage: SignMessage,
+  wallet: string,
+  statement: (issuedAt: number) => string
+): Promise<HeadersInit> {
+  if (identityToken) return { "privy-id-token": identityToken };
+
+  const issuedAt = Math.floor(Date.now() / 1000);
+  const { signature } = await signMessage(
+    { message: statement(issuedAt) },
+    { address: wallet, uiOptions: { showWalletUIs: false } }
+  );
+  return {
+    "x-postage-wallet": wallet,
+    "x-postage-issued": String(issuedAt),
+    "x-postage-signature": signature,
+  };
+}
 
 /// Best effort. A signature is the only proof for someone whose session cannot
 /// be read from an identity token, and redundant for everyone else, so a wallet
@@ -64,7 +88,15 @@ export function ClaimInbox({
   if (!claim) {
     return <PickHandle wallet={wallet} email={email} onStarted={setClaim} onLive={onLive} />;
   }
-  return <FinishClaim claim={claim} onClaim={setClaim} onLive={onLive} onRestart={() => setClaim(null)} />;
+  return (
+    <FinishClaim
+      claim={claim}
+      wallet={wallet}
+      onClaim={setClaim}
+      onLive={onLive}
+      onRestart={() => setClaim(null)}
+    />
+  );
 }
 
 /// The whole of signing up for someone whose address Privy already checked: a
@@ -207,16 +239,23 @@ function PickHandle({
 /// own link, which no API can answer on the owner's behalf.
 function FinishClaim({
   claim,
+  wallet,
   onClaim,
   onLive,
   onRestart,
 }: {
   claim: ClaimProgress;
+  wallet: string;
   onClaim: (claim: ClaimProgress) => void;
   onLive: () => void;
   onRestart: () => void;
 }) {
+  const { identityToken } = useIdentityToken();
+  const { signMessage } = useSignMessage();
   const [code, setCode] = useState("");
+  /// The server has stopped asking Cloudflare about this claim, so polling it
+  /// can only ever return the same answer.
+  const [stalled, setStalled] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [stuck, setStuck] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -226,8 +265,14 @@ function FinishClaim({
   /// new object every four seconds, which re-runs the effect below and restarts
   /// the interval it just set — the poll then never reaches its own deadline.
   const apply = useCallback(
-    (next: { codeVerified: boolean; cloudflareVerified: boolean; live: boolean }) => {
+    (next: {
+      codeVerified: boolean;
+      cloudflareVerified: boolean;
+      live: boolean;
+      stalled?: boolean;
+    }) => {
       if (next.live) return onLive();
+      if (next.stalled) setStalled(true);
 
       const codeVerified = claim.codeVerified || next.codeVerified;
       const cloudflareVerified = claim.cloudflareVerified || next.cloudflareVerified;
@@ -242,7 +287,7 @@ function FinishClaim({
   // Cloudflare's half turns green when the user clicks the link in its email,
   // which happens outside this page, so it has to be asked for.
   useEffect(() => {
-    if (claim.cloudflareVerified) return;
+    if (claim.cloudflareVerified || stalled) return;
     const poll = setInterval(async () => {
       inFlight.current?.abort();
       const controller = new AbortController();
@@ -260,15 +305,22 @@ function FinishClaim({
       clearInterval(poll);
       inFlight.current?.abort();
     };
-  }, [claim.handle, claim.cloudflareVerified, apply]);
+  }, [claim.handle, claim.cloudflareVerified, stalled, apply]);
 
   async function submit() {
     setBusy(true);
     setError(null);
     try {
+      // The code says whoever holds this mailbox agreed; it does not say who is
+      // claiming. The wallet the claim was started with says that, and both are
+      // needed — it is the wallet the inbox's earnings accrue to.
+      const proof = await walletProof(identityToken, signMessage, wallet, (at) =>
+        confirmStatement(claim.handle, wallet, at)
+      );
+
       const response = await fetch("/api/inbox/verify", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...proof },
         body: JSON.stringify({ handle: claim.handle, code: code.trim() }),
       });
       const result = await response.json();
@@ -329,7 +381,17 @@ function FinishClaim({
           n={claim.codeVerified ? 1 : 2}
           label="Click the link Cloudflare emailed you"
         >
-          {claim.cloudflareVerified ? null : claim.codeVerified ? (
+          {claim.cloudflareVerified ? null : stalled ? (
+            <div className="mt-2">
+              <p className="text-sm leading-relaxed text-ink-soft">
+                We have stopped watching for it. Clicking the link Cloudflare sent still works — reload
+                this page afterwards and you are done.
+              </p>
+              <button onClick={onRestart} className={`${quietButton} -ml-3 mt-1`}>
+                Or start again with a new code
+              </button>
+            </div>
+          ) : claim.codeVerified ? (
             <p className="mt-2 text-sm leading-relaxed text-ink-soft">
               Waiting for it. Cloudflare will not carry mail to an address it has not checked
               itself, and only the person reading that mailbox can answer. It comes from

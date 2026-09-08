@@ -1,7 +1,8 @@
 import { type Hex, isAddress } from "viem";
 import { publicClient } from "./client";
+import { readIdentity } from "./privy";
 
-export { claimStatement, readStatement } from "./statements";
+export { claimStatement, confirmStatement, readStatement } from "./statements";
 
 /// How long a signed statement stays good for. Long enough to cover a slow
 /// signature prompt, short enough that one lifted from a log is worthless.
@@ -31,4 +32,35 @@ export async function provesWallet(
   } catch {
     return false;
   }
+}
+
+/// Whether this request was made by someone holding a particular wallet.
+///
+/// Two things count as proof and the app issues both. Privy's identity token
+/// lists the wallets it minted for whoever is signed in, and a signature over a
+/// statement naming the wallet is what a session with no such token can offer.
+/// Neither is the address itself: a wallet address is public, indexed onchain,
+/// and handed to every sender who was ever gated, so a request that merely names
+/// one has proved nothing.
+export async function holdsWallet(
+  request: Request,
+  wallet: string,
+  statement: (issuedAt: number) => string
+): Promise<boolean> {
+  const wanted = wallet.toLowerCase();
+
+  const identity = await readIdentity(request.headers.get("privy-id-token"));
+  if (identity?.wallets.includes(wanted)) return true;
+
+  // Checked against the wallet we are asking about before the signature is
+  // verified, so a valid signature from some other wallet cannot stand in.
+  const offered = request.headers.get("x-postage-wallet");
+  if (!offered || offered.toLowerCase() !== wanted) return false;
+
+  return await provesWallet(
+    offered,
+    Number(request.headers.get("x-postage-issued")),
+    request.headers.get("x-postage-signature"),
+    statement
+  );
 }
