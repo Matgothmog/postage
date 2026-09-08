@@ -54,12 +54,20 @@ const FALLBACK_HOLD_SECONDS = 24 * 60 * 60;
 ///
 /// We cannot tell them apart from here, so a method is only believed when every
 /// copy agrees on it. A sender who adds `dmarc=pass` to a message Cloudflare
-/// marked `dmarc=fail` now contradicts it and gets nothing, where before they
-/// could have taken the answer. What is left is a domain for which Cloudflare
-/// records no result at all — there is nothing to disagree with, so a forged
-/// claim still stands. Closing that needs Cloudflare's authserv-id, which is
-/// not established. Legitimate mail is unaffected either way: relays add
-/// results for their own hop and do not restate this one.
+/// marked `dmarc=fail` now contradicts it and comes away with nothing, where
+/// before they could hand us the answer.
+///
+/// What is left is a message for which Cloudflare recorded no result at all:
+/// there is then nothing to disagree with, and a forged claim stands. That is
+/// narrow, because a forged claim only buys anything if Cloudflare stated
+/// neither dmarc nor spf — state either and the two either agree, in which case
+/// the forgery changed nothing, or they do not, in which case both are dropped.
+/// Closing it needs Cloudflare's authserv-id, which is not established.
+///
+/// Honest mail is unaffected. A relay that adds its own results either agrees
+/// or is describing a different hop; where it disagrees about DKIM — a message
+/// with two signatures, one of which does not verify — the method reads unknown
+/// rather than pass, which no path treats as a failure.
 function authResults(header: string | null): { spf: string | null; dkim: string | null; dmarc: string | null } {
   const read = (method: string) => {
     const found = header?.matchAll(new RegExp(`\\b${method}=(\\w+)`, "gi")) ?? [];

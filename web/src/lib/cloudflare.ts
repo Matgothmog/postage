@@ -87,14 +87,20 @@ export async function ensureDestination(email: string): Promise<Destination> {
 
 const PER_PAGE = 50;
 
+/// A ceiling on the walk, not on the account. Reaching it means the address is
+/// not registered as far as anyone can tell, which is what the caller does with
+/// a null anyway — an unbounded loop against an API that kept answering with a
+/// full page would be worse than a wrong answer.
+const MAX_PAGES = 40;
+
 /// Every page, not the first one. One destination is created per inbox and none
 /// are ever deleted, so a single page stopped answering for older addresses at
-/// roughly the fiftieth signup — and the caller reads a miss as "Cloudflare
-/// refused the address", which is a signup that fails for good.
+/// roughly the fiftieth signup — and `ensureDestination` reads a miss as
+/// "Cloudflare refused the address", which is a signup that fails for good.
 async function findDestination(email: string): Promise<Destination | null> {
   const wanted = email.toLowerCase();
 
-  for (let page = 1; ; page += 1) {
+  for (let page = 1; page <= MAX_PAGES; page += 1) {
     const listed = await call<Address[]>(
       `/email/routing/addresses?per_page=${PER_PAGE}&page=${page}&direction=desc`
     );
@@ -103,11 +109,16 @@ async function findDestination(email: string): Promise<Destination | null> {
     const match = addresses.find((address) => address.email.toLowerCase() === wanted);
     if (match) return toDestination(match);
 
-    // Stops on a short page as well as on the count, so a response without
-    // `result_info` cannot turn this into an unbounded loop.
-    const seen = (listed.result_info?.page ?? page) * PER_PAGE;
-    if (addresses.length < PER_PAGE || seen >= (listed.result_info?.total_count ?? 0)) return null;
+    // A short page is the end of the list whatever else is said. The count only
+    // ever stops the walk early, so a response without `result_info` reads as
+    // "keep going" rather than collapsing this back to one page.
+    if (addresses.length < PER_PAGE) return null;
+
+    const total = listed.result_info?.total_count;
+    if (total !== undefined && page * PER_PAGE >= total) return null;
   }
+
+  return null;
 }
 
 export async function destinationStatus(id: string): Promise<Destination | null> {

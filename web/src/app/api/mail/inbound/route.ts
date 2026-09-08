@@ -43,6 +43,13 @@ function senderIsAuthenticated(payload: Partial<InboundPayload>): boolean {
   return payload.spf === "pass" && payload.dkim !== "fail";
 }
 
+/// A message that will never be delivered, whatever anyone does about it. The
+/// worker puts `bounce` in the SMTP refusal, so the sender is told why rather
+/// than left to retry.
+function refuse(reason: string, bounce: string): Response {
+  return Response.json({ action: "reject", reason, bounce });
+}
+
 /// Called by the mail worker for every inbound message.
 ///
 /// Every stranger is held. The classifier does not decide whether to hold, it
@@ -73,24 +80,22 @@ export async function POST(request: Request) {
   const inbox = await inboxByHandle(handle);
   if (!inbox) return Response.json({ action: "reject", reason: "unknown_inbox" }, { status: 404 });
 
+  // Both of these are answered 200 with a verdict in the body, like every other
+  // outcome. A non-2xx tells the worker it could not reach us, and it then
+  // refuses the session with "please retry" — which for a permanent condition
+  // means the sender's server retries for days over something retrying cannot
+  // fix. Only a gateway fault is a status code.
   if (!inbox.wallet) {
-    return Response.json({ error: "Inbox has no wallet to be paid at" }, { status: 409 });
+    return refuse("no_wallet", "That address cannot receive mail yet: nobody has claimed it fully.");
   }
 
   // Forwarding to our own domain sends the message straight back in, and every
-  // lap spends a classify call, a chain read and a challenge row. Claiming one
-  // is refused, so reaching here needs an inbox that predates that check or a
-  // row edited by hand — but nothing else stops it, and a loop nobody notices
-  // is a bill nobody agreed to.
+  // lap spends a classify call, a chain read and a challenge row. Claiming such
+  // a destination is refused, so reaching here needs an inbox that predates that
+  // check or a row edited by hand — but nothing else stops it, and a loop nobody
+  // notices is a bill nobody agreed to.
   if (isOurs(inbox.destination)) {
-    return Response.json(
-      {
-        action: "reject",
-        reason: "loop",
-        bounce: "That address forwards back to this domain, so nothing can be delivered.",
-      },
-      { status: 409 }
-    );
+    return refuse("loop", "That address forwards back to this domain, so nothing can be delivered.");
   }
 
   const sender = from.toLowerCase();
