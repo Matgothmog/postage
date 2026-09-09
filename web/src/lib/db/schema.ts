@@ -153,6 +153,28 @@ export const SCHEMA = [
   /// The purge filters on the window's end alone, which the composite index
   /// above cannot answer without reading the table.
   `CREATE INDEX IF NOT EXISTS issued_rp_contexts_by_age ON issued_rp_contexts (expires_at)`,
+  /// Every wallet nonce that has already been answered with a valid signature.
+  ///
+  /// Deliberately not the mirror of `issued_rp_contexts` above: nothing is
+  /// written here when a nonce is *handed out*. `/api/wallet-nonce` is open —
+  /// it has to be, since a wallet has nothing to prove before it has a nonce
+  /// to sign — so a row per issue would be a table any stranger could grow
+  /// without limit. A minted nonce carries its own MAC instead
+  /// (`wallet-nonce.ts`), and only a nonce that has already survived
+  /// signature verification ever reaches this table. That bounds the rows by
+  /// successful sign-ins rather than by requests.
+  ///
+  /// The primary key is the whole mechanism: the second presentation of one
+  /// signature finds the row already there and is refused. `expires_at` is
+  /// carried so the row can be dropped once the nonce would be refused on age
+  /// anyway, which is what keeps the table the size of one window.
+  `CREATE TABLE IF NOT EXISTS spent_wallet_nonces (
+     nonce TEXT PRIMARY KEY,
+     expires_at INTEGER NOT NULL
+   )`,
+  /// The purge filters on the window's end alone, and the primary key above
+  /// cannot answer that without reading the table.
+  `CREATE INDEX IF NOT EXISTS spent_wallet_nonces_by_age ON spent_wallet_nonces (expires_at)`,
 ];
 
 /// Whether a statement is one of the ones that makes a table exist, which is
