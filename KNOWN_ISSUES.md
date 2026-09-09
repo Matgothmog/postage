@@ -8,42 +8,69 @@ Each item says how sure we are. **Verified** means it was reproduced against
 running code. **Plausible** means the reasoning holds but nobody has confirmed
 the behaviour, and confirming it is the first task, not fixing it.
 
+Every item below was re-checked against the working tree at `bc9cc87` on
+2026-09-09, and the ones that had gone stale say what replaced them. Line
+numbers cite that commit.
+
 ## Blocking a real demo
 
 Nothing in the mail path. A message from Gmail to a live handle has been held,
 replied to in its own SMTP session, released through Mailgun and delivered
 against the deployed stack.
 
-**World ID is not actually integrated in the browser, and the server half that
-used to exist has since been removed too.** Verified. `ChallengeActions.verifyHuman`
-posts a bare challenge token and always has — nothing client side ever called
-`@worldcoin/idkit` or requested a proof. With `IDENTITY_MODE=mock` the nullifier
-is `keccak256("mock-selfie:" + sender)`, which is one free pass per *address*
-rather than per person, so the Sybil resistance the free lane rests on is not
-switched on. In `live` mode the flow would fail outright — `/api/world/verify`
-still parses a Selfie Check result, but nothing produces one to send it.
+**World ID is wired end to end on this branch. What the gate is worth depends
+on `IDENTITY_MODE`, and nothing in this repo says what the deployment sets it
+to.** Verified by reading, 2026-09-09. This entry used to say the browser had
+never called `@worldcoin/idkit`, that the `rp_context`-signing route had been
+deleted, and that `live` mode would fail outright. That was true when it was
+written and is false now: it predates `bc9cc87 feat: switch World ID Selfie
+Check from mock to real`, which built the half it said was missing.
 
-What used to sign the other half of the handshake is gone: the route
-`web/src/app/api/world/context/route.ts`, which signed the `rp_context` every
-World ID 4.0 proof request must carry, was deleted as dead code — nothing
-reachable ever called it. Its removal took the `@worldcoin/idkit` and
-`@worldcoin/idkit-server` packages out of `web/package.json` with it (idkit-server
-had no other importer), and the `WORLD_ACTION` and `WORLD_RP_SIGNING_KEY` env vars
-out of `web/.env.local.example` (that route was their only reader). `WORLD_RP_ID`
-stays — `/api/world/verify` still reads it to call the Developer Portal directly.
-Rebuilding the client integration means restoring all of it: both packages,
-an `rp_context`-signing route, and the two env vars it needs, plus whatever
-client-side call `ChallengeActions.verifyHuman` was always missing.
+`live` mode is not an automatic pass, and both halves of the handshake exist.
+`ChallengeActions.verifyHuman` takes the live branch at
+`web/src/app/c/[token]/ChallengeActions.tsx:106-118`: `runSelfieCheck`
+(`web/src/lib/world-id.ts:216-260`) fetches a server-signed `rp_context`, opens
+a real IDKit request — `IDKit.request(config).preset(selfieCheckLegacy(...))`
+at `web/src/lib/world-id.ts:63` — and polls it to completion, after which
+`postWorldVerify` (`:277-288`) forwards the proof and throws unless the server
+answers `cleared`. `/api/world/verify` then runs four checks before anything
+opens (`web/src/app/api/world/verify/route.ts:225-236`): the proof must be
+present and well shaped (`:125-133`); its `signal_hash` must equal
+`hashSignal(token)`, so a proof made for another challenge is refused
+(`:114-119`); the signed context it was issued under must still be unspent,
+which is one conditional statement and so single use (`:172-189`,
+`web/src/lib/db/issued-contexts.ts:59-68`); and World's own Developer Portal
+at `https://developer.world.org/api/v4` must answer with exactly one
+successful `selfie` result carrying a nullifier (`:408-469`). Mail is released
+only downstream of all four, through `openGate(token, "human")`
+(`web/src/lib/gate.ts:43`), which that route is the only non-test caller of.
+`web/src/app/api/world/context/route.ts` signs the `rp_context` and is fetched
+from `web/src/lib/world-id.ts:129`; both `@worldcoin/idkit` and
+`@worldcoin/idkit-server` are installed (`web/package.json:17-18`); and
+`WORLD_ACTION` and `WORLD_RP_SIGNING_KEY` are documented at
+`web/.env.local.example:14,20`.
 
-On the deployed testnet this is not a future risk but the live behaviour.
-`identityMode()` (`web/src/lib/env.ts:8-9`) defaults to `"mock"` unless
-`IDENTITY_MODE` is exactly `"live"`, and DEPLOYMENTS.md's own "Proven end to
-end" record — a message released "when the sender said a person wrote it" —
-could only have happened in mock mode, since `live` mode's `verifyWithWorld`
-throws immediately on the proof `ChallengeActions.verifyHuman` never sends.
-So the personhood gate on the live testnet is not merely unbuilt client-side;
-it is an automatic pass keyed to the sender's address, with a real on-chain
-attestation written for it.
+`mock` mode runs none of that. `web/src/app/api/world/verify/route.ts:235` takes
+`mockNullifier(challenge.sender)` — `keccak256("mock-selfie:" + sender)` at
+`:474-476` — which is one free pass per *address* rather than per person, so the
+Sybil resistance the free lane rests on is not switched on, and the onchain
+attestation at `:266` is written for it just the same. `identityMode()`
+(`web/src/lib/env.ts:13-17`) returns `"mock"` for unset or empty, so mock is
+what a deployment gets unless somebody set the variable.
+
+**Which of the two the deployed testnet runs cannot be established from this
+repo, and neither can what code it is running.** `bc9cc87` is on no remote
+branch — `git branch -r --contains bc9cc87` is empty — so the integration
+described above is unpushed local work, and not something `origin/main` could
+be serving. There is no `vercel.json`, nothing in DEPLOYMENTS.md naming a
+branch or an `IDENTITY_MODE` value, and no `.env` file anywhere in the tree.
+DEPLOYMENTS.md's own "Proven end to end" record — a message released "when the
+sender said a person wrote it" — predates `bc9cc87`, so that release was
+necessarily a mock pass; it says nothing about what is deployed now.
+*Establish first* what `postage-seven.vercel.app` actually serves and what
+`IDENTITY_MODE` is set to there. If the answer is mock, the paragraph above is
+the live behaviour: an automatic pass keyed to the sender's address, with a
+real onchain attestation written for it.
 
 ## Security
 
@@ -88,10 +115,18 @@ a code alone completes nothing. Never expose the hash, and do not add a client
 side check against it.
 
 **Most routes have no rate limit.** Verified by reading. The claim path now has
-three: three per destination per hour, five per wallet per hour, and the
-Cloudflare ration above. Everything else has none — `/api/mail/inbound` behind
-its shared secret, `/api/challenge/resolve`, `/api/world/verify`, which spends
-real gas, and the worker's `/release`, which spends a Mailgun send.
+three: three per destination per hour, five per wallet per hour
+(`web/src/app/api/inbox/route.ts:37,48`), and the Cloudflare ration above.
+`/api/world/context`, which did not exist when this was written, has a fourth:
+a challenge token may hold five unexpired signed contexts at a time
+(`MAX_LIVE_CONTEXTS_PER_TOKEN`, `web/src/lib/db/issued-contexts.ts:24`). Under
+`live` mode that ceiling is also the only bound on the expensive half of
+`/api/world/verify`, since a context is spent before World or the chain is
+touched (`web/src/app/api/world/verify/route.ts:232`); under `mock` mode that
+route has no bound at all, and it spends real gas either way. Everything else
+has none — `/api/mail/inbound` behind its shared secret,
+`/api/challenge/resolve`, and the worker's `/release`, which spends a Mailgun
+send.
 
 **A release token can outlive its own release.** Verified by reading.
 `retireHold` deletes the worker's KV entry only after Mailgun has already sent
@@ -160,8 +195,8 @@ the gateway's own calls to `/release` (`web/src/lib/hold.ts:26-32`), where
 attacker-supplied. Holding that one secret is enough to redirect a held
 message's contents to an address of the holder's choosing through a Mailgun
 relay under the account's domain — the worker enforces no relationship
-between the two. The file already records `/release` having no rate limit;
-it does not record this.
+between the two. Separate from `/release` having no rate limit, which the item
+above already records, and unfixed.
 
 **A sender can turn a real DKIM failure into `unknown`, and `unknown` is
 accepted as far as delivery is concerned.** Plausible. `authResults` in
@@ -199,9 +234,12 @@ their code hash indefinitely.
 
 **There is no way to delete a destination.** Verified by reading. One is created
 per inbox and none are ever removed, and the Cloudflare account has a cap on
-them; reaching it kills signup permanently. `findDestination` now walks every
-page rather than the first fifty, so the lookup no longer fails first — which
-means the cap is now the thing that will actually bite.
+them; reaching it kills signup permanently. `findDestination` now walks the
+pages rather than the first fifty, so the lookup no longer fails first — which
+means the cap is now the thing that will actually bite. The walk is itself
+bounded at `MAX_PAGES` of `PER_PAGE` (`web/src/lib/cloudflare.ts:88,94`), so
+past two thousand registered addresses the lookup starts failing again, this
+time silently as a miss.
 
 ## Contracts
 
@@ -248,10 +286,13 @@ interface.
 
 **`readIdentity` has never been run against a live Privy token.** The signature
 check, the issuer and audience checks and the `linked_accounts` parse are written
-against Privy's documented format and are exercised by nothing. A token that does
-not verify falls back to the emailed-code path rather than failing open, so the
-risk is a signup quietly taking the long way rather than a stranger getting
-through. Establish first that the short path actually fires.
+against Privy's documented format, and the tests that exercise them
+(`web/src/lib/privy.test.ts`) mint their own ES256 keypair and serve their own
+JWKS, so what they pin is that the code matches our reading of the format — not
+that the reading is right. A token that does not verify falls back to the
+emailed-code path rather than failing open, so the risk is a signup quietly
+taking the long way rather than a stranger getting through. Establish first that
+the short path actually fires.
 
 **One provider clearing Cloudflare's DMARC precondition says little about the
 rest.** `message.reply()` works for Gmail. How many other senders qualify is
@@ -259,8 +300,14 @@ unmeasured, and every one that does not gets the bounce instead — which still
 carries the link, but is not the experience this was built for.
 
 **The `dangerous` tier has not been exercised end to end.** The classifier's
-verdict cannot be forced from outside, so the branch that refuses without holding
-has only been read, not run.
+verdict cannot be forced from outside, so no real message has ever been called
+dangerous on the deployed stack. The branches that act on it are run, with the
+verdict stubbed: `web/src/app/api/mail/inbound/challenge.test.ts:72-77` pins
+that nothing is held (`challenge.ts:63`),
+`web/src/app/api/mail/inbound/forwarding.test.ts:103-115` that no pass carries
+it, and `web/src/lib/gate.test.ts:97-105` that no lane delivers it. What is
+unverified is the classifier reaching that verdict about real mail, not the code
+that acts on it once it has.
 
 ## Smaller things
 
@@ -273,9 +320,11 @@ has only been read, not run.
   held either way and proving personhood still clears it for nothing, so this
   costs a real sender only if they decline to prove it — but the tier is meant to
   describe the message, and there it was wrong.
-- `reset()` (`web/src/lib/db/client.ts`), which empties every table, is exported
-  from a shipped application module rather than kept test-only. No route reaches
-  it, but it sits in the app's module graph.
+- `reset()` (`web/src/lib/db/client.ts:62`), which empties every table, is
+  exported from a shipped application module rather than kept test-only. No route
+  reaches it, but it sits in the app's module graph. It now refuses to run when
+  `NODE_ENV` is `"production"` (`:62-64`), which `next build` and `next start`
+  both set, so what is left is the export itself rather than the erasure.
 - `GET /api/inbox/verify?handle=` is unauthenticated and reveals whether a handle
   is mid-claim.
 - No `.tsx` file in this repo can be imported by a test. `node
@@ -284,18 +333,22 @@ has only been read, not run.
   gets a chance to run, and there is no jsdom, no React Testing Library, no
   `react-test-renderer`, and no browser tool in this environment to mount a
   component even if the module did load. Confirmed with a standalone probe file
-  outside the repo, not inferred. Three test files work around it rather than
+  outside the repo, not inferred. Four test files work around it rather than
   closing it — `web/src/app/Account.test.ts`, `FinishClaim.test.ts`,
-  `PickHandle.test.ts` — by reading the component's own source text at test
-  time, cutting out one function or expression by matching a stable anchor
-  string in it, stripping the TypeScript with the `typescript` devDependency
-  already installed for `tsc`, and running that through `new Function`. That
-  runs the real current source rather than a hand-copy, so an edited fix is
-  exercised as written, but it also means those tests break the moment the
-  anchor they match moves or is renamed — the tests then throw rather than
-  silently passing on nothing, which is deliberate, but it makes the anchor
-  strings inside those three files load-bearing in a way nothing else in the
-  suite is. No rendered output on this branch has been visually confirmed.
+  `PickHandle.test.ts`, and `web/src/app/c/[token]/ChallengeActions.test.ts` —
+  all by reading the component's own source text at test time and matching a
+  stable anchor string in it. Two go further: `Account.test.ts` and
+  `PickHandle.test.ts` cut out one function or expression, strip the TypeScript
+  with the `typescript` devDependency already installed for `tsc`, and run that
+  through `new Function`, so the real current source is exercised rather than a
+  hand-copy and an edited fix is tested as written. `FinishClaim.test.ts` and
+  `ChallengeActions.test.ts` assert against the text itself and execute none of
+  it, so what they pin is that the wiring is present, not that it behaves. Either
+  way those tests break the moment the anchor they match moves or is renamed —
+  they then throw rather than silently passing on nothing, which is deliberate,
+  but it makes the anchor strings inside those four files load-bearing in a way
+  nothing else in the suite is. No rendered output on this branch has been
+  visually confirmed.
   Lifting the limitation would take a `.tsx` loader transform for the test
   runner plus jsdom and Testing Library to actually mount and assert against
   markup; offered and declined.
