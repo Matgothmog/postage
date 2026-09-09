@@ -15,7 +15,7 @@ const { claimByHandle, startClaim } = await import("@/lib/db/claims");
 const { reset } = await import("@/lib/db/client");
 const { hashCode } = await import("@/lib/verification");
 const { IDENTITY_TOKEN_HEADER, WALLET_HEADER } = await import("@/lib/wallet-proof");
-const { POST } = await import("./route");
+const { GET, POST } = await import("./route");
 
 const HANDLE = "demo";
 const CODE = "123456";
@@ -83,4 +83,34 @@ test("failing to prove the wallet costs the claimer no attempts", async () => {
 
   const claim = await claimByHandle(HANDLE);
   assert.equal(claim?.attempts, 0);
+});
+
+/// The GET is deliberately unauthenticated (see route.ts) — its only defense
+/// against a stranger who knows the handle is disclosing nothing beyond what
+/// FinishClaim.tsx's poll itself needs. This pins that response to exactly
+/// those fields so a future addition has to be a deliberate, reviewed choice.
+test("polling a fresh claim discloses only the fields the poller depends on", async () => {
+  const response = await GET(new Request(`http://localhost/api/inbox/verify?handle=${HANDLE}`));
+  assert.equal(response.status, 200);
+
+  const body = await response.json();
+  assert.deepEqual(Object.keys(body).sort(), ["cloudflareVerified", "codeVerified", "live", "stalled"]);
+  assert.deepEqual(body, {
+    codeVerified: false,
+    cloudflareVerified: false,
+    live: false,
+    stalled: false,
+  });
+});
+
+/// FinishClaim.tsx's `apply` no-ops a poll tick by comparing the GET's
+/// `codeVerified` against the value it already holds; if the field were ever
+/// missing, `false || undefined` produces `undefined`, which fails that
+/// equality check and forces a state update — and a re-subscribed poll
+/// interval — on every single tick instead of only when something changed.
+/// `codeVerified` therefore has to be a real boolean, not merely present.
+test("codeVerified comes back as an explicit boolean, not omitted", async () => {
+  const response = await GET(new Request(`http://localhost/api/inbox/verify?handle=${HANDLE}`));
+  const body = await response.json();
+  assert.equal(typeof body.codeVerified, "boolean");
 });

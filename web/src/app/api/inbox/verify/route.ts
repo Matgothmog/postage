@@ -13,6 +13,17 @@ import { confirmStatement } from "@/lib/wallet-proof";
 
 /// Polled while the user is on the confirmation screen, so the Cloudflare half
 /// ticks over the moment they click the link in its email.
+///
+/// Deliberately unauthenticated. This poll is the only thing in the app that
+/// ever calls `settleClaim` — no cron, no worker, nothing else asks Cloudflare
+/// whether the destination was confirmed — so a proof requirement here would
+/// have to be attached by `FinishClaim.tsx` on mount, before the visitor has
+/// clicked anything, which means a signature prompt before they have agreed to
+/// anything. The response below is kept to exactly the fields that poll uses
+/// (see `FinishClaim.tsx`'s `apply`); handing back nothing else is the actual
+/// mitigation. The residual risk — guessing a handle to learn its status — is
+/// bounded account-wide by `CF_CHECK_INTERVAL_SECONDS`/`CF_CHECK_BUDGET`
+/// (`@/lib/db/claims`), not by who is asking.
 export async function GET(request: Request) {
   const handle = new URL(request.url).searchParams.get("handle");
   if (!handle) return Response.json({ error: "handle is required" }, { status: 400 });
