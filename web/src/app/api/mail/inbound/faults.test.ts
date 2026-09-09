@@ -109,9 +109,9 @@ test("a chain fault is logged under the stage that failed, with what the chain s
     chain.failing = false;
   }
 
-  const [line] = logged;
-  assert.equal(line?.[0], "inbound mail gateway fault");
-  const context = line?.[1] as { stage: string; reason: string };
+  const line = logged.find(([message]) => message === "inbound mail gateway fault");
+  assert.ok(line, "a chain fault must still reach the log, wherever it lands among this request's log lines");
+  const context = line[1] as { stage: string; reason: string };
   assert.equal(context.stage, "chain");
   assert.match(context.reason, /not accepting calls/);
 });

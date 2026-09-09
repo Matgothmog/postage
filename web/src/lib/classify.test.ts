@@ -1,10 +1,35 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
-import { classifyFromHeaders, extractUrls, type MailFacts } from "./classify";
+import { after, beforeEach, test } from "node:test";
+import { classify, classifyFromHeaders, extractUrls, sanitizedReason, type MailFacts } from "./classify";
+import { startStubModel } from "../../test/model";
 
 // Pure functions, no database and no model call: `classifyFromHeaders` and
 // `extractUrls` never touch a network or a store, so this file needs neither a
 // temp workspace nor any env var.
+//
+// `classify()` is different — it reaches the model first — so the handful of
+// tests that exercise it point the SDK at a stub that always refuses (see
+// `test/model.ts`), which is the one deliberate way to reach the fallback.
+const model = await startStubModel(null);
+
+/// Every degraded verdict is supposed to write a line to `console.error`, and
+/// several tests below are about what that line says. Collected rather than
+/// printed, so the suite's own output stays readable and the line can be read
+/// back rather than assumed.
+const REAL_CONSOLE_ERROR = console.error;
+const logged: unknown[][] = [];
+console.error = (...line: unknown[]) => {
+  logged.push(line);
+};
+
+beforeEach(() => {
+  logged.length = 0;
+});
+
+after(async () => {
+  console.error = REAL_CONSOLE_ERROR;
+  await model.close();
+});
 
 function mail(overrides: Partial<MailFacts> = {}): MailFacts {
   return {
@@ -115,4 +140,67 @@ test("the same link repeated in the body is reported once", () => {
 test("distinct links are all kept, in the order they first appear", () => {
   const found = extractUrls("first http://a.example.com then http://b.example.com then http://a.example.com");
   assert.deepEqual(found, ["http://a.example.com", "http://b.example.com"]);
+});
+
+/// The bug this pair of tests exists to catch: a classifier outage used to
+/// degrade every verdict with nothing in the log to say why, which once cost
+/// hours to trace back to a missing ANTHROPIC_API_KEY. The fallback itself is
+/// unchanged (`classifyFromHeaders` is what it always was) — only its silence
+/// is.
+test("when the model is unreachable, classify() still returns the header-derived, degraded verdict", async () => {
+  const facts = mail({ dmarc: "fail" });
+  const verdict = await classify(facts);
+
+  assert.deepEqual(verdict, classifyFromHeaders(facts));
+  assert.equal(verdict.degraded, true);
+});
+
+test("when the model is unreachable, classify() logs why instead of failing silently", async () => {
+  await classify(mail());
+
+  const [message, context] = logged.find(([entryMessage]) => entryMessage === "classification degraded to header-only fallback") ?? [];
+
+  assert.equal(message, "classification degraded to header-only fallback");
+  assert.equal(typeof (context as { reason?: unknown })?.reason, "string");
+  assert.ok(
+    ((context as { reason: string }).reason).length > 0,
+    "a degraded verdict must say why, not log an empty reason"
+  );
+});
+
+test("the reason logged for a degraded verdict never carries the mail's subject or body", async () => {
+  await classify(mail({ subject: "quarterly board minutes", body: "the acquisition price is $40M" }));
+
+  const [, context] = logged.find(([entryMessage]) => entryMessage === "classification degraded to header-only fallback") ?? [];
+  const reason = (context as { reason: string }).reason;
+
+  assert.ok(!reason.includes("quarterly board minutes"));
+  assert.ok(!reason.includes("acquisition price"));
+});
+
+test("sanitizedReason reads an Error's own message", () => {
+  assert.equal(sanitizedReason(new Error("model unavailable")), "model unavailable");
+});
+
+test("sanitizedReason stringifies a thrown value that is not an Error", () => {
+  assert.equal(sanitizedReason("timeout"), "timeout");
+});
+
+test("sanitizedReason leaves the real auth-resolution failure readable", () => {
+  // The exact message `new Anthropic()` throws when no key is configured —
+  // the bug this whole change exists to surface. It names the missing
+  // setting, never a value, so nothing in it should be blanked out.
+  const message =
+    'Could not resolve authentication method. Expected one of apiKey, authToken, credentials, config, or profile to be set. Or for one of the "X-Api-Key" or "Authorization" headers to be explicitly omitted';
+
+  assert.equal(sanitizedReason(new Error(message)), message);
+});
+
+test("sanitizedReason blanks out anything shaped like a credential", () => {
+  const reason = sanitizedReason(
+    new Error("401 invalid x-api-key sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789")
+  );
+
+  assert.ok(!reason.includes("sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789"));
+  assert.ok(reason.includes("[redacted]"));
 });

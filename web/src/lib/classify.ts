@@ -71,11 +71,32 @@ function userContent(mail: MailFacts): string {
 export async function classify(mail: MailFacts): Promise<Verdict> {
   try {
     return await classifyWithModel(mail);
-  } catch {
+  } catch (cause) {
     // An email gateway that stops delivering when its classifier is down is
-    // worse than one that falls back to what the headers already told it.
+    // worse than one that falls back to what the headers already told it —
+    // but that fallback used to be silent, and a missing ANTHROPIC_API_KEY
+    // once degraded every classification for hours before anyone noticed,
+    // with nothing in the logs to say why. Never the mail itself: `mail`
+    // carries a private message's from/subject/body and none of it belongs
+    // in a log line.
+    console.error("classification degraded to header-only fallback", {
+      reason: sanitizedReason(cause),
+    });
     return classifyFromHeaders(mail);
   }
+}
+
+/// A credential is a long run of key-charset characters with no spaces —
+/// `sk-ant-...`, a bearer token, a signed URL's `key=` value. The
+/// auth-resolution failure this fallback exists for never carries one (it
+/// names which setting is missing, not its value), but nothing guarantees the
+/// next thrown error won't quote a request that did, so anything shaped like
+/// one is blanked out before the reason reaches the log.
+const KEY_SHAPED = /[A-Za-z0-9_-]{20,}/g;
+
+export function sanitizedReason(cause: unknown): string {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  return message.replace(KEY_SHAPED, "[redacted]");
 }
 
 async function classifyWithModel(mail: MailFacts): Promise<Verdict> {
