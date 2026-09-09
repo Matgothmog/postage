@@ -116,6 +116,12 @@ export async function extendPassIfExpiring(handle: string, sender: string): Prom
 /// window earned by proving personhood is left alone, a counted pass gains a
 /// use, and a sender with neither gets one. Overwriting instead would let a
 /// second payment land on a pass that already had a use and buy nothing.
+///
+/// The unlimited-window branch also stamps `paid_extended_at`. There is no
+/// count to add a use to there, so the payment cannot show up as anything but
+/// a later `expires_at` — leaving `uses_left` NULL, same as a window nobody
+/// ever paid for. `paid_extended_at` is the only record that money touched
+/// this row; `EARNED_PASS_CONDITION` reads it for exactly that reason.
 export async function addPaidUse(handle: string, sender: string): Promise<void> {
   const at = now();
   const client = await db();
@@ -131,9 +137,9 @@ export async function addPaidUse(handle: string, sender: string): Promise<void> 
   // this a sender who paid a minute before their free window lapsed would be
   // left holding nothing for money that has already left their wallet.
   const extended = await client.execute({
-    sql: `UPDATE passes SET expires_at = ?
+    sql: `UPDATE passes SET expires_at = ?, paid_extended_at = ?
           WHERE handle = ? AND sender = ? AND expires_at > ? AND uses_left IS NULL`,
-    args: [at + PASS_WINDOW_SECONDS, handle.toLowerCase(), sender.toLowerCase(), at],
+    args: [at + PASS_WINDOW_SECONDS, at, handle.toLowerCase(), sender.toLowerCase(), at],
   });
   if (extended.rowsAffected > 0) return;
 
@@ -149,3 +155,28 @@ export async function hasLivePass(handle: string, sender: string): Promise<boole
   );
   return rows.length > 0;
 }
+
+/// What marks a pass as earned by proving personhood rather than ever having
+/// taken money. Two columns, not one — either alone can lie.
+///
+/// `reason` cannot be trusted at all: `grantPass`'s own `ON CONFLICT` keeps
+/// whatever `uses_left` a row already had whenever it is positive, even while
+/// overwriting `reason` to `"human"` on top of it, so a row that reads
+/// `reason = 'human'` can still be sitting on a paid, unspent balance.
+///
+/// `uses_left IS NULL` alone is not enough either, for the mirror-image
+/// reason: `addPaidUse`'s unlimited-window branch pays for a window that is
+/// already better than a count by pushing `expires_at` out and nothing else —
+/// there is no count there to add a use to. That row now holds a payment and
+/// still reads `uses_left IS NULL`, indistinguishable from a window nobody
+/// ever paid for unless something else says otherwise. `paid_extended_at` is
+/// that something else: stamped the moment that branch runs, never cleared
+/// once set.
+///
+/// Exported as text, not just used inline, because `claimNullifier`
+/// (`./nullifiers.ts`) needs this exact condition inside its own transaction
+/// and a `client.batch` statement cannot call a function in this module —
+/// only the SQL travels. Keeping both call sites reading the same constant is
+/// what stops the two from quietly drifting into different definitions of
+/// "earned."
+export const EARNED_PASS_CONDITION = "uses_left IS NULL AND paid_extended_at IS NULL";

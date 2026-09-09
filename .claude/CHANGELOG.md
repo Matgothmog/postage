@@ -1,3 +1,15 @@
+## 2026-09-09 — selfie-real
+
+World ID Selfie Check goes from mock to real. The client now obtains a genuine proof
+via IDKit's `selfieCheckLegacy()` and the gateway verifies it against World's v4 API
+before releasing held mail; `IDENTITY_MODE=mock` is unchanged and still the default.
+The identity boundary gained the controls it lacked: proofs are bound to their
+challenge by `signal_hash`, a signed rp_context is single-use and needs a valid
+unsettled challenge, a nullifier names one sender at a time and moves when its owner
+re-proves, and an unrecognised `IDENTITY_MODE` is now a hard error rather than a
+silent downgrade. The live path has never been exercised against a real World App
+proof — see `.claude/features/selfie-real.md` for that and the remaining follow-ups.
+
 ## 2026-09-09 — refactor/polish
 
 Tests went from 30 to 255 in web, 0 to 51 in worker — which had no test runner, no

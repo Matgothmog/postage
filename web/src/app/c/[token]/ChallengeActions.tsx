@@ -10,6 +10,12 @@ import { formatUsdc } from "@/lib/format";
 import { postageAddress } from "@/lib/handle";
 import type { QuoteFields } from "@/lib/quote-types";
 import { tierIndexOf } from "@/lib/tiers";
+import {
+  fetchRpContext,
+  openSelfieCheckWithIDKit,
+  postWorldVerify,
+  runSelfieCheck,
+} from "@/lib/world-id";
 
 /// Long enough to cover a block on Arc and the indexing behind it, short
 /// enough that a genuine failure still surfaces while the sender is looking.
@@ -27,6 +33,7 @@ export function ChallengeActions({
   dangerous,
   handle,
   lane: initialLane,
+  identityMode,
 }: {
   token: string;
   quote: QuoteFields;
@@ -35,10 +42,19 @@ export function ChallengeActions({
   /// Which answer they already gave. Both are links in the mail they were sent,
   /// so arriving here having chosen should not mean choosing again.
   lane: "choosing" | "paying";
+  /// Decided server-side and handed down as a prop, the same way `dangerous`
+  /// and `lane` are — not read from a public env var, which could desync from
+  /// the `IDENTITY_MODE` `/api/world/verify` actually enforces.
+  identityMode: "live" | "mock";
 }) {
   const [lane, setLane] = useState(dangerous ? "choosing" : initialLane);
   const [verifying, setVerifying] = useState(false);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
+  /// Set only under live mode, once IDKit has a request ready to be answered.
+  /// Lets the sender open World App while `pollUntilCompletion` is still
+  /// waiting on them — otherwise they are looking at a spinner with no way to
+  /// finish it.
+  const [worldConnectorUri, setWorldConnectorUri] = useState<string | null>(null);
 
   if (outcome?.kind === "charged") {
     return (
@@ -71,26 +87,41 @@ export function ChallengeActions({
 
   /// No wallet anywhere on this path. Proving personhood is not a payment, so
   /// it should not need an account to make one.
+  ///
+  /// Under mock mode this posts a bare token, exactly as it always has —
+  /// that path is what the one test suite that runs on this machine actually
+  /// exercises, so it must stay byte-for-byte the same. Under live mode it
+  /// first gets a Selfie Check proof from IDKit before posting at all.
   async function verifyHuman() {
     setVerifying(true);
     setOutcome(null);
+    setWorldConnectorUri(null);
     try {
-      const response = await fetch("/api/world/verify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token }),
+      if (identityMode === "mock") {
+        const { delivered } = await postWorldVerify(token);
+        setOutcome({ kind: "cleared", reason: "human", delivered });
+        return;
+      }
+
+      const selfieCheck = await runSelfieCheck({
+        appId: process.env.NEXT_PUBLIC_WORLD_APP_ID,
+        signal: token,
+        fetchRpContext,
+        openSelfieCheck: openSelfieCheckWithIDKit,
+        onConnectorReady: setWorldConnectorUri,
       });
-      const result = (await response.json()) as {
-        status?: string;
-        delivered?: boolean;
-        error?: string;
-      };
-      if (result.status !== "cleared") throw new Error(result.error ?? "Verification failed");
-      setOutcome({ kind: "cleared", reason: "human", delivered: result.delivered === true });
+      if (!selfieCheck.ok) {
+        setOutcome({ kind: "error", message: selfieCheck.message });
+        return;
+      }
+
+      const { delivered } = await postWorldVerify(token, selfieCheck.proof);
+      setOutcome({ kind: "cleared", reason: "human", delivered });
     } catch (cause) {
       setOutcome({ kind: "error", message: causeMessage(cause) });
     } finally {
       setVerifying(false);
+      setWorldConnectorUri(null);
     }
   }
 
@@ -114,6 +145,12 @@ export function ChallengeActions({
         Prove it with World ID and your message is delivered. Free, no wallet, nothing to install
         beyond the World app.
       </p>
+
+      {worldConnectorUri && (
+        <a href={worldConnectorUri} target="_blank" rel="noreferrer" className={`${quietButton} w-full`}>
+          Continue in World App
+        </a>
+      )}
 
       {!dangerous && (
         <>

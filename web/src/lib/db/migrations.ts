@@ -38,6 +38,14 @@ const ADDED_COLUMNS: { table: string; column: string; type: string; backfill?: s
   // Left nullable: rows written before this cannot say which wallet started
   // them, and guessing would throttle a wallet for somebody else's claim.
   { table: "claim_sends", column: "wallet", type: "TEXT" },
+  // No backfill: a database from before this column existed has no record of
+  // which of its NULL-`uses_left` rows were purely earned versus paid for and
+  // only ever extended, and there is no way to recover that after the fact —
+  // see `EARNED_PASS_CONDITION` in `passes.ts`. Left NULL, the exposure is
+  // bounded to whatever passes happen to be live the moment this migration
+  // runs, not a standing gap; guessing "paid" for everything would instead
+  // make every pre-existing earned pass permanently unrevokable.
+  { table: "passes", column: "paid_extended_at", type: "INTEGER" },
 ];
 
 export async function addMissingColumns(client: Client): Promise<void> {

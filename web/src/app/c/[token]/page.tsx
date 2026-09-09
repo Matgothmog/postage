@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { SiteFooter, SiteHeader, quietButton } from "@/components/chrome";
 import { challengeByToken } from "@/lib/db/challenges";
+import { identityMode } from "@/lib/env";
 import { formatUsdc } from "@/lib/format";
 import { postageAddress } from "@/lib/handle";
 import { parseStoredQuote } from "@/lib/quote-types";
@@ -110,6 +111,7 @@ export default async function ChallengePage({ params, searchParams }: PageProps<
         dangerous={dangerous}
         handle={challenge.handle}
         lane={as === "bot" ? "paying" : "choosing"}
+        identityMode={identityMode()}
       />
 
       <Advert />
