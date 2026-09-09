@@ -1,12 +1,28 @@
 import assert from "node:assert/strict";
-import { afterEach, beforeEach, test } from "node:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { after, afterEach, beforeEach, test } from "node:test";
 import type { VerifyMessageParameters } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { provesWallet } from "./auth";
 import { publicClient } from "./client";
 import { MAIL_DOMAIN } from "./handle";
 import { claimStatement, confirmStatement, readStatement } from "./statements";
 import { now } from "./time";
+
+// `provesWallet` records a spent nonce, so reaching it means reaching a
+// database. A directory of its own per run, like every other db-touching test
+// file here, and set before `./auth` is imported: the client reads
+// `DATABASE_URL` when it first opens a connection and keeps what it opened.
+const workspace = mkdtempSync(join(tmpdir(), "postage-statements-"));
+process.env.DATABASE_URL = `file:${join(workspace, "test.db")}`;
+process.env.DATABASE_AUTH_TOKEN = "";
+process.env.MESSAGE_ID_SECRET = "x".repeat(32);
+
+const { reset } = await import("./db/client");
+const { provesWallet } = await import("./auth");
+const { mintWalletNonce } = await import("./wallet-nonce");
+const { withNonce } = await import("./wallet-proof");
 
 /// Signatures here are real, because the claim being made is about what a
 /// wallet actually put its key to. A stubbed verdict would assert that the stub
@@ -36,7 +52,15 @@ let asked: VerifyMessageParameters[] = [];
 /// One test below asserts a signature is *accepted*, which an endpoint
 /// answering yes to everything would satisfy however wrong the text was.
 /// `afterEach` proves nothing reached it.
-beforeEach(() => {
+/// One fresh nonce per test, shared by the signature and the reader below so
+/// the two are a matching pair — `provesWallet` refuses a signature whose
+/// nonce it cannot verify long before it looks at the statement, which would
+/// leave every refusal here attributable to the wrong thing.
+let nonce: string;
+
+beforeEach(async () => {
+  await reset();
+  nonce = mintWalletNonce(WALLET);
   asked = [];
   publicClient.verifyMessage = async (parameters) => {
     asked.push(parameters);
@@ -91,10 +115,10 @@ test("a read signature collected on another deployment proves nothing here", asy
   const issuedAt = now();
   const elsewhere = asOtherDeployment(readStatement(WALLET, issuedAt));
 
-  const signature = await holder.signMessage({ message: elsewhere });
+  const signature = await holder.signMessage({ message: withNonce(elsewhere, nonce) });
 
   assert.equal(
-    await provesWallet(WALLET, issuedAt, signature, (at) => readStatement(WALLET, at)),
+    await provesWallet(WALLET, issuedAt, signature, (at) => readStatement(WALLET, at), nonce),
     false
   );
 });
@@ -104,10 +128,12 @@ test("a read signature collected on another deployment proves nothing here", asy
 test("a read signature collected on this deployment still proves the wallet", async () => {
   const issuedAt = now();
 
-  const signature = await holder.signMessage({ message: readStatement(WALLET, issuedAt) });
+  const signature = await holder.signMessage({
+    message: withNonce(readStatement(WALLET, issuedAt), nonce),
+  });
 
   assert.equal(
-    await provesWallet(WALLET, issuedAt, signature, (at) => readStatement(WALLET, at)),
+    await provesWallet(WALLET, issuedAt, signature, (at) => readStatement(WALLET, at), nonce),
     true
   );
 });
@@ -119,10 +145,20 @@ test("a confirm signature collected on another deployment proves nothing here", 
   const issuedAt = now();
   const elsewhere = asOtherDeployment(confirmStatement("demo", WALLET, issuedAt));
 
-  const signature = await holder.signMessage({ message: elsewhere });
+  const signature = await holder.signMessage({ message: withNonce(elsewhere, nonce) });
 
   assert.equal(
-    await provesWallet(WALLET, issuedAt, signature, (at) => confirmStatement("demo", WALLET, at)),
+    await provesWallet(
+      WALLET,
+      issuedAt,
+      signature,
+      (at) => confirmStatement("demo", WALLET, at),
+      nonce
+    ),
     false
   );
+});
+
+after(() => {
+  rmSync(workspace, { recursive: true, force: true });
 });

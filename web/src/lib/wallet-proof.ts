@@ -19,10 +19,29 @@ export { claimStatement, confirmStatement, readStatement } from "./statements";
 export const IDENTITY_TOKEN_HEADER = "privy-id-token";
 
 /// What a session without an identity token sends instead: the wallet it claims,
-/// when it said so, and a signature over the statement naming both.
+/// when it said so, the nonce the server minted for it, and a signature over the
+/// statement naming all of them.
 export const WALLET_HEADER = "x-postage-wallet";
 export const ISSUED_AT_HEADER = "x-postage-issued";
 export const SIGNATURE_HEADER = "x-postage-signature";
+export const NONCE_HEADER = "x-postage-nonce";
+
+/// Where a browser asks for the nonce it is about to sign under. Named here
+/// with the header names for the same reason they are: the writer and the
+/// reader disagreeing about it is a sign-in that quietly stops working.
+export const WALLET_NONCE_PATH = "/api/wallet-nonce";
+
+/// The line that makes one signature answer one request instead of every
+/// request inside the freshness window.
+///
+/// Appended to a statement rather than woven into `statements.ts`, so that what
+/// each of the three statements says about a deployment, a handle and a wallet
+/// stays written in one place and is not restated once per caller. Both ends
+/// build the signed text through here, so a change to the wording is a change
+/// to both at once.
+export function withNonce(statement: string, nonce: string): string {
+  return `${statement}\nNonce: ${nonce}`;
+}
 
 /// A proof as it arrives, before any of it has been believed. Every field is
 /// caller-controlled — a wallet address is public, and the timestamp is whatever
@@ -36,6 +55,11 @@ export interface OfferedProof {
   /// the reader refuses them there rather than here.
   issuedAt: number;
   signature: string | null;
+  /// The nonce the signature was collected under. Caller-controlled like the
+  /// rest, and worth nothing on its own: it authenticates itself to the server
+  /// that minted it, which is what `provesWallet` checks before it checks
+  /// anything else about the signature.
+  nonce: string | null;
 }
 
 /// The proof a session that holds an identity token offers.
@@ -50,12 +74,14 @@ export function identityProof(identityToken: string): Record<string, string> {
 export function signedProof(
   wallet: string,
   issuedAt: number,
-  signature: string
+  signature: string,
+  nonce: string
 ): Record<string, string> {
   return {
     [WALLET_HEADER]: wallet,
     [ISSUED_AT_HEADER]: String(issuedAt),
     [SIGNATURE_HEADER]: signature,
+    [NONCE_HEADER]: nonce,
   };
 }
 
@@ -67,5 +93,40 @@ export function readProof(headers: Headers): OfferedProof {
     wallet: headers.get(WALLET_HEADER),
     issuedAt: Number(headers.get(ISSUED_AT_HEADER)),
     signature: headers.get(SIGNATURE_HEADER),
+    nonce: headers.get(NONCE_HEADER),
   };
+}
+
+/// What every way of not getting a nonce is reported as. They are one thing
+/// to whoever clicked the button — there is nothing they can do differently
+/// about a 503, an HTML error page, or a body with no nonce in it.
+const UNAVAILABLE = "Could not start a signature. Try again in a moment";
+
+/// Asks the server for a nonce to sign under.
+///
+/// Throws rather than returning null on any refusal, because there is no
+/// degraded proof to fall back to: a signature collected without one is
+/// refused by every reader, so carrying on would only move the failure to a
+/// place where it reads as "your wallet is not yours".
+export async function requestWalletNonce(wallet: string): Promise<string> {
+  const response = await fetch(WALLET_NONCE_PATH, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ wallet }),
+  });
+  if (!response.ok) throw new Error(UNAVAILABLE);
+
+  // A gateway that answered with something other than this route's JSON — an
+  // HTML error page, an empty body — must read as the same unavailability as
+  // a refusal, not as a parse error surfacing to whoever clicked the button.
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    throw new Error(UNAVAILABLE);
+  }
+
+  const { nonce } = body as { nonce?: unknown };
+  if (typeof nonce !== "string" || nonce === "") throw new Error(UNAVAILABLE);
+  return nonce;
 }

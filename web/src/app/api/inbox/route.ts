@@ -73,12 +73,19 @@ export async function GET(request: Request) {
     return Response.json({ inbox: null });
   }
 
-  const { wallet, issuedAt, signature } = offered;
+  const { wallet, issuedAt, signature, nonce } = offered;
 
   if (!wallet || !isAddress(wallet)) {
     return Response.json({ error: "A valid wallet is required" }, { status: 400 });
   }
-  if (!(await provesWallet(wallet, issuedAt, signature, (at) => readStatement(wallet, at)))) {
+  const proved = await provesWallet(
+    wallet,
+    issuedAt,
+    signature,
+    (at) => readStatement(wallet, at),
+    nonce
+  );
+  if (!proved) {
     return Response.json({ error: "Sign in again to read this inbox" }, { status: 401 });
   }
 
@@ -100,12 +107,16 @@ export async function GET(request: Request) {
 /// stand in for it: destinations are shared across the whole account, so one
 /// somebody else verified already reads as verified to us.
 export async function POST(request: Request) {
-  const { handle, destination, wallet, issuedAt, signature } = (await request.json()) as {
+  const { handle, destination, wallet, issuedAt, signature, nonce } = (await request.json()) as {
     handle?: string;
     destination?: string;
     wallet?: string;
     issuedAt?: number;
     signature?: string;
+    /// Carried in the body rather than a header on this one route, because the
+    /// claim it belongs to is a body already — `PickHandle.tsx` spreads
+    /// `signClaim`'s whole result in beside the handle it is claiming.
+    nonce?: string;
   };
 
   if (!wallet || !isAddress(wallet)) {
@@ -120,8 +131,12 @@ export async function POST(request: Request) {
   if (rejection) return Response.json({ error: rejection }, { status: 400 });
 
   if (!signedIn) {
-    const proved = await provesWallet(wallet, Number(issuedAt), signature ?? null, (at) =>
-      claimStatement(name, address, wallet, at)
+    const proved = await provesWallet(
+      wallet,
+      Number(issuedAt),
+      signature ?? null,
+      (at) => claimStatement(name, address, wallet, at),
+      nonce ?? null
     );
     if (!proved) {
       return Response.json({ error: "Sign the request with the wallet you are claiming for" }, { status: 401 });
