@@ -1,14 +1,12 @@
 import {
-  addPaidUse,
   challengeByToken,
   claimChallenge,
-  grantPass,
-  hasLivePass,
   markEntitled,
   releaseChallengeClaim,
   type Challenge,
-} from "./db";
-import { releaseHeldMessage } from "./hold";
+} from "./db/challenges";
+import { addPaidUse, grantPass, hasLivePass } from "./db/passes";
+import { releaseHeldMessage, type Release } from "./hold";
 
 /// How a sender got through. The two are not variations on one thing:
 ///
@@ -69,9 +67,21 @@ async function settle(challenge: Challenge, token: string, lane: Lane): Promise<
   // The message goes out before anything is granted, on both lanes. Granting
   // first leaves a pass standing if this throws, and the rollback below would
   // then reopen a challenge whose sender is already holding what it owed.
-  const released = challenge.delivered_at != null
+  const released: Release = challenge.delivered_at != null
     ? { delivered: true }
     : await releaseHeldMessage(token, challenge.handle);
+
+  // The sender is never told why - the page shows the same "not delivered, paste
+  // it back in" either way - but "expired", "no_inbox" and "send_failed" are
+  // three different bugs to chase, and the difference is invisible again the
+  // moment it scrolls off. Not the token: it is the capability that releases the
+  // message.
+  if (!released.delivered) {
+    console.error("held message not released", {
+      handle: challenge.handle,
+      reason: released.reason_undelivered,
+    });
+  }
 
   // Granted last, and the paid entitlement was already taken by the claim, so
   // nothing after this can fail and leave the sender holding something the

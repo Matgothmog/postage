@@ -13,8 +13,8 @@ const {
   CLASSIFY_PER_SENDER_HOURLY,
   claimClassification,
   releaseClassificationSlot,
-  reset,
-} = await import("./db");
+} = await import("./db/classifications");
+const { reset } = await import("./db/client");
 
 beforeEach(async () => {
   await reset();

@@ -1,5 +1,6 @@
 import type { Tier } from "./tiers";
 import type { SenderSignals } from "./reputation";
+import { now } from "./time";
 
 export interface Quote {
   amount: bigint;
@@ -79,7 +80,7 @@ export function quote(
       bps = Math.round(bps * 0.7);
       reasons.push(`Sender wallet holds ${signals.ensNames} ENS name${signals.ensNames === 1 ? "" : "s"}`);
 
-      const age = signals.oldestEnsAt ? Math.floor(Date.now() / 1000) - signals.oldestEnsAt : 0;
+      const age = signals.oldestEnsAt !== null ? now() - signals.oldestEnsAt : 0;
       if (age > YEAR_SECONDS) {
         bps = Math.round(bps * 0.8);
         reasons.push(`Oldest registered ${Math.floor(age / YEAR_SECONDS)} years ago`);

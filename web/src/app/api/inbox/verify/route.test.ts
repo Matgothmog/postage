@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, beforeEach, test } from "node:test";
+import { now } from "@/lib/time";
 
 const workspace = mkdtempSync(join(tmpdir(), "postage-verify-"));
 process.env.DATABASE_URL = `file:${join(workspace, "test.db")}`;
@@ -10,8 +11,10 @@ process.env.DATABASE_AUTH_TOKEN = "";
 process.env.MESSAGE_ID_SECRET = "x".repeat(32);
 process.env.NEXT_PUBLIC_PRIVY_APP_ID = "test-app";
 
-const { claimByHandle, reset, startClaim } = await import("@/lib/db");
+const { claimByHandle, startClaim } = await import("@/lib/db/claims");
+const { reset } = await import("@/lib/db/client");
 const { hashCode } = await import("@/lib/verification");
+const { IDENTITY_TOKEN_HEADER, WALLET_HEADER } = await import("@/lib/wallet-proof");
 const { POST } = await import("./route");
 
 const HANDLE = "demo";
@@ -36,7 +39,7 @@ beforeEach(async () => {
     destination: "victim@example.com",
     wallet: WALLET,
     code_hash: hashCode(HANDLE, CODE),
-    expires_at: Math.floor(Date.now() / 1000) + 900,
+    expires_at: now() + 900,
     cf_address_id: null,
     cf_verified_at: null,
   });
@@ -64,12 +67,12 @@ test("a correct code alone does not complete a claim", async () => {
 /// The wallet is public — it is indexed onchain and handed to every gated
 /// sender — so naming it is not holding it.
 test("naming the claim's wallet is not proof of holding it", async () => {
-  const { status } = await confirm({ "x-postage-wallet": WALLET });
+  const { status } = await confirm({ [WALLET_HEADER]: WALLET });
   assert.equal(status, 401);
 });
 
 test("an unverifiable identity token does not stand in for the wallet", async () => {
-  const { status } = await confirm({ "privy-id-token": "not.a.token" });
+  const { status } = await confirm({ [IDENTITY_TOKEN_HEADER]: "not.a.token" });
   assert.equal(status, 401);
 });
 

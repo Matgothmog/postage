@@ -1,80 +1,34 @@
-import Link from "next/link";
-import { SiteFooter, SiteHeader, quietButton } from "@/components/chrome";
 import {
   ENCLAVE_REGISTRY,
   HUMAN_REGISTRY,
   POSTAGE_ESCROW,
   POSTAGE_VAULT,
 } from "@/lib/contracts";
+import { causeMessage } from "@/lib/errors";
 import { formatUsdc, shortAddress } from "@/lib/format";
-import { queryPostage } from "@/lib/graph";
+import {
+  deriveAggregates,
+  fetchOverview,
+  paymentTotal,
+  since,
+  stillHuman,
+  type Overview,
+} from "@/lib/network";
 import { AutoRefresh } from "./AutoRefresh";
+import { Empty, Flow, Section, Shell, Stat, Tag, Tier } from "./components";
 
 export const dynamic = "force-dynamic";
 
 const EXPLORER = "https://testnet.arcscan.app";
-
-const OVERVIEW = `
-  query Overview {
-    vaults(first: 1) { totalFunded toTreasury toSponsorship refilledToRelayer fundingEvents }
-    enclaves(first: 5) { id measurement revoked registeredAt }
-    humanAttestations(first: 500, orderBy: attestedAt, orderDirection: desc) { id attestedAt }
-    inboxes(first: 12, orderBy: earned, orderDirection: desc) {
-      id floorPrice receivedCount earned claimed
-    }
-    senders(first: 12, orderBy: paidCount, orderDirection: desc) {
-      id paidCount totalPaid spamReports spamRate humanUntil
-    }
-    payments(first: 25, orderBy: paidAt, orderDirection: desc) {
-      id tier amount toVault reportedAsSpam paidAt tx sender { id } inbox { id }
-    }
-  }
-`;
-
-interface Overview {
-  vaults: {
-    totalFunded: string;
-    toTreasury: string;
-    toSponsorship: string;
-    refilledToRelayer: string;
-    fundingEvents: number;
-  }[];
-  enclaves: { id: string; measurement: string; revoked: boolean; registeredAt: string }[];
-  humanAttestations: { id: string; attestedAt: string }[];
-  inboxes: { id: string; floorPrice: string; receivedCount: number; earned: string; claimed: string }[];
-  senders: {
-    id: string;
-    paidCount: number;
-    totalPaid: string;
-    spamReports: number;
-    spamRate: string;
-    humanUntil: string | null;
-  }[];
-  payments: {
-    id: string;
-    tier: string;
-    amount: string;
-    toVault: string;
-    reportedAsSpam: boolean;
-    paidAt: string;
-    tx: string;
-    sender: { id: string };
-    inbox: { id: string };
-  }[];
-}
-
-/// Gas one attestation costs on Arc at 25 gwei, measured. Used to state the
-/// sponsorship pool in the unit that means something: people onboarded.
-const ATTESTATION_COST = 75_395n * 25_000_000_000n;
 
 export default async function NetworkPage() {
   let data: Overview | null = null;
   let failure: string | null = null;
 
   try {
-    data = await queryPostage<Overview>(OVERVIEW);
+    data = await fetchOverview();
   } catch (cause) {
-    failure = cause instanceof Error ? cause.message : String(cause);
+    failure = causeMessage(cause);
   }
 
   if (!data) {
@@ -91,10 +45,7 @@ export default async function NetworkPage() {
   }
 
   const vault = data.vaults[0];
-  const sponsored = vault ? BigInt(vault.toSponsorship) / ATTESTATION_COST : 0n;
-  const earned = data.inboxes.reduce((total, inbox) => total + BigInt(inbox.earned), 0n);
-  const delivered = data.inboxes.reduce((total, inbox) => total + inbox.receivedCount, 0);
-  const signer = data.enclaves.find((enclave) => !enclave.revoked);
+  const { sponsored, earned, delivered, signer } = deriveAggregates(data);
 
   return (
     <Shell>
@@ -164,7 +115,7 @@ export default async function NetworkPage() {
                     href={`${EXPLORER}/tx/${payment.tx}`}
                     className="w-16 shrink-0 text-right font-mono tabular-nums text-ink hover:text-stamp"
                   >
-                    {formatUsdc(BigInt(payment.amount))}
+                    {formatUsdc(paymentTotal(payment))}
                   </a>
                 </li>
               ))}
@@ -315,113 +266,5 @@ export default async function NetworkPage() {
         </Section>
       </main>
     </Shell>
-  );
-}
-
-/// A credential that has run out says nothing about who is sending now, so it
-/// stops counting the moment it lapses.
-function stillHuman(humanUntil: string | null): boolean {
-  return humanUntil !== null && Number(humanUntil) > Math.floor(Date.now() / 1000);
-}
-
-/// Whole units only. A feed that says "14 minutes ago" beside "3 hours ago"
-/// reads at a glance; one that says "14 minutes 6 seconds" does not.
-function since(seconds: number): string {
-  const elapsed = Math.max(0, Math.floor(Date.now() / 1000) - seconds);
-  if (elapsed < 60) return "just now";
-  if (elapsed < 3600) return `${Math.floor(elapsed / 60)}m ago`;
-  if (elapsed < 86_400) return `${Math.floor(elapsed / 3600)}h ago`;
-  return `${Math.floor(elapsed / 86_400)}d ago`;
-}
-
-function Stat({ label, value, note }: { label: string; value: string; note: string }) {
-  return (
-    <div className="bg-card p-5">
-      <p className="text-[11px] uppercase tracking-[0.14em] text-ink-faint">{label}</p>
-      <p className="mt-2 font-mono text-2xl tabular-nums text-ink">{value}</p>
-      <p className="mt-1 text-xs text-ink-faint">{note}</p>
-    </div>
-  );
-}
-
-function Flow({
-  label,
-  value,
-  children,
-}: {
-  label: string;
-  value: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="bg-card p-5">
-      <p className="text-[11px] uppercase tracking-[0.14em] text-ink-faint">{label}</p>
-      <p className="mt-2 font-mono text-xl tabular-nums text-ink">{value}</p>
-      <p className="mt-1 text-xs text-ink-faint">{children}</p>
-    </div>
-  );
-}
-
-function Section({
-  title,
-  hint,
-  children,
-}: {
-  title: string;
-  hint?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="mt-12">
-      <h2 className="text-[15px] font-medium text-ink">{title}</h2>
-      {hint && <p className="mt-1 max-w-2xl text-sm leading-relaxed text-ink-soft">{hint}</p>}
-      <div className="mt-4 overflow-hidden rounded-2xl border border-rule bg-card">{children}</div>
-    </section>
-  );
-}
-
-function Empty({ children }: { children: React.ReactNode }) {
-  return <p className="px-5 py-8 text-center text-sm text-ink-faint">{children}</p>;
-}
-
-const TIER_TONE: Record<string, string> = {
-  human: "bg-ink",
-  important: "bg-good",
-  commercial: "bg-warn",
-  dangerous: "bg-stamp",
-};
-
-function Tier({ tier }: { tier: string }) {
-  const name = tier.toLowerCase();
-  return (
-    <span className="flex shrink-0 items-center gap-2">
-      <span className={`h-2 w-2 rounded-full ${TIER_TONE[name] ?? "bg-rule-strong"}`} />
-      <span className="w-20 text-xs text-ink-faint">{name}</span>
-    </span>
-  );
-}
-
-function Tag({ tone, children }: { tone: "good" | "bad" | "quiet"; children: React.ReactNode }) {
-  const tones = {
-    good: "bg-good-soft text-good",
-    bad: "bg-stamp-soft text-stamp",
-    quiet: "bg-paper text-ink-faint",
-  };
-  return <span className={`rounded-full px-2 py-0.5 text-[11px] ${tones[tone]}`}>{children}</span>;
-}
-
-function Shell({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="flex min-h-full flex-col">
-      <SiteHeader
-        actions={
-          <Link href="/" className={quietButton}>
-            Get an address
-          </Link>
-        }
-      />
-      <div className="flex-1">{children}</div>
-      <SiteFooter />
-    </div>
   );
 }

@@ -14,15 +14,36 @@ Nothing in the mail path. A message from Gmail to a live handle has been held,
 replied to in its own SMTP session, released through Mailgun and delivered
 against the deployed stack.
 
-**World ID is not actually integrated in the browser.** Verified, and the only
-thing between the demo and a complete story. `@worldcoin/idkit` is a dependency,
-`/api/world/context` signs an `rp_context` correctly and `/api/world/verify`
-parses a Selfie Check result correctly, but nothing client side ever calls
-either — `ChallengeActions.verifyHuman` posts a bare challenge token. With
-`IDENTITY_MODE=mock` the nullifier is `keccak256("mock-selfie:" + sender)`, which
-is one free pass per *address* rather than per person, so the Sybil resistance
-the free lane rests on is not switched on. In `live` mode the flow would fail
-outright.
+**World ID is not actually integrated in the browser, and the server half that
+used to exist has since been removed too.** Verified. `ChallengeActions.verifyHuman`
+posts a bare challenge token and always has — nothing client side ever called
+`@worldcoin/idkit` or requested a proof. With `IDENTITY_MODE=mock` the nullifier
+is `keccak256("mock-selfie:" + sender)`, which is one free pass per *address*
+rather than per person, so the Sybil resistance the free lane rests on is not
+switched on. In `live` mode the flow would fail outright — `/api/world/verify`
+still parses a Selfie Check result, but nothing produces one to send it.
+
+What used to sign the other half of the handshake is gone: the route
+`web/src/app/api/world/context/route.ts`, which signed the `rp_context` every
+World ID 4.0 proof request must carry, was deleted as dead code — nothing
+reachable ever called it. Its removal took the `@worldcoin/idkit` and
+`@worldcoin/idkit-server` packages out of `web/package.json` with it (idkit-server
+had no other importer), and the `WORLD_ACTION` and `WORLD_RP_SIGNING_KEY` env vars
+out of `web/.env.local.example` (that route was their only reader). `WORLD_RP_ID`
+stays — `/api/world/verify` still reads it to call the Developer Portal directly.
+Rebuilding the client integration means restoring all of it: both packages,
+an `rp_context`-signing route, and the two env vars it needs, plus whatever
+client-side call `ChallengeActions.verifyHuman` was always missing.
+
+On the deployed testnet this is not a future risk but the live behaviour.
+`identityMode()` (`web/src/lib/env.ts:8-9`) defaults to `"mock"` unless
+`IDENTITY_MODE` is exactly `"live"`, and DEPLOYMENTS.md's own "Proven end to
+end" record — a message released "when the sender said a person wrote it" —
+could only have happened in mock mode, since `live` mode's `verifyWithWorld`
+throws immediately on the proof `ChallengeActions.verifyHuman` never sends.
+So the personhood gate on the live testnet is not merely unbuilt client-side;
+it is an automatic pass keyed to the sender's address, with a real on-chain
+attestation written for it.
 
 ## Security
 
@@ -72,6 +93,90 @@ Cloudflare ration above. Everything else has none — `/api/mail/inbound` behind
 its shared secret, `/api/challenge/resolve`, `/api/world/verify`, which spends
 real gas, and the worker's `/release`, which spends a Mailgun send.
 
+**A release token can outlive its own release.** Verified by reading.
+`retireHold` deletes the worker's KV entry only after Mailgun has already sent
+the message, and retries the delete once on failure; if both attempts fail, the
+token is still there even though the mail it guarded is gone. Bounded two ways:
+the key still expires on the deadline set when the message was first held, so
+nothing accumulates, and the web side's `claimHold` — one conditional update,
+taken before `/release` is ever called — has already moved the challenge past
+`delivered`, so the sender's own retry cannot ask the worker to send it again.
+Documented at the call site rather than fixed: a delete that fails must not
+become an error, because the mail is already out.
+
+**Exhausting a handle's classification budget buys free delivery for
+everyone else that hour.** Verified by reading
+`web/src/app/api/mail/inbound/forwarding.ts` and the caps in
+`web/src/lib/db/classifications.ts`. The per-sender ceiling is 20
+classifications an hour and the per-handle ceiling is 200, and an
+authenticated sender is not otherwise limited in how many envelope addresses
+they write from, so one controlled domain can spend the whole handle pool
+with ten addresses at twenty each. Past that pool the
+classifier reads headers only, and `deliveredFree` still forwards a degraded
+`important` verdict when the refusal is `spent-by-handle`, on the reasoning
+that a drained handle pool is somebody else's doing. So the sender who drains
+it themselves buys the header-only fallback for the rest of the hour, and
+anything after that with a transactional-sounding subject and passing
+authentication is forwarded free, skipping both the hold and the payment.
+Pre-existing — byte-identical to `main` — not introduced by this branch, and
+the most consequential bypass found here.
+
+**A signed wallet proof is valid for ten minutes, not the five its name
+suggests.** Verified by reading `web/src/lib/auth.ts` and the test at
+`web/src/lib/auth.test.ts:75-79`. `FRESHNESS_SECONDS` is 300 and the bound
+checked is `age < -FRESHNESS_SECONDS || age > FRESHNESS_SECONDS`, so a
+statement timestamped up to five minutes into the future is accepted
+alongside one up to five minutes into the past — a ten-minute window under a
+name and comment that read as five. The future half is deliberate, for a
+client whose clock runs fast, and the test asserts it rather than merely
+tolerating it. There is no nonce and no single-use record anywhere the header
+triple is checked, so within that window the wallet address, timestamp and
+signature are a replayable bearer credential — good for whatever exact
+action was signed, and no wider, because `web/src/lib/statements.ts` binds
+each statement to the wallet and, where they apply, the handle or
+destination.
+
+**`readStatement` is the one signed statement with no deployment binding.**
+Verified by reading `web/src/lib/statements.ts`. `claimStatement` and
+`confirmStatement` both embed `postageAddress(handle)`, which carries
+`MAIL_DOMAIN`; `readStatement` names only the wallet and a timestamp. It is
+the statement `GET /api/inbox` checks (`web/src/app/api/inbox/route.ts:81`),
+so a signature over that exact text collected anywhere else that shares the
+wallet — a staging deployment, or any other site that asks someone to sign
+it — is valid there too for the freshness window, and reading the inbox
+discloses the handle's forwarding address. A SIWE-style domain line in the
+statement would close it.
+
+**`/release` does not check that the token and the destination belong
+together, and one secret covers three different jobs.** Verified by reading
+`worker/src/index.ts`. The handler reads `token` and `to` from the request
+body independently and never cross-checks them — it relays whatever is held
+under `token` to whatever `to` names — and the only gate is
+`x-postage-secret` matching `env.POSTAGE_SECRET`. That same value is the web
+app's `MAIL_WEBHOOK_SECRET`: it authenticates `POST /api/mail/inbound` from
+the worker to the gateway (`web/src/app/api/mail/inbound/route.ts:78`) and
+the gateway's own calls to `/release` (`web/src/lib/hold.ts:26-32`), where
+`to` is normally `inbox.destination` looked up server-side rather than
+attacker-supplied. Holding that one secret is enough to redirect a held
+message's contents to an address of the holder's choosing through a Mailgun
+relay under the account's domain — the worker enforces no relationship
+between the two. The file already records `/release` having no rate limit;
+it does not record this.
+
+**A sender can turn a real DKIM failure into `unknown`, and `unknown` is
+accepted as far as delivery is concerned.** Plausible. `authResults` in
+`worker/src/index.ts` returns `null` for a method when copies of
+`Authentication-Results` disagree, and `senderIsAuthenticated` in
+`web/src/app/api/mail/inbound/route.ts:37-39` reads `payload.dkim !==
+"fail"`, so a `null` dkim passes that check the same as a `pass` would. A
+sender who adds their own `dkim=pass` alongside Cloudflare's real
+`dkim=fail` turns the header into a disagreement, and the disagreement into
+`null`. Practical gain is nil as things stand: the other conjunct requires
+`spf === "pass"`, which already pins the envelope domain, and on a domain
+that clears SPF the DKIM signature could simply be omitted rather than
+forged. The `null`-is-unknown rule the worker enforces is safe exactly as
+long as no consumer treats unknown as good, and this one does.
+
 ## Correctness
 
 **A held message that is never answered is silently dropped.** Verified by
@@ -97,6 +202,47 @@ per inbox and none are ever removed, and the Cloudflare account has a cap on
 them; reaching it kills signup permanently. `findDestination` now walks every
 page rather than the first fifty, so the lookup no longer fails first — which
 means the cap is now the thing that will actually bite.
+
+## Contracts
+
+Four things the NatSpec pass documented rather than fixed, because all four
+contracts are already live on Arc testnet and a redeploy would orphan the
+registered signing key, the vault's balances, or every existing attestation.
+Written down in the source at the sites named below; repeated here so a claim
+about the contracts does not require reading Solidity to find.
+
+**`EnclaveRegistry.revoke` accepts a signer that was never registered, or one
+already revoked.** Verified by reading. There is no `isRegistered[signer]`
+guard and no zero-address guard, so a stray owner call still succeeds and emits
+`EnclaveRevoked` either way. The subgraph is built purely from events, so that
+call can materialise a phantom `Enclave` entity or double-count a revocation
+downstream. Permissive on purpose, per the function's own NatSpec: the owner is
+trusted not to make that call.
+
+**Two constructors take an address that must accept a plain ETH transfer, and
+neither checks for it.** Verified by reading. `PostageEscrow`'s `vault_` and
+`PostageVault`'s `relayer_` are both immutable; if either address cannot accept
+ETH, the dependent path reverts forever — every `payToSend` at `_pay` for the
+escrow, every `refillRelayer` for the vault, and in the vault's case the entire
+sponsorship pool is stranded with no sweep, since `withdrawTreasury` can only
+ever reach `treasuryBalance`. Documented at both constructors rather than
+guarded against, since neither address can be changed after the fact anyway.
+
+**ETH forced into `PostageVault` outside `receive()` breaks the invariant the
+fuzz tests check.** Verified by reading. `treasuryBalance + sponsorshipPool ==
+address(this).balance` holds only for ETH that arrives through `receive()`; ETH
+sent via `selfdestruct` or received as a coinbase payment bypasses it — there is
+no `fallback` — lands in the contract's balance, and stays there permanently
+unaccounted for. Left unfixed deliberately: closing it would mean redeploying a
+vault that already holds real funds.
+
+**`HumanRegistry`'s constructor rejects a zero `attester_` by reverting
+`InvalidSignature`, an error that names nothing about a signature.** Verified by
+reading. The revert itself is correct — a zero attester would leave every
+attestation unverifiable — but the error it reverts with is a leftover from an
+error set fixed before this check was added. Left as the wrong name rather than
+renamed: adding or renaming a constructor error changes the contract's deployed
+interface.
 
 ## Unverified against the real thing
 
@@ -127,6 +273,32 @@ has only been read, not run.
   held either way and proving personhood still clears it for nothing, so this
   costs a real sender only if they decline to prove it — but the tier is meant to
   describe the message, and there it was wrong.
+- `reset()` (`web/src/lib/db/client.ts`), which empties every table, is exported
+  from a shipped application module rather than kept test-only. No route reaches
+  it, but it sits in the app's module graph.
+- `GET /api/inbox/verify?handle=` is unauthenticated and reveals whether a handle
+  is mid-claim.
+- No `.tsx` file in this repo can be imported by a test. `node
+  --experimental-strip-types` throws `ERR_UNKNOWN_FILE_EXTENSION` on `.tsx` before
+  `web/test/resolve-ts.mjs`'s custom resolver — which only ever appends `.ts` —
+  gets a chance to run, and there is no jsdom, no React Testing Library, no
+  `react-test-renderer`, and no browser tool in this environment to mount a
+  component even if the module did load. Confirmed with a standalone probe file
+  outside the repo, not inferred. Three test files work around it rather than
+  closing it — `web/src/app/Account.test.ts`, `FinishClaim.test.ts`,
+  `PickHandle.test.ts` — by reading the component's own source text at test
+  time, cutting out one function or expression by matching a stable anchor
+  string in it, stripping the TypeScript with the `typescript` devDependency
+  already installed for `tsc`, and running that through `new Function`. That
+  runs the real current source rather than a hand-copy, so an edited fix is
+  exercised as written, but it also means those tests break the moment the
+  anchor they match moves or is renamed — the tests then throw rather than
+  silently passing on nothing, which is deliberate, but it makes the anchor
+  strings inside those three files load-bearing in a way nothing else in the
+  suite is. No rendered output on this branch has been visually confirmed.
+  Lifting the limitation would take a `.tsx` loader transform for the test
+  runner plus jsdom and Testing Library to actually mount and assert against
+  markup; offered and declined.
 
 ## Deliberately not done
 

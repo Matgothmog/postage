@@ -1,25 +1,25 @@
 import { isAddress } from "viem";
-import { claimStatement, provesWallet, readStatement } from "@/lib/auth";
+import { provesWallet } from "@/lib/auth";
 import { settleClaim } from "@/lib/claims";
 import { ensureDestination } from "@/lib/cloudflare";
 import {
   attachDestination,
   claimByHandle,
-  inboxByHandle,
-  inboxByWallet,
   markCodeVerified,
   purgeOldClaimSends,
   recentClaimsFrom,
   recentClaimsTo,
   recordClaimSend,
   startClaim,
-} from "@/lib/db";
-import { isOurs } from "@/lib/handle";
+} from "@/lib/db/claims";
+import { inboxByHandle, inboxByWallet } from "@/lib/db/inboxes";
+import { HANDLE_MAX_LENGTH, HANDLE_MIN_LENGTH, HANDLE_SHAPE, hasRepeatedDot, isOurs } from "@/lib/handle";
 import { sendVerificationCode } from "@/lib/mail";
 import { type PrivyIdentity, readIdentity } from "@/lib/privy";
+import { now } from "@/lib/time";
 import { CODE_TTL_SECONDS, generateCode, hashCode } from "@/lib/verification";
+import { IDENTITY_TOKEN_HEADER, claimStatement, readProof, readStatement } from "@/lib/wallet-proof";
 
-const HANDLE = /^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$/;
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
 /// Addresses the service itself relies on. A user holding `hello` would receive
@@ -53,7 +53,7 @@ const THROTTLE_WINDOW_SECONDS = 60 * 60;
 /// short signup: Privy has already confirmed both the address and the wallet, so
 /// neither has to be confirmed a second time.
 async function session(request: Request, wallet: string): Promise<PrivyIdentity | null> {
-  const identity = await readIdentity(request.headers.get("privy-id-token"));
+  const identity = await readIdentity(request.headers.get(IDENTITY_TOKEN_HEADER));
   if (!identity?.wallets.includes(wallet.toLowerCase())) return null;
   return identity;
 }
@@ -62,7 +62,9 @@ async function session(request: Request, wallet: string): Promise<PrivyIdentity 
 /// actually read, so it is returned only to someone who can prove the wallet is
 /// theirs rather than to anyone who knows it - wallets are public.
 export async function GET(request: Request) {
-  const identity = await readIdentity(request.headers.get("privy-id-token"));
+  const offered = readProof(request.headers);
+
+  const identity = await readIdentity(offered.identityToken);
   if (identity) {
     for (const wallet of identity.wallets) {
       const inbox = await inboxByWallet(wallet);
@@ -71,9 +73,7 @@ export async function GET(request: Request) {
     return Response.json({ inbox: null });
   }
 
-  const wallet = request.headers.get("x-postage-wallet");
-  const issuedAt = Number(request.headers.get("x-postage-issued"));
-  const signature = request.headers.get("x-postage-signature");
+  const { wallet, issuedAt, signature } = offered;
 
   if (!wallet || !isAddress(wallet)) {
     return Response.json({ error: "A valid wallet is required" }, { status: 400 });
@@ -168,7 +168,7 @@ export async function POST(request: Request) {
       destination: address,
       wallet,
       code_hash: hashCode(name, code),
-      expires_at: Math.floor(Date.now() / 1000) + CODE_TTL_SECONDS,
+      expires_at: now() + CODE_TTL_SECONDS,
       // Cloudflare is not told about this address until the code comes back.
       // Registering now would make it send its own mail at the same moment as
       // ours, so the claimer would face two emails and two instructions at once.
@@ -195,7 +195,7 @@ export async function POST(request: Request) {
     // hash of one nobody was sent can never be matched, so the confirm route
     // stays shut rather than being left open to anything.
     code_hash: hashCode(name, generateCode()),
-    expires_at: Math.floor(Date.now() / 1000) + CODE_TTL_SECONDS,
+    expires_at: now() + CODE_TTL_SECONDS,
     cf_address_id: null,
     cf_verified_at: null,
   });
@@ -221,10 +221,15 @@ export async function POST(request: Request) {
 }
 
 function validate(handle: string, destination: string): string | null {
-  if (!handle || handle.length < 2 || handle.length > 31 || !HANDLE.test(handle)) {
+  if (
+    !handle ||
+    handle.length < HANDLE_MIN_LENGTH ||
+    handle.length > HANDLE_MAX_LENGTH ||
+    !HANDLE_SHAPE.test(handle)
+  ) {
     return "Pick 2-31 characters: letters, digits, dot, dash, not starting or ending with punctuation";
   }
-  if (handle.includes("..")) return "Two dots in a row is not a valid address";
+  if (hasRepeatedDot(handle)) return "Two dots in a row is not a valid address";
   if (RESERVED.has(handle)) return "That name is reserved";
 
   if (!destination || !EMAIL.test(destination)) return "A valid destination address is required";
@@ -242,7 +247,7 @@ async function unavailableTo(handle: string, wallet: string): Promise<string | n
   const claim = await claimByHandle(handle);
   if (!claim || claim.wallet === wallet.toLowerCase()) return null;
   if (claim.code_verified_at !== null) return "That handle is taken";
-  if (claim.expires_at > Math.floor(Date.now() / 1000)) {
+  if (claim.expires_at > now()) {
     return "Someone is claiming that handle right now. Try again in a few minutes";
   }
   return null;

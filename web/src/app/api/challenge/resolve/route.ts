@@ -1,7 +1,8 @@
 import { type Hex } from "viem";
 import { publicClient } from "@/lib/client";
 import { POSTAGE_ESCROW, escrowAbi } from "@/lib/contracts";
-import { challengeByToken, linkSenderWallet } from "@/lib/db";
+import { challengeByToken } from "@/lib/db/challenges";
+import { linkSenderWallet } from "@/lib/db/sender-wallets";
 import { openGate } from "@/lib/gate";
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";

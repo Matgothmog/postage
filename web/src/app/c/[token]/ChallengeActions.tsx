@@ -5,18 +5,11 @@ import { useState } from "react";
 import { encodeFunctionData } from "viem";
 import { Callout, field, primaryButton, quietButton } from "@/components/chrome";
 import { POSTAGE_ESCROW, escrowAbi } from "@/lib/contracts";
+import { causeMessage } from "@/lib/errors";
 import { formatUsdc } from "@/lib/format";
 import { postageAddress } from "@/lib/handle";
+import type { QuoteFields } from "@/lib/quote-types";
 import { tierIndexOf } from "@/lib/tiers";
-
-interface Quote {
-  messageId: string;
-  inbox: string;
-  tier: string;
-  amount: string;
-  expiresAt: number;
-  signature: string;
-}
 
 /// Long enough to cover a block on Arc and the indexing behind it, short
 /// enough that a genuine failure still surfaces while the sender is looking.
@@ -36,7 +29,7 @@ export function ChallengeActions({
   lane: initialLane,
 }: {
   token: string;
-  quote: Quote;
+  quote: QuoteFields;
   dangerous: boolean;
   handle: string;
   /// Which answer they already gave. Both are links in the mail they were sent,
@@ -95,7 +88,7 @@ export function ChallengeActions({
       if (result.status !== "cleared") throw new Error(result.error ?? "Verification failed");
       setOutcome({ kind: "cleared", reason: "human", delivered: result.delivered === true });
     } catch (cause) {
-      setOutcome({ kind: "error", message: asMessage(cause) });
+      setOutcome({ kind: "error", message: causeMessage(cause) });
     } finally {
       setVerifying(false);
     }
@@ -152,7 +145,7 @@ function PayLane({
   onBack,
 }: {
   token: string;
-  quote: Quote;
+  quote: QuoteFields;
   onSettled: (outcome: Outcome) => void;
   onBack: () => void;
 }) {
@@ -217,7 +210,7 @@ function PayLane({
       });
       onSettled(await settle());
     } catch (cause) {
-      setError(asMessage(cause));
+      setError(causeMessage(cause));
     } finally {
       setBusy(false);
     }
@@ -276,7 +269,7 @@ function Deliver({ token, handle, reason }: { token: string; handle: string; rea
       if (!response.ok) throw new Error(result.error ?? "Could not deliver it");
       setSent(true);
     } catch (cause) {
-      setError(asMessage(cause));
+      setError(causeMessage(cause));
     } finally {
       setSending(false);
     }
@@ -322,8 +315,4 @@ function Deliver({ token, handle, reason }: { token: string; handle: string; rea
       {error && <p className="text-sm text-stamp">{error}</p>}
     </div>
   );
-}
-
-function asMessage(cause: unknown): string {
-  return cause instanceof Error ? cause.message : String(cause);
 }

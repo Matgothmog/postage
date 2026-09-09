@@ -62,7 +62,15 @@ contract PostageEscrow is EIP712 {
     /// @notice One payment per message, so a quote cannot be replayed.
     mapping(bytes32 messageId => Settlement) public settlementOf;
 
+    /// @notice An inbox set (or reset) the price it charges. Zero does not
+    /// mean it now accepts free mail; it means the override was cleared and
+    /// `effectiveFloor` falls back to `DEFAULT_FLOOR` — see `setFloorPrice`.
     event FloorPriceSet(address indexed inbox, uint256 amount);
+    /// @notice A quote was settled. `amount` is the inbox's net share of what
+    /// was actually sent (`msg.value - toVault`), not the quoted price that
+    /// authorized the payment — the two differ whenever a sender overpays,
+    /// because the excess is kept and split rather than refunded. See the
+    /// overpayment note on `payToSend`.
     event Paid(
         bytes32 indexed messageId,
         address indexed sender,
@@ -74,6 +82,7 @@ contract PostageEscrow is EIP712 {
     /// @notice Recipient disagreeing with the classifier after the fact. Moves
     /// no money; it is reputation the subgraph picks up.
     event SpamReported(bytes32 indexed messageId, address indexed inbox, address indexed sender);
+    /// @notice An inbox owner withdrew their accrued earnings to `to`.
     event EarningsClaimed(address indexed inbox, address indexed to, uint256 amount);
 
     error AlreadySettled();
@@ -88,12 +97,26 @@ contract PostageEscrow is EIP712 {
     error ZeroAddress();
     error TransferFailed();
 
+    /// @notice `vault_` is immutable and unrecoverable if wrong: if it cannot
+    /// accept a plain ETH transfer, every `payToSend` call reverts forever at
+    /// `_pay` below, because the vault's cut has nowhere else to go.
+    ///
+    /// EIP-712 version is "2" here against HumanRegistry's "1", not by
+    /// accident: it was bumped when this escrow was rewritten from a
+    /// hold/release model to the current quote model, so a signature over the
+    /// old domain cannot be replayed against this one. Off-chain signers
+    /// hardcode this string (web/src/lib/quote.ts) — changing it here without
+    /// changing them breaks every quote signature silently.
     constructor(address registry_, address vault_) EIP712("Postage", "2") {
         if (registry_ == address(0) || vault_ == address(0)) revert ZeroAddress();
         registry = EnclaveRegistry(registry_);
         vault = vault_;
     }
 
+    /// @notice Sets the caller's floor price. Passing zero does not make mail
+    /// free: it clears the override, and `effectiveFloor` falls back to
+    /// `DEFAULT_FLOOR` per the `floorPrice` mapping above. There is no way to
+    /// charge literally nothing through this function.
     function setFloorPrice(uint256 amount) external {
         floorPrice[msg.sender] = amount;
         emit FloorPriceSet(msg.sender, amount);
@@ -107,10 +130,33 @@ contract PostageEscrow is EIP712 {
     }
 
     /// @notice Whether this message has already been paid for.
+    /// @dev Kept as its own function rather than inlined at call sites: the
+    /// escrow this replaced exposed `settled(bytes32)` over its own storage,
+    /// and this preserves that exact signature over `settlementOf` after the
+    /// rewrite to the quote model, so nothing calling it needed to change.
     function settled(bytes32 messageId) public view returns (bool) {
         return settlementOf[messageId].inbox != address(0);
     }
 
+    /// @notice Settles a quoted message: verifies the enclave's signature over
+    /// the quote, requires at least the quoted amount, and splits what was
+    /// actually sent between the inbox and the vault.
+    ///
+    /// Overpaying is accepted and never refunded — only `msg.value < amount`
+    /// is rejected below, nothing caps the upside — because a refund would
+    /// need a second external call this function has no other reason to make.
+    /// The split is computed from `msg.value`, not from `amount`, so any
+    /// excess over the quote still flows to the inbox and the vault in the
+    /// usual proportion; it just means `Paid.amount` and `Paid.toVault` can
+    /// exceed what the quote named.
+    /// @param messageId Identifies the message this quote was issued for, and
+    /// doubles as the replay key checked via `settled`.
+    /// @param inbox The recipient the enclave quoted this message for.
+    /// @param tier What the enclave classified this message as.
+    /// @param amount The quoted price — the minimum that must be sent, not
+    /// necessarily what ends up collected; see the overpayment note above.
+    /// @param expiresAt Quote deadline; `block.timestamp >= expiresAt` is
+    /// rejected, so the boundary instant itself is already expired.
     /// @param enclaveSignature EIP-712 signature over the quote, from a key
     /// registered in EnclaveRegistry.
     function payToSend(
@@ -132,6 +178,11 @@ contract PostageEscrow is EIP712 {
         address signer = _recoverQuoteSigner(messageId, inbox, tier, amount, expiresAt, enclaveSignature);
         if (!registry.isRegistered(signer)) revert UnknownEnclave(signer);
 
+        // Settlement recorded, earnings credited, and the event emitted
+        // before the external call below. There is no ReentrancyGuard here;
+        // this ordering is the only thing stopping a reentrant call from
+        // re-settling this message or double-crediting the inbox. Do not
+        // reorder these lines relative to `_pay`.
         settlementOf[messageId] = Settlement({inbox: inbox, reported: false, payer: msg.sender});
 
         uint256 toVault = (msg.value * VAULT_BPS) / ONE;
@@ -157,17 +208,23 @@ contract PostageEscrow is EIP712 {
         emit SpamReported(messageId, msg.sender, settlement.payer);
     }
 
+    /// @notice Withdraws the caller's accrued earnings to `to`.
     function claimEarnings(address to) external {
         if (to == address(0)) revert ZeroAddress();
 
         uint256 amount = earnings[msg.sender];
         if (amount == 0) revert NothingToClaim();
+        // Zeroed and emitted before the external call below — same
+        // ordering-as-reentrancy-guard reasoning as in payToSend.
         earnings[msg.sender] = 0;
 
         emit EarningsClaimed(msg.sender, to, amount);
         _pay(to, amount);
     }
 
+    /// @notice The EIP-712 digest an enclave signs to quote a message. Exposed
+    /// so off-chain signers and `payToSend`'s internal recovery compute the
+    /// identical hash.
     function quoteDigest(
         bytes32 messageId,
         address inbox,

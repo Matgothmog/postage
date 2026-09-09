@@ -25,7 +25,7 @@ decides **who pays to get through**.
 | What it is | What happens |
 | --- | --- |
 | Something you are waiting for — a login code, a receipt, a delivery update | Delivered at once, free. Never held. |
-| Written by a person | Held. Proving you are a person clears it for nothing. |
+| Written by a person | Held. Say a person wrote it and it clears, for nothing. |
 | Ordinary automated mail — newsletters, marketing | Held. Nobody proved a person is behind it, so it pays. |
 | Trying to deceive you | Never delivered. Being a person does not clear it, and paying is a penalty. |
 
@@ -33,10 +33,11 @@ A held sender gets a **reply to the message they just sent**, threaded to it,
 asking one question: did a person write this, or a machine? Two links, one
 answer. Nothing asks them to write the message again, because it is still here.
 
-A person proves it with World ID and the message goes. **No wallet, no account,
-nothing to sign up for** — the free lane should not charge a toll in setup. A
-machine pays instead, and only then is there anything to create an account for,
-because only then is there money to move.
+Say a person wrote it and the message goes — nothing today actually checks that
+one did. **No wallet, no account, nothing to sign up for** — the free lane
+should not charge a toll in setup. A machine pays instead, and only then is
+there anything to create an account for, because only then is there money to
+move.
 
 ## What arrives is what was sent
 
@@ -63,10 +64,12 @@ mail, so it lasts a day.
 and the fraction of a cent of gas that moves it are quoted in the same unit. On a
 chain with a volatile gas token, a one-cent price is not a coherent idea.
 
-**World ID** is the free lane, asked every time and of nobody's wallet. The
+**World ID** is the free lane, meant to ask nothing of anybody's wallet. The
 attestation goes onchain against an address derived from the nullifier — an
-identity nobody holds a key to. Its per-action nullifier means one person cannot
-mint themselves unlimited free senders.
+identity nobody holds a key to — and a real nullifier is what would stop one
+person minting themselves unlimited free senders. The browser side of that ask
+is not built yet, so today the attestation is written on a click rather than a
+proof — see [KNOWN_ISSUES.md](KNOWN_ISSUES.md#blocking-a-real-demo).
 
 **The Graph** decides what a sender pays. Every payment, every verdict, and every
 time a recipient contradicted the classifier is indexed, and that history prices
@@ -119,6 +122,7 @@ that properly means running the MTA itself inside an enclave. See
 ## Layout
 
     contracts/   escrow, enclave registry, identity registry, vault
+    shared/      the verdict shape worker and web agree on, nothing else
     subgraph/    indexes all four on Arc
     web/         signup, dashboard, challenge page, and the API behind them
     worker/      the Cloudflare mail worker

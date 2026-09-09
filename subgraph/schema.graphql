@@ -37,6 +37,11 @@ type Payment @entity(immutable: false) {
   sender: Sender!
   inbox: Inbox!
   tier: Tier!
+  """
+  The inbox's net share, not what the sender paid: PostageEscrow takes its
+  vault cut before this event is emitted, so this is msg.value - toVault. The
+  full amount the sender paid is `amount + toVault`.
+  """
   amount: BigInt!
   toVault: BigInt!
   paidAt: BigInt!
@@ -60,6 +65,19 @@ type Enclave @entity(immutable: false) {
   measurement: Bytes!
   registeredAt: BigInt!
   revoked: Boolean!
+}
+
+"""
+The image measurement the registry currently expects a signer to match before
+it can be registered. One row, id "current", so a client asks for what the
+protocol expects today rather than filtering `Enclave` rows by time. Anyone
+can recompute this from a clean checkout and compare — that's the property
+`setMeasurement` publishes it for.
+"""
+type ExpectedMeasurement @entity(immutable: false) {
+  id: Bytes!
+  measurement: Bytes!
+  setAt: BigInt!
 }
 
 """A World ID result, recorded on Arc."""

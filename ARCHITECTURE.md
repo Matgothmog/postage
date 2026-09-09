@@ -117,6 +117,28 @@ process, and the measurement recorded against it says exactly that:
 a Nitro enclave, where that measurement becomes a hash of the running image;
 swapping it in changes who may sign, not the interface.
 
+## The verdict is declared once, not twice
+
+Worker and web are separate npm packages — their own tsconfigs, no workspace
+tooling connecting them — so when the worker asks what to do with a message,
+there is no package either side could import the answer's shape from without
+adding one. `shared/gateway-verdict.ts` sits outside both, at the repo root:
+one `interface GatewayVerdict`, `forward | hold | reject` plus whatever each
+of those needs, reached by a plain relative import from `worker/src/index.ts`
+and from `web/src/app/api/mail/inbound/route.ts`.
+
+It is `import type` only, so nothing about a request path or a build step is
+added on either side by depending on it — the import is erased before either
+package runs. The two imports even look different: the worker's tsconfig sets
+`allowImportingTsExtensions`, so its import names `../../shared/gateway-verdict.ts`
+with the extension; web's does not, so its import omits it. Same file, two
+valid ways in, because each side's bundler settles the question on its own.
+
+The alternative was drift: a field the gateway stopped sending that the worker
+still read as present, caught by nothing until a release went out wrong. One
+declaration both sides typecheck against turns that into a compile error in
+whichever package fell behind.
+
 ## Why each piece
 
 ### Arc — where the money is
@@ -313,7 +335,6 @@ Columns added after the fact are applied on connect against `PRAGMA table_info`.
 | `CLASSIFIER_PRIVATE_KEY` | Vercel env | Signs prices the escrow will accept |
 | `ATTESTER_PRIVATE_KEY` | Vercel env | Signs personhood attestations |
 | `RELAYER_PRIVATE_KEY` | Vercel env | Holds sponsorship funds only |
-| `WORLD_RP_SIGNING_KEY` | Vercel env | Signs `rp_context`; a leak lets anyone forge proof requests as this app |
 | `MAIL_WEBHOOK_SECRET` | Vercel + worker | Both directions: stops mail being injected into the gateway, and stops anyone releasing a held message |
 | `MESSAGE_ID_SECRET` | Vercel env | Keys the onchain message id, and derives the verification code hash |
 | `ANTHROPIC_API_KEY` | Vercel env | Classifier access |

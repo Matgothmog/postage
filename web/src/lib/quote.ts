@@ -4,6 +4,8 @@ import { privateKeyToAccount } from "viem/accounts";
 import { POSTAGE_ESCROW, chain } from "./contracts";
 import { TIER_INDEX, type Tier } from "./tiers";
 import { required } from "./env";
+import { now } from "./time";
+import type { QuoteFields } from "./quote-types";
 
 /// How long a sender has to act on a price before it must be requoted. Short
 /// enough that a cheap quote cannot be banked, long enough to click a link and
@@ -20,12 +22,14 @@ const types = {
   ],
 } as const;
 
-export interface SignedQuote {
+/// `QuoteFields`, narrowed: everything here is fresh out of `signQuote`, so
+/// the invariants the branded types promise — a real hex value, a real tier —
+/// still hold. They stop holding the moment this crosses a JSON boundary,
+/// which is exactly the shape `QuoteFields` describes instead.
+export interface SignedQuote extends QuoteFields {
   messageId: Hex;
   inbox: Hex;
   tier: Tier;
-  amount: string;
-  expiresAt: number;
   signature: Hex;
 }
 
@@ -51,7 +55,7 @@ export async function signQuote(
   amount: bigint
 ): Promise<SignedQuote> {
   const signer = privateKeyToAccount(required("CLASSIFIER_PRIVATE_KEY") as Hex);
-  const expiresAt = Math.floor(Date.now() / 1000) + QUOTE_TTL_SECONDS;
+  const expiresAt = now() + QUOTE_TTL_SECONDS;
 
   const signature = await signer.signTypedData({
     domain: { name: "Postage", version: "2", chainId: chain.id, verifyingContract: POSTAGE_ESCROW },

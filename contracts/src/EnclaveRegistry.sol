@@ -20,10 +20,24 @@ contract EnclaveRegistry {
     bytes32 public expectedMeasurement;
 
     mapping(address signer => bool allowed) public isRegistered;
+    /// @notice Which measurement each registered signer was recorded against.
+    /// Unused by any on-chain caller, web, worker, or subgraph beyond tests as
+    /// of this writing — `isRegistered` is the only check anything makes.
+    /// Kept rather than removed: this is a mapping slot, and removing it
+    /// changes this contract's storage layout, which a deployed contract
+    /// cannot survive. It also stays ready for whenever attestations are
+    /// verified on-chain, which is the reason it was written in the first
+    /// place — see the contract header.
     mapping(address signer => bytes32 measurement) public measurementOf;
 
+    /// @notice The image hash registered enclaves must match was changed.
     event MeasurementSet(bytes32 measurement);
+    /// @notice `signer` was added to the accepted set, against the given
+    /// measurement.
     event EnclaveRegistered(address indexed signer, bytes32 measurement);
+    /// @notice `signer` was removed from the accepted set. Emitted whenever
+    /// `revoke` is called, including for a signer that was never registered or
+    /// already revoked — see `revoke`.
     event EnclaveRevoked(address indexed signer);
 
     error NotOwner();
@@ -48,6 +62,8 @@ contract EnclaveRegistry {
         emit MeasurementSet(measurement);
     }
 
+    /// @notice Adds `signer` to the accepted set against the currently
+    /// published measurement.
     function register(address signer) external onlyOwner {
         if (signer == address(0)) revert ZeroAddress();
         if (expectedMeasurement == bytes32(0)) revert NoMeasurementSet();
@@ -61,6 +77,14 @@ contract EnclaveRegistry {
 
     /// @notice Enclave keys are ephemeral per boot, so revoking a retired one
     /// keeps the accepted set honest.
+    ///
+    /// Permissive on purpose in the failure cases, not by oversight: there is
+    /// no `isRegistered[signer]` guard, so this succeeds and emits
+    /// `EnclaveRevoked` for a signer that was never registered, and again for
+    /// one already revoked. There is also no zero-address guard. Because the
+    /// subgraph is built purely from events, a stray call here can materialise
+    /// a phantom enclave entity or double-count a revocation downstream — the
+    /// owner is trusted not to make that call.
     function revoke(address signer) external onlyOwner {
         isRegistered[signer] = false;
         emit EnclaveRevoked(signer);

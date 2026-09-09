@@ -1,8 +1,15 @@
-import { confirmStatement, holdsWallet } from "@/lib/auth";
+import { holdsWallet } from "@/lib/auth";
 import { settleClaim } from "@/lib/claims";
 import { ensureDestination } from "@/lib/cloudflare";
-import { attachDestination, claimByHandle, consumeAttempt, markCodeVerified } from "@/lib/db";
+import {
+  attachDestination,
+  claimByHandle,
+  consumeAttempt,
+  markCodeVerified,
+} from "@/lib/db/claims";
+import { now } from "@/lib/time";
 import { MAX_ATTEMPTS, codeMatches } from "@/lib/verification";
+import { confirmStatement } from "@/lib/wallet-proof";
 
 /// Polled while the user is on the confirmation screen, so the Cloudflare half
 /// ticks over the moment they click the link in its email.
@@ -58,7 +65,7 @@ export async function POST(request: Request) {
     );
   }
 
-  if (claim.expires_at <= Math.floor(Date.now() / 1000)) {
+  if (claim.expires_at <= now()) {
     return Response.json({ error: "That code has expired. Start again to get a new one" }, { status: 410 });
   }
   if (!(await consumeAttempt(claim.handle, MAX_ATTEMPTS))) {

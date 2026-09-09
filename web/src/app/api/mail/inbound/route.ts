@@ -1,24 +1,20 @@
-import { randomUUID } from "node:crypto";
 import type { Hex } from "viem";
 import { challengeMail } from "@/lib/challenge-email";
 import { classify, classifyFromHeaders, extractUrls, type MailFacts } from "@/lib/classify";
-import { publicClient } from "@/lib/client";
-import { POSTAGE_ESCROW, escrowAbi } from "@/lib/contracts";
 import {
-  HOLD_SECONDS,
+  type BudgetState,
   claimClassification,
-  createChallenge,
-  inboxByHandle,
-  purgeExpiredHolds,
   purgeOldClassifications,
-  spendPass,
-  walletForSender,
-} from "@/lib/db";
+} from "@/lib/db/classifications";
+import { inboxByHandle } from "@/lib/db/inboxes";
 import { required } from "@/lib/env";
 import { handleOf, isOurs } from "@/lib/handle";
-import { quote } from "@/lib/pricing";
-import { messageIdFor, signQuote } from "@/lib/quote";
-import { gatherSignals } from "@/lib/reputation";
+// `web/` and `worker/` are separate packages with no workspace tooling between
+// them, so the wire shape this route answers with is declared once outside
+// both and reached by relative path rather than duplicated.
+import type { GatewayVerdict } from "../../../../../../shared/gateway-verdict";
+import { issueChallenge } from "./challenge";
+import { forwardWithoutChallenge } from "./forwarding";
 
 interface InboundPayload {
   from: string;
@@ -43,11 +39,27 @@ function senderIsAuthenticated(payload: Partial<InboundPayload>): boolean {
   return payload.spf === "pass" && payload.dkim !== "fail";
 }
 
+/// The message as the classifier is given it: the envelope, whatever the
+/// receiving server made of the authentication, and the links in the body.
+function mailFacts(payload: Partial<InboundPayload>, from: string, to: string): MailFacts {
+  return {
+    from,
+    to,
+    subject: payload.subject ?? "",
+    body: payload.body ?? "",
+    spf: payload.spf ?? null,
+    dkim: payload.dkim ?? null,
+    dmarc: payload.dmarc ?? null,
+    urls: extractUrls(payload.body ?? ""),
+  };
+}
+
 /// A message that will never be delivered, whatever anyone does about it. The
 /// worker puts `bounce` in the SMTP refusal, so the sender is told why rather
 /// than left to retry.
 function refuse(reason: string, bounce: string): Response {
-  return Response.json({ action: "reject", reason, bounce });
+  const wire: GatewayVerdict = { action: "reject", reason, bounce };
+  return Response.json(wire);
 }
 
 /// Called by the mail worker for every inbound message.
@@ -62,10 +74,6 @@ function refuse(reason: string, bounce: string): Response {
 ///   dangerous   never delivered, whatever anyone does. Charged as a penalty
 ///               if a wallet is attached, and proving personhood does not
 ///               clear it - a real person can still be phishing.
-///
-/// Nothing about the message is stored here. The worker keeps the original
-/// bytes so that releasing a hold puts the message that was sent on the wire
-/// rather than a copy of it; this side records who wrote to whom and the price.
 export async function POST(request: Request) {
   if (request.headers.get("x-postage-secret") !== required("MAIL_WEBHOOK_SECRET")) {
     return Response.json({ error: "Bad secret" }, { status: 401 });
@@ -78,7 +86,10 @@ export async function POST(request: Request) {
 
   const handle = handleOf(to);
   const inbox = await inboxByHandle(handle);
-  if (!inbox) return Response.json({ action: "reject", reason: "unknown_inbox" }, { status: 404 });
+  if (!inbox) {
+    const wire: GatewayVerdict = { action: "reject", reason: "unknown_inbox" };
+    return Response.json(wire, { status: 404 });
+  }
 
   // Both of these are answered 200 with a verdict in the body, like every other
   // outcome. A non-2xx tells the worker it could not reach us, and it then
@@ -101,16 +112,7 @@ export async function POST(request: Request) {
   const sender = from.toLowerCase();
   const authenticated = senderIsAuthenticated(payload);
 
-  const facts: MailFacts = {
-    from: sender,
-    to,
-    subject: payload.subject ?? "",
-    body: payload.body ?? "",
-    spf: payload.spf ?? null,
-    dkim: payload.dkim ?? null,
-    dmarc: payload.dmarc ?? null,
-    urls: extractUrls(payload.body ?? ""),
-  };
+  const facts = mailFacts(payload, sender, to);
 
   // Dropped on the way past rather than by a job nobody runs, so the table the
   // budget counts over stays the size of one hour.
@@ -135,119 +137,58 @@ export async function POST(request: Request) {
   // free. That made the outage something an attacker could manufacture and then
   // walk through. Unauthenticated mail is now judged from its headers and held,
   // which costs nothing and unlocks nothing.
-  const budget = authenticated ? await claimClassification(handle, sender) : "spent-by-sender";
-  const verdict = budget ? classifyFromHeaders(facts) : await classify(facts);
+  const budgetRefusal: BudgetState = authenticated
+    ? await claimClassification(handle, sender)
+    : "spent-by-sender";
+  const verdict = budgetRefusal ? classifyFromHeaders(facts) : await classify(facts);
 
-  // Checked before any pass is spent. This tier is free and grants nothing, so
-  // taking a paid use for it would charge someone twice for one delivery.
-  //
-  // Held to a higher bar when the verdict is degraded, and shut entirely when
-  // the sender is the reason it is degraded.
-  //
-  // The header fallback calls anything transactional-sounding important as long
-  // as authentication did not outright fail, so during an outage a sender who
-  // signs their own domain could write "your verification code" and be
-  // delivered free. That is tolerable when the outage is ours — real login
-  // codes have to keep arriving, which is the whole point of this tier. It is
-  // not tolerable when the sender put us here on purpose: their own hourly
-  // slice is theirs to spend, so spending it must not unlock anything.
-  if (verdict.tier === "important" && (!verdict.degraded || (authenticated && budget !== "spent-by-sender"))) {
-    return Response.json({
-      action: "forward",
-      to: inbox.destination,
-      reason: verdict.tier,
-      verdict,
-    });
-  }
-
-  // A live pass, and the envelope it was earned with. Passes run out, so this
-  // is a sender who cleared the gate minutes ago rather than ever.
-  //
-  // Narrowed only when the sender spent their own slice. An unlimited window
-  // plus a budget they exhausted themselves is a licence to deliver anything
-  // unread, so that one shuts. A single paid use cannot flood by construction —
-  // one message, already paid for — and refusing it would take the money and
-  // demand it again.
-  //
-  // A handle's pool being empty is somebody else's doing: anyone can spend it
-  // with forged addresses, and letting that re-challenge everyone who proved
-  // themselves would hand a stranger an hour of leverage over someone's mail.
-  if (authenticated && verdict.tier !== "dangerous") {
-    const pass = await spendPass(handle, sender, {
-      countedOnly: budget === "spent-by-sender",
-    });
-    if (pass) {
-      return Response.json({
-        action: "forward",
-        to: inbox.destination,
-        reason: pass.reason,
-        verdict,
-      });
-    }
-  }
-
-  // A sender who has paid before is priced on that history rather than as a
-  // stranger, which is the whole point of indexing payments.
-  const senderWallet = await walletForSender(sender);
-  const signals = senderWallet ? await gatherSignals(senderWallet) : null;
-
-  // The floor comes from the chain, never from our own database. The escrow
-  // reverts on anything below it, so a cached copy that drifts out of date
-  // produces quotes nobody can pay. `effectiveFloor` rather than `floorPrice`,
-  // so an inbox whose owner never picked a price is still charged for.
-  const floor = await publicClient.readContract({
-    address: POSTAGE_ESCROW,
-    abi: escrowAbi,
-    functionName: "effectiveFloor",
-    args: [inbox.wallet as Hex],
-  });
-  const priced = quote(floor, verdict.tier, signals, verdict.degraded);
-
-  const token = randomUUID().replaceAll("-", "");
-  const receivedAt = Math.floor(Date.now() / 1000);
-  const messageId = messageIdFor(sender, handle, facts.subject, receivedAt);
-  const signed = await signQuote(messageId, inbox.wallet as Hex, verdict.tier, priced.amount);
-  const challengeUrl = `${appUrl}/c/${token}`;
-
-  // Dangerous mail is never delivered by any route, so there is nothing to hold
-  // and no reason to keep what it said.
-  const holding = verdict.tier !== "dangerous";
-  const heldUntil = receivedAt + HOLD_SECONDS;
-  await purgeExpiredHolds();
-
-  await createChallenge({
-    token,
+  const forwarded = await forwardWithoutChallenge({
     handle,
     sender,
-    message_id: messageId,
-    tier: verdict.tier,
-    amount: priced.amount.toString(),
-    quote_json: JSON.stringify({ ...signed, reasons: priced.reasons }),
-    held_until: holding ? heldUntil : null,
-    created_at: receivedAt,
-  });
-
-  const common = {
-    reason: verdict.tier,
     verdict,
-    price: priced.amount.toString(),
-    reasons: priced.reasons,
-    challenge_url: challengeUrl,
-    quote: signed,
-  };
-
-  if (!holding) {
-    return Response.json({
-      ...common,
-      action: "reject",
-      bounce: `Not delivered: this looks like an attempt to deceive the recipient, and paying will not change that. If it is a mistake, say so at ${challengeUrl}`,
-    });
+    authenticated,
+    budgetRefusal,
+  });
+  if (forwarded) {
+    const wire: GatewayVerdict = { action: "forward", to: inbox.destination, reason: forwarded.reason };
+    // `verdict` rides along for this route's own tests and for logs; the wire
+    // contract the worker actually depends on is only the fields on `wire`.
+    return Response.json({ ...wire, verdict });
   }
 
-  return Response.json({
-    ...common,
+  const challenge = await issueChallenge({
+    handle,
+    sender,
+    subject: facts.subject,
+    verdict,
+    wallet: inbox.wallet as Hex,
+    appUrl,
+  });
+
+  // Extra context for this route's own tests and for logs; not part of the
+  // wire contract the worker relies on (`GatewayVerdict`, built below).
+  const context = {
+    verdict,
+    price: challenge.price.toString(),
+    reasons: challenge.reasons,
+    challenge_url: challenge.challengeUrl,
+    quote: challenge.quote,
+  };
+
+  const { heldUntil } = challenge;
+  if (heldUntil === null) {
+    const wire: GatewayVerdict = {
+      action: "reject",
+      reason: verdict.tier,
+      bounce: `Not delivered: this looks like an attempt to deceive the recipient, and paying will not change that. If it is a mistake, say so at ${challenge.challengeUrl}`,
+    };
+    return Response.json({ ...wire, ...context });
+  }
+
+  const wire: GatewayVerdict = {
     action: "hold",
-    token,
+    reason: verdict.tier,
+    token: challenge.token,
     held_until: heldUntil,
     // Present only when we can write back without mailing a stranger whose name
     // was borrowed. Without it the worker refuses the message instead, and the
@@ -256,14 +197,14 @@ export async function POST(request: Request) {
       ? challengeMail({
           handle,
           subject: facts.subject,
-          tier: verdict.tier,
-          amount: priced.amount,
-          reasons: priced.reasons,
-          challengeUrl,
+          amount: challenge.price,
+          reasons: challenge.reasons,
+          challengeUrl: challenge.challengeUrl,
           appUrl,
           heldUntil,
         })
       : null,
-    bounce: `Held, not lost: say whether a person or a machine wrote this and we deliver the message you already sent - ${challengeUrl}`,
-  });
+    bounce: `Held, not lost: say whether a person or a machine wrote this and we deliver the message you already sent - ${challenge.challengeUrl}`,
+  };
+  return Response.json({ ...wire, ...context });
 }

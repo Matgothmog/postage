@@ -40,11 +40,13 @@ dataSources:
       apiVersion: 0.0.9
       language: wasm/assemblyscript
       file: ./src/enclave.ts
-      entities: [Enclave]
+      entities: [Enclave, ExpectedMeasurement]
       abis:
         - name: EnclaveRegistry
           file: ./abis/EnclaveRegistry.json
       eventHandlers:
+        - event: MeasurementSet(bytes32)
+          handler: handleMeasurementSet
         - event: EnclaveRegistered(indexed address,bytes32)
           handler: handleEnclaveRegistered
         - event: EnclaveRevoked(indexed address)

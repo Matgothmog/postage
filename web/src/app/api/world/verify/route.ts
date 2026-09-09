@@ -2,9 +2,10 @@ import { type Hex, createWalletClient, getAddress, http, keccak256, stringToByte
 import { privateKeyToAccount } from "viem/accounts";
 import { publicClient } from "@/lib/client";
 import { HUMAN_REGISTRY, chain, registryAbi } from "@/lib/contracts";
-import { challengeByToken } from "@/lib/db";
+import { challengeByToken } from "@/lib/db/challenges";
 import { openGate } from "@/lib/gate";
 import { identityMode, required } from "@/lib/env";
+import { now } from "@/lib/time";
 
 /// Matches the Selfie Check credential lifetime, so the free lane lapses when
 /// the credential does rather than outliving it.
@@ -64,7 +65,7 @@ export async function POST(request: Request) {
 
   const nullifierHash = toBytes32(nullifier);
   const identity = identityFor(nullifierHash);
-  const expiresAt = Math.floor(Date.now() / 1000) + CREDENTIAL_LIFETIME_SECONDS;
+  const expiresAt = now() + CREDENTIAL_LIFETIME_SECONDS;
 
   try {
     await recordPersonhood(identity, nullifierHash, expiresAt);

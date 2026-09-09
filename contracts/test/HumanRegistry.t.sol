@@ -127,4 +127,24 @@ contract HumanRegistryTest is Test {
     function test_unknownWalletIsNotHuman() public view {
         assertFalse(registry.isHuman(other));
     }
+
+    /// The extension check is `<=`, so re-submitting the exact same expiry is
+    /// refused rather than being a harmless no-op.
+    function test_reAttestingWithTheSameExpiryIsNotAnExtension() public {
+        uint40 expiresAt = _expiry();
+        bytes memory signature = _sign(attesterKey, wallet, NULLIFIER, expiresAt);
+        registry.attest(wallet, NULLIFIER, expiresAt, signature);
+
+        vm.expectRevert(abi.encodeWithSelector(HumanRegistry.NotAnExtension.selector, expiresAt));
+        registry.attest(wallet, NULLIFIER, expiresAt, signature);
+    }
+
+    function test_attestationEmitsTheWalletNullifierAndExpiry() public {
+        uint40 expiresAt = _expiry();
+
+        vm.expectEmit(true, true, true, true, address(registry));
+        emit HumanRegistry.HumanAttested(wallet, NULLIFIER, expiresAt);
+
+        registry.attest(wallet, NULLIFIER, expiresAt, _sign(attesterKey, wallet, NULLIFIER, expiresAt));
+    }
 }

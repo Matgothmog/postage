@@ -1,27 +1,12 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, beforeEach, test } from "node:test";
+import { startStubChain } from "../../../../../test/chain";
+import { startStubModel } from "../../../../../test/model";
 
-/// Every held message reads `effectiveFloor` off the chain. Answered here rather
-/// than by the public RPC in the chain definition, which is shared with everyone
-/// else using it and rate limits accordingly — these tests are about what the
-/// gateway decides, and a verdict should not depend on somebody else's traffic.
-const FLOOR = 10n ** 16n;
-const rpc = createServer((request, response) => {
-  let body = "";
-  request.on("data", (chunk) => (body += chunk));
-  request.on("end", () => {
-    const { id } = JSON.parse(body) as { id: number };
-    response.writeHead(200, { "Content-Type": "application/json" });
-    response.end(JSON.stringify({ jsonrpc: "2.0", id, result: `0x${FLOOR.toString(16).padStart(64, "0")}` }));
-  });
-});
-await new Promise<void>((ready) => rpc.listen(0, "127.0.0.1", ready));
-process.env.ARC_RPC_URL = `http://127.0.0.1:${(rpc.address() as AddressInfo).port}`;
+const chain = await startStubChain();
 
 const workspace = mkdtempSync(join(tmpdir(), "postage-inbound-"));
 process.env.DATABASE_URL = `file:${join(workspace, "test.db")}`;
@@ -31,13 +16,22 @@ process.env.APP_URL = "http://localhost";
 process.env.MESSAGE_ID_SECRET = "x".repeat(32);
 process.env.CLASSIFIER_PRIVATE_KEY = `0x${"11".repeat(32)}`;
 
-const { CLASSIFY_PER_HANDLE_HOURLY, CLASSIFY_PER_SENDER_HOURLY, createInbox, reset } =
-  await import("@/lib/db");
+/// The model refuses every request, so every verdict here comes from the header
+/// fallback — which is exactly the state an attacker was able to manufacture by
+/// draining the pool, and the state in which free delivery must not be available.
+///
+/// Refused by this process rather than by a variable nobody set: the SDK reads
+/// credentials off the machine as well as the environment, so on a developer's
+/// laptop these tests would classify against the live model, prove none of what
+/// their names claim, and still pass.
+const model = await startStubModel();
+
+const { CLASSIFY_PER_HANDLE_HOURLY, CLASSIFY_PER_SENDER_HOURLY } =
+  await import("@/lib/db/classifications");
+const { reset } = await import("@/lib/db/client");
+const { createInbox } = await import("@/lib/db/inboxes");
 const { POST } = await import("./route");
 
-/// No ANTHROPIC_API_KEY here, so every verdict comes from the header fallback —
-/// which is exactly the state an attacker was able to manufacture by draining
-/// the pool, and the state in which free delivery must not be available.
 async function deliverTo(from: string, subject: string, authenticated: boolean) {
   const auth = authenticated
     ? { spf: "pass", dkim: "pass", dmarc: "pass" }
@@ -49,7 +43,11 @@ async function deliverTo(from: string, subject: string, authenticated: boolean) 
       body: JSON.stringify({ from, to: "demo@usepostage.com", subject, body: "x", ...auth }),
     })
   );
-  return (await response.json()) as { action?: string; reason?: string };
+  return (await response.json()) as {
+    action?: string;
+    reason?: string;
+    verdict?: { degraded: boolean };
+  };
 }
 
 beforeEach(async () => {
@@ -57,9 +55,23 @@ beforeEach(async () => {
   await createInbox("demo", "demo@example.com", `0x${"11".repeat(20)}`);
 });
 
-after(() => {
-  rpc.close();
+after(async () => {
+  await chain.close();
+  await model.close();
   rmSync(workspace, { recursive: true, force: true });
+});
+
+/// The premise the three tests below are about, asserted rather than assumed. A
+/// stubbed model and a live one are indistinguishable in their results, so
+/// nothing else in this file would notice if the classifier started answering
+/// for real and the degraded state they exist to describe stopped happening.
+test("the model cannot be reached from here, so a verdict is the header fallback", async () => {
+  const asked = model.calls;
+
+  const result = await deliverTo("someone@nowhere.example", "hello", true);
+
+  assert.ok(model.calls > asked, "an authenticated first message must reach the classifier");
+  assert.equal(result.verdict?.degraded, true);
 });
 
 test("unauthenticated mail cannot drain the inbox's reading budget", async () => {

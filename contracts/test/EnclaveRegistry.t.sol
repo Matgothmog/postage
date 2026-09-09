@@ -50,6 +50,21 @@ contract EnclaveRegistryTest is Test {
         registry.setMeasurement(MEASUREMENT);
     }
 
+    /// Revoking turns the price oracle off for the whole protocol, so an
+    /// unguarded version would let anyone halt every payment.
+    function test_onlyOwnerRevokes() public {
+        vm.startPrank(owner);
+        registry.setMeasurement(MEASUREMENT);
+        registry.register(enclave);
+        vm.stopPrank();
+
+        vm.prank(anyone);
+        vm.expectRevert(EnclaveRegistry.NotOwner.selector);
+        registry.revoke(enclave);
+
+        assertTrue(registry.isRegistered(enclave), "the key survives a rejected revocation");
+    }
+
     function test_revokedKeyStopsBeingAccepted() public {
         vm.startPrank(owner);
         registry.setMeasurement(MEASUREMENT);
@@ -92,6 +107,39 @@ contract EnclaveRegistryTest is Test {
         registry.register(enclave);
         vm.expectRevert(EnclaveRegistry.AlreadyRegistered.selector);
         registry.register(enclave);
+        vm.stopPrank();
+    }
+
+    /// The subgraph is rebuilt entirely from these events, so their field
+    /// order and emitter are part of the contract's interface.
+    function test_settingTheMeasurementEmitsIt() public {
+        vm.expectEmit(true, true, true, true, address(registry));
+        emit EnclaveRegistry.MeasurementSet(MEASUREMENT);
+
+        vm.prank(owner);
+        registry.setMeasurement(MEASUREMENT);
+    }
+
+    function test_registrationEmitsTheSignerWithTheMeasurementItWasAllowedUnder() public {
+        vm.prank(owner);
+        registry.setMeasurement(MEASUREMENT);
+
+        vm.expectEmit(true, true, true, true, address(registry));
+        emit EnclaveRegistry.EnclaveRegistered(enclave, MEASUREMENT);
+
+        vm.prank(owner);
+        registry.register(enclave);
+    }
+
+    function test_revocationEmitsTheSigner() public {
+        vm.startPrank(owner);
+        registry.setMeasurement(MEASUREMENT);
+        registry.register(enclave);
+
+        vm.expectEmit(true, true, true, true, address(registry));
+        emit EnclaveRegistry.EnclaveRevoked(enclave);
+
+        registry.revoke(enclave);
         vm.stopPrank();
     }
 }

@@ -1,20 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { SiteFooter, SiteHeader, quietButton } from "@/components/chrome";
-import { challengeByToken } from "@/lib/db";
+import { challengeByToken } from "@/lib/db/challenges";
 import { formatUsdc } from "@/lib/format";
 import { postageAddress } from "@/lib/handle";
+import { parseStoredQuote } from "@/lib/quote-types";
 import { ChallengeActions } from "./ChallengeActions";
-
-interface StoredQuote {
-  messageId: string;
-  inbox: string;
-  tier: string;
-  amount: string;
-  expiresAt: number;
-  signature: string;
-  reasons: string[];
-}
 
 export default async function ChallengePage({ params, searchParams }: PageProps<"/c/[token]">) {
   const { token } = await params;
@@ -23,7 +14,6 @@ export default async function ChallengePage({ params, searchParams }: PageProps<
   const challenge = await challengeByToken(token);
   if (!challenge) notFound();
 
-  const quote = JSON.parse(challenge.quote_json) as StoredQuote;
   const dangerous = challenge.tier === "dangerous";
   const held = challenge.held_until !== null;
 
@@ -35,6 +25,22 @@ export default async function ChallengePage({ params, searchParams }: PageProps<
           Whatever you sent to{" "}
           <span className="font-mono text-ink">{postageAddress(challenge.handle)}</span> has been
           dealt with. A pass lasts fifteen minutes, so writing again later means answering again.
+        </p>
+        <Advert />
+      </Shell>
+    );
+  }
+
+  const quote = parseStoredQuote(challenge.quote_json);
+  if (!quote) {
+    return (
+      <Shell>
+        <h1 className="text-2xl font-semibold tracking-[-0.02em] text-ink">This link is broken</h1>
+        <p className="mt-3 text-[15px] leading-relaxed text-ink-soft">
+          We could not read what this challenge was for, so there is nothing safe to show you here.
+          Nothing has been decided either way — write to{" "}
+          <span className="font-mono text-ink">{postageAddress(challenge.handle)}</span> again and
+          you will get a fresh link.
         </p>
         <Advert />
       </Shell>

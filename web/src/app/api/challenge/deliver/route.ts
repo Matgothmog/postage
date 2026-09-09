@@ -1,14 +1,8 @@
 import { classify, extractUrls } from "@/lib/classify";
-import {
-  challengeByToken,
-  claimClassification,
-  extendPassIfExpiring,
-  hasLivePass,
-  inboxByHandle,
-  refundPass,
-  releaseClassificationSlot,
-  spendPass,
-} from "@/lib/db";
+import { challengeByToken } from "@/lib/db/challenges";
+import { claimClassification, releaseClassificationSlot } from "@/lib/db/classifications";
+import { inboxByHandle } from "@/lib/db/inboxes";
+import { extendPassIfExpiring, hasLivePass, refundPass, spendPass } from "@/lib/db/passes";
 import { postageAddress } from "@/lib/handle";
 import { relayHeldMessage } from "@/lib/mail";
 
@@ -77,7 +71,8 @@ export async function POST(request: Request) {
   // Counted against its own pool, not the inbox's. Sharing it let a handful of
   // senders with live passes spend a recipient's whole hourly allowance on
   // refused pastes, after which that inbox stopped being read at all.
-  if (await claimClassification(`paste:${challenge.handle}`, challenge.sender)) {
+  const budgetRefusal = await claimClassification(`paste:${challenge.handle}`, challenge.sender);
+  if (budgetRefusal) {
     return Response.json(
       { error: "Too much has been sent this hour. Try again later" },
       { status: 429 }

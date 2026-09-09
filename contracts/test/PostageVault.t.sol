@@ -100,11 +100,107 @@ contract PostageVaultTest is Test {
         new PostageVault(treasury, address(0));
     }
 
-    function testFuzz_accountingAlwaysMatchesBalance(uint96 amount) public {
-        vm.assume(amount > 0);
-        vm.deal(address(this), amount);
-        _fund(amount);
+    function test_withdrawingToTheZeroAddressIsRejected() public {
+        _fund(FUNDING);
+        uint256 balance = vault.treasuryBalance();
 
-        assertEq(vault.treasuryBalance() + vault.sponsorshipPool(), address(vault).balance);
+        vm.prank(treasury);
+        vm.expectRevert(PostageVault.ZeroAddress.selector);
+        vault.withdrawTreasury(address(0), balance);
+
+        assertEq(vault.treasuryBalance(), balance, "a rejected withdrawal leaves the ledger alone");
+    }
+
+    function test_withdrawRevertsWhenTheRecipientRejectsEther() public {
+        address recipient = address(new RejectsEther());
+        _fund(FUNDING);
+        uint256 balance = vault.treasuryBalance();
+
+        vm.prank(treasury);
+        vm.expectRevert(PostageVault.TransferFailed.selector);
+        vault.withdrawTreasury(recipient, balance);
+    }
+
+    /// The relayer is fixed at construction, so a relayer that cannot take the
+    /// funds strands the pool rather than losing it.
+    function test_refillRevertsWhenTheRelayerRejectsEther() public {
+        PostageVault strandedVault = new PostageVault(treasury, address(new RejectsEther()));
+        (bool ok,) = address(strandedVault).call{value: FUNDING}("");
+        assertTrue(ok);
+
+        uint256 pool = strandedVault.sponsorshipPool();
+
+        vm.expectRevert(PostageVault.TransferFailed.selector);
+        strandedVault.refillRelayer(pool);
+    }
+
+    /// A keeper refilling on a timer will hit an empty pool, which is a no-op
+    /// rather than an error.
+    function test_refillingNothingMovesNothingAndStillEmits() public {
+        _fund(FUNDING);
+        uint256 pool = vault.sponsorshipPool();
+
+        vm.expectEmit(true, true, true, true, address(vault));
+        emit PostageVault.RelayerRefilled(0);
+
+        vault.refillRelayer(0);
+
+        assertEq(vault.sponsorshipPool(), pool);
+        assertEq(relayer.balance, 0);
+    }
+
+    function test_incomingFundsEmitTheSplitTheyWereRecordedUnder() public {
+        uint256 toTreasury = (FUNDING * vault.TREASURY_BPS()) / 10_000;
+
+        vm.expectEmit(true, true, true, true, address(vault));
+        emit PostageVault.Funded(FUNDING, toTreasury, FUNDING - toTreasury);
+
+        _fund(FUNDING);
+    }
+
+    function test_refillEmitsTheAmountSentToTheRelayer() public {
+        _fund(FUNDING);
+        uint256 pool = vault.sponsorshipPool();
+
+        vm.expectEmit(true, true, true, true, address(vault));
+        emit PostageVault.RelayerRefilled(pool);
+
+        vault.refillRelayer(pool);
+    }
+
+    function test_treasuryWithdrawalEmitsTheDestinationAndAmount() public {
+        _fund(FUNDING);
+        uint256 balance = vault.treasuryBalance();
+
+        vm.expectEmit(true, true, true, true, address(vault));
+        emit PostageVault.TreasuryWithdrawn(anyone, balance);
+
+        vm.prank(treasury);
+        vault.withdrawTreasury(anyone, balance);
+    }
+
+    /// A single deposit cannot catch an accumulation bug, which is the way this
+    /// would actually break, so the invariant is checked after each of several
+    /// deposits with both ledgers partly drained in between.
+    function testFuzz_accountingAlwaysMatchesBalance(
+        uint96[4] memory deposits,
+        uint96[4] memory drains
+    ) public {
+        for (uint256 i = 0; i < deposits.length; i++) {
+            vm.deal(address(this), deposits[i]);
+            _fund(deposits[i]);
+
+            vault.refillRelayer(drains[i] % (vault.sponsorshipPool() + 1));
+
+            uint256 fromTreasury = drains[i] % (vault.treasuryBalance() + 1);
+            vm.prank(treasury);
+            vault.withdrawTreasury(treasury, fromTreasury);
+
+            assertEq(vault.treasuryBalance() + vault.sponsorshipPool(), address(vault).balance);
+        }
     }
 }
+
+/// A contract with neither `receive` nor a payable fallback, so every payment to
+/// it fails and the caller's TransferFailed branch is reached.
+contract RejectsEther {}

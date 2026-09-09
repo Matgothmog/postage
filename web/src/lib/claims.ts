@@ -4,10 +4,10 @@ import {
   claimByHandle,
   cloudflareChecksExhausted,
   clearClaim,
-  createInbox,
   markCloudflareVerified,
   takeCloudflareCheck,
-} from "./db";
+} from "./db/claims";
+import { createInbox } from "./db/inboxes";
 
 export interface ClaimState {
   claim: InboxClaim;

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, beforeEach, test } from "node:test";
 import { createClient } from "@libsql/client";
+import { now } from "./time";
 
 const workspace = mkdtempSync(join(tmpdir(), "postage-claims-"));
 process.env.DATABASE_URL = `file:${join(workspace, "test.db")}`;
@@ -21,10 +22,9 @@ const {
   purgeOldClaimSends,
   startClaim,
   takeCloudflareCheck,
-} = await import("./db");
+} = await import("./db/claims");
 
 const WALLET = `0x${"11".repeat(20)}`;
-const now = () => Math.floor(Date.now() / 1000);
 
 async function claim(handle: string, destination = "someone@example.com", wallet = WALLET) {
   await startClaim({
@@ -39,7 +39,7 @@ async function claim(handle: string, destination = "someone@example.com", wallet
 }
 
 beforeEach(async () => {
-  const { reset } = await import("./db");
+  const { reset } = await import("./db/client");
   await reset();
 });
 

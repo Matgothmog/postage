@@ -1,5 +1,6 @@
 import { formatUsdc } from "./format";
 import { postageAddress } from "./handle";
+import { now } from "./time";
 
 export interface ChallengeMail {
   subject: string;
@@ -12,7 +13,6 @@ export interface ChallengeMailFacts {
   /// What they wrote in the subject line, quoted back so they can tell which
   /// message this is about without opening anything.
   subject: string;
-  tier: string;
   amount: bigint;
   reasons: string[];
   challengeUrl: string;
@@ -20,23 +20,70 @@ export interface ChallengeMailFacts {
   heldUntil: number;
 }
 
+/// Everything a body says that is not the sender's own words: derived once,
+/// here, so both halves of the mail quote the same subject and name the same
+/// price rather than each working it out again.
+interface Rendered {
+  inbox: string;
+  subject: string;
+  price: string;
+  deadline: string;
+}
+
+/// How much of a subject is quoted back. Nothing between the sender and this
+/// template bounds it - the worker hands over whatever the header decoded to,
+/// and it crosses as JSON, which has no length of its own - and the plain-text
+/// half is the whole message for a client that renders no markup, so a subject
+/// allowed to run on is a notice whose own words nobody scrolls to. Long
+/// enough for any subject written on purpose.
+const SUBJECT_LIMIT = 200;
+
+/// Everything that could end the line a subject is quoted on, or reorder what
+/// is printed after it: ordinary whitespace, the C0 and C1 controls, Unicode's
+/// own line and paragraph separators, and the format characters - the
+/// bidirectional overrides among them - that render as nothing at all.
+const UNPRINTABLE = /[\s\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+/gu;
+
+/// The sender's subject, reduced to something that fits inside a line of ours.
+///
+/// The HTML half escapes, so markup is already closed there. The plain-text
+/// half has no escaping to fall back on - a plain-text body is exactly its own
+/// bytes - so the only defence left is that the value cannot leave the line it
+/// was given. That defence is needed rather than theoretical: PostalMime
+/// decodes RFC 2047 encoded-words, and an encoded-word decodes to whatever its
+/// bytes say, newlines included, where an ordinary folded header would have
+/// been unfolded to a space. Without this a sender writes their own lines into
+/// a notice sent under our name - a second "A PERSON WROTE IT - free", free
+/// and pointing wherever they like, sitting above the real one.
+function oneLine(subject: string): string {
+  const flattened = subject.replace(UNPRINTABLE, " ").trim();
+  if (flattened.length <= SUBJECT_LIMIT) return flattened;
+  return `${flattened.slice(0, SUBJECT_LIMIT)}...`;
+}
+
 /// The one message a held sender receives. It asks a single question - person or
 /// machine - and each answer is a link. Nothing here asks them to write their
 /// message again, because we still have it.
 export function challengeMail(facts: ChallengeMailFacts): ChallengeMail {
-  const inbox = postageAddress(facts.handle);
-  const price = formatUsdc(facts.amount);
-  const deadline = holdWindow(facts.heldUntil);
+  const rendered: Rendered = {
+    inbox: postageAddress(facts.handle),
+    subject: oneLine(facts.subject) || "(no subject)",
+    price: formatUsdc(facts.amount),
+    deadline: holdWindow(facts.heldUntil),
+  };
 
   return {
-    subject: `Held for ${inbox}: did a person write this?`,
-    html: html(facts, inbox, price, deadline),
-    text: text(facts, inbox, price, deadline),
+    subject: `Held for ${rendered.inbox}: did a person write this?`,
+    html: html(facts, rendered),
+    text: text(facts, rendered),
   };
 }
 
+/// `heldUntil` comes off the `held_until` column, which is seconds like every
+/// other timestamp column — the same domain `now()` exists to hand back
+/// without a units bug, even though this function never itself writes a row.
 function holdWindow(heldUntil: number): string {
-  const hours = Math.max(1, Math.round((heldUntil - Date.now() / 1000) / 3600));
+  const hours = Math.max(1, Math.round((heldUntil - now()) / 3600));
   return hours === 1 ? "an hour" : `${hours} hours`;
 }
 
@@ -52,11 +99,11 @@ function escape(value: string): string {
   return value.replace(/[&<>"']/g, (character) => escapes[character]);
 }
 
-function text(facts: ChallengeMailFacts, inbox: string, price: string, deadline: string): string {
+function text(facts: ChallengeMailFacts, { inbox, subject, price, deadline }: Rendered): string {
   return [
     `Your message to ${inbox} is being held.`,
     "",
-    `Subject: ${facts.subject || "(no subject)"}`,
+    `Subject: ${subject}`,
     "",
     "It has not been delivered and it has not been thrown away. Answer one",
     "question and we deliver the message you already sent, exactly as you wrote",
@@ -83,7 +130,7 @@ function text(facts: ChallengeMailFacts, inbox: string, price: string, deadline:
 /// Tables and inline styles, because this is read in mail clients rather than
 /// browsers. No images: the stamp is drawn with borders, so it survives a client
 /// that blocks remote content.
-function html(facts: ChallengeMailFacts, inbox: string, price: string, deadline: string): string {
+function html(facts: ChallengeMailFacts, { inbox, subject, price, deadline }: Rendered): string {
   const reasons = facts.reasons
     .map(
       (reason) =>
@@ -125,7 +172,7 @@ function html(facts: ChallengeMailFacts, inbox: string, price: string, deadline:
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:22px 0 26px 0;">
       <tr><td style="border-left:3px solid #e6e1d7;padding:2px 0 2px 14px;font:400 14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#9c968d;">
         Subject<br>
-        <span style="color:#17161b;font-size:15px;">${escape(facts.subject || "(no subject)")}</span>
+        <span style="color:#17161b;font-size:15px;">${escape(subject)}</span>
       </td></tr>
     </table>
 

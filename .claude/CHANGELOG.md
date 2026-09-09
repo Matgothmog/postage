@@ -1,3 +1,18 @@
+## 2026-09-09 — refactor/polish
+
+Tests went from 30 to 255 in web, 0 to 51 in worker — which had no test runner, no
+typecheck and no `typescript` dependency at all — and 40 to 68 in contracts.
+Fixed seven defects found on the way: `authResults` dropped a genuine `dmarc=pass`
+whenever `policy.dmarc=` appeared beside it; a failed KV delete could leave a release
+token able to release the same message twice; `provesWallet` let an RPC decide who
+holds a wallet; `readIdentity` accepted tokens with junk past the signature; the
+network page showed the inbox's net share as what the sender paid; a stored quote that
+would not parse took the challenge page down instead of showing it; and an RFC 2047
+subject could inject lines into the plain-text challenge email.
+Split `lib/db.ts` into nine modules, `ClaimInbox` and the network page into components,
+and the inbound POST into stages. Contracts changed by comments only — they are live,
+and three of the four hold state a redeploy would orphan.
+
 ## 2026-09-08 — refactor/sweep
 
 Review pass over the whole repo. The four tiers and the mail domain each had

@@ -1,4 +1,5 @@
 import PostalMime from "postal-mime";
+import type { GatewayNotice, GatewayVerdict } from "../../shared/gateway-verdict.ts";
 
 interface Env {
   POSTAGE_API_URL: string;
@@ -18,31 +19,21 @@ interface Env {
   MAILGUN_API_KEY: string;
 }
 
-interface Notice {
-  subject: string;
-  html: string;
-  text: string;
-}
-
-interface Verdict {
-  action: "forward" | "hold" | "reject";
-  /// Verified destination, on `forward` only.
-  to?: string;
-  reason?: string;
-  /// Key the message is held under, on `hold` only.
-  token?: string;
-  held_until?: number;
-  /// Absent when answering the sender would mean mailing someone whose name was
-  /// forged, in which case the SMTP refusal carries the link instead.
-  notice?: Notice | null;
-  /// What to say inside the SMTP session if we do not write back.
-  bounce?: string;
-}
-
 /// Only reached if the gateway sends a hold with no deadline on it. Not the
 /// source of truth for how long a message is kept - that is the gateway's - just
 /// a floor under it, so nothing can be stored indefinitely by omission.
 const FALLBACK_HOLD_SECONDS = 24 * 60 * 60;
+
+/// Said whenever the fault is ours rather than the sender's, and deliberately
+/// said the same way every time: it is a temporary refusal, and the sending
+/// MTA's own retry is what recovers the message afterwards.
+const RETRY_LATER = "Postage is temporarily unavailable, please retry";
+
+/// How many times a released hold is asked to go away before we stop asking.
+/// The message is already sent by then, so the extra attempt costs nothing but
+/// a little latency on a path that is failing anyway, and buys back the common
+/// case: a KV write that stumbles once and lands on the next try.
+const RETIRE_ATTEMPTS = 2;
 
 /// What the receiving MTA concluded about the sender, read out of
 /// `Authentication-Results`.
@@ -68,9 +59,23 @@ const FALLBACK_HOLD_SECONDS = 24 * 60 * 60;
 /// or is describing a different hop; where it disagrees about DKIM — a message
 /// with two signatures, one of which does not verify — the method reads unknown
 /// rather than pass, which no path treats as a failure.
-function authResults(header: string | null): { spf: string | null; dkim: string | null; dmarc: string | null } {
+///
+/// A method name has to start a token, which is more than a word boundary asks
+/// for. `policy.dmarc=none` states the domain's published policy and
+/// `x-dkim=fail` is a vendor's own method: both are ordinary RFC 8601 syntax,
+/// and both put a word boundary immediately in front of a method name. Read
+/// that way they are second copies that disagree, so a DMARC-passing message
+/// that also carries its policy comes away unknown — honest mail downgraded to
+/// unauthenticated by its own authentication header. Only a word character, a
+/// dot or a hyphen can put a name inside a larger token, so those are what the
+/// lookbehind rules out.
+///
+/// This is still a scan rather than a parse — text inside a quoted `reason=`
+/// is read like anything else. Reading too much can only add a value to the
+/// set, which either agrees or loses the method, so it errs toward unknown.
+export function authResults(header: string | null): { spf: string | null; dkim: string | null; dmarc: string | null } {
   const read = (method: string) => {
-    const found = header?.matchAll(new RegExp(`\\b${method}=(\\w+)`, "gi")) ?? [];
+    const found = header?.matchAll(new RegExp(`(?<![\\w.-])${method}=(\\w+)`, "gi")) ?? [];
     const claimed = new Set([...found].map((match) => match[1].toLowerCase()));
     return claimed.size === 1 ? [...claimed][0] : null;
   };
@@ -85,7 +90,7 @@ export default {
     const parsed = await PostalMime.parse(raw);
     const auth = authResults(message.headers.get("authentication-results"));
 
-    let verdict: Verdict;
+    let verdict: GatewayVerdict;
     try {
       verdict = await ask(env, {
         from: message.from,
@@ -98,17 +103,22 @@ export default {
       // Without this the sender retries into a wall nobody can explain.
       console.error("classify failed", {
         gateway: safeHost(env.POSTAGE_API_URL),
-        cause: cause instanceof Error ? cause.message : String(cause),
+        cause: causeMessage(cause),
       });
       // Refused rather than forwarded unfiltered, so the sending MTA holds the
       // message and retries rather than the recipient losing the gate.
-      message.setReject("Postage is temporarily unavailable, please retry");
+      message.setReject(RETRY_LATER);
       return;
     }
 
     // Untouched, so the sender's DKIM signature still covers what arrives and
     // their address still displays as the one that wrote it.
-    if (verdict.action === "forward" && verdict.to) {
+    if (verdict.action === "forward") {
+      if (!verdict.to) {
+        rejectIncoherentVerdict(message, "forward without a destination");
+        return;
+      }
+
       try {
         await message.forward(verdict.to);
       } catch {
@@ -119,9 +129,26 @@ export default {
       return;
     }
 
-    if (verdict.action === "hold" && verdict.token) {
+    if (verdict.action === "hold") {
+      if (!verdict.token) {
+        rejectIncoherentVerdict(message, "hold without a token");
+        return;
+      }
+
       const heldUntil = verdict.held_until ?? Math.floor(Date.now() / 1000) + FALLBACK_HOLD_SECONDS;
-      await env.HELD.put(verdict.token, raw, { expiration: heldUntil });
+      try {
+        await env.HELD.put(verdict.token, raw, { expiration: heldUntil });
+      } catch (cause) {
+        // KV holds the only copy of the message. A put that did not land leaves
+        // the release link pointing at nothing, so telling the sender it is
+        // being kept would be a lie about mail we no longer have. Refusing
+        // instead leaves the bytes at the sending MTA, which is then the only
+        // place they still exist. Not logged: the token is the capability that
+        // releases the message.
+        console.error("hold failed", { cause: causeMessage(cause) });
+        message.setReject(RETRY_LATER);
+        return;
+      }
 
       if (verdict.notice && (await replied(message, verdict.notice))) return;
 
@@ -157,18 +184,35 @@ export default {
     const { token, to } = body;
     if (!token || !to) return new Response("token and to are required", { status: 400 });
 
-    const held = await env.HELD.get(token, "arrayBuffer");
+    let held: ArrayBuffer | null;
+    try {
+      held = await env.HELD.get(token, "arrayBuffer");
+    } catch (cause) {
+      // Nothing has been sent and the hold is untouched, so asking again costs
+      // the caller nothing - which makes this the same temporary fault of ours
+      // that the inbound side refuses a session over, said the same way.
+      // Answered rather than thrown: an escaping rejection is an unhandled
+      // worker exception, where every other failure here is a response. Not
+      // logged: the token is the capability that releases the message.
+      console.error("release lookup failed", { cause: causeMessage(cause) });
+      return new Response(RETRY_LATER, { status: 503 });
+    }
     if (!held) return new Response("Nothing is held under that token", { status: 404 });
 
     try {
       await deliverUntouched(env, held, to);
     } catch (cause) {
       // Kept, so the sender can be told it did not go and try again rather than
-      // losing a message they were promised was safe.
-      return new Response(cause instanceof Error ? cause.message : "Could not send it", { status: 502 });
+      // losing a message they were promised was safe. Logged, not returned:
+      // Mailgun's own wording, or a raw network error, is not something the
+      // caller needs or should read about our infrastructure - every other
+      // failure in this handler answers with fixed wording, and this one
+      // should too.
+      console.error("release delivery failed", { cause: causeMessage(cause) });
+      return new Response("Could not send it", { status: 502 });
     }
 
-    await env.HELD.delete(token);
+    await retireHold(env, token);
     return Response.json({ sent: true });
   },
 };
@@ -202,11 +246,65 @@ async function deliverUntouched(env: Env, raw: ArrayBuffer, to: string): Promise
   }
 }
 
+/// Spends the token, once the message it releases has already gone out.
+///
+/// The order is forced, and it is the whole design. KV holds the only copy, so
+/// the bytes cannot be dropped before Mailgun has taken them - which makes a
+/// release at-least-once, because the send is irreversible by the time the key
+/// is removed. The alternative, retiring the token first, is at-most-once: a
+/// Mailgun outage, much the commoner failure, would then destroy a message the
+/// recipient explicitly asked for, with no copy left anywhere to retry from. A
+/// message arriving twice is a nuisance; a message that no longer exists cannot
+/// be recovered by anyone. It is also the call the delivery-failure path above
+/// already makes, deliberately, in leaving the token spendable.
+///
+/// So a delete that fails must not become an error. The mail is out, an error
+/// is an invitation to retry a request that worked, and the retry would send it
+/// a second time. Answering `sent: true` is both the truth and the guard: the
+/// caller records the delivery and never presents the token again, which is
+/// exactly what the old unguarded reject took away by leaving it with no answer
+/// at all - the caller then reported a failed send for mail that had arrived,
+/// and the sender was invited to send it once more by hand.
+///
+/// Retried because what is left behind is a live capability and a KV write that
+/// fails once usually does not fail twice. If every attempt fails the key
+/// survives its own release, and nothing in a stateless handler can prevent
+/// that: the only durable record of "spent" is the write that will not land.
+/// It expires on the deadline set when the message was held, so it does not
+/// accumulate.
+async function retireHold(env: Env, token: string): Promise<void> {
+  let lastCause: unknown;
+  for (let attempt = 0; attempt < RETIRE_ATTEMPTS; attempt += 1) {
+    try {
+      await env.HELD.delete(token);
+      return;
+    } catch (cause) {
+      lastCause = cause;
+    }
+  }
+  // Not logged: the token is the capability that releases the message.
+  console.error("hold not retired after release", {
+    attempts: RETIRE_ATTEMPTS,
+    cause: causeMessage(lastCause),
+  });
+}
+
+/// A verdict that asks for something and omits the one field that carries it
+/// out: a forward naming nowhere, a hold with nothing to key it under. Nothing
+/// here can complete it, and the generic refusal at the end of the handler
+/// would file our own bug as an ordinary "not delivered" and lose a message the
+/// gateway meant to keep. Refused as temporary instead, so the message waits at
+/// the sending MTA while the log names what was wrong with the answer.
+function rejectIncoherentVerdict(message: ForwardableEmailMessage, verdict: string): void {
+  console.error("incoherent verdict", { verdict });
+  message.setReject(RETRY_LATER);
+}
+
 /// True if the sender was told. A refusal here is not a failure worth losing the
 /// message over - Cloudflare will not let us reply to an unauthenticated sender,
 /// which is exactly the case where replying would mail the wrong person - so the
 /// caller falls back to refusing inside the session.
-async function replied(message: ForwardableEmailMessage, notice: Notice): Promise<boolean> {
+async function replied(message: ForwardableEmailMessage, notice: GatewayNotice): Promise<boolean> {
   try {
     await message.reply({
       from: { name: "Postage", email: message.to },
@@ -231,7 +329,7 @@ async function ask(
     dkim: string | null;
     dmarc: string | null;
   }
-): Promise<Verdict> {
+): Promise<GatewayVerdict> {
   const response = await fetch(`${env.POSTAGE_API_URL}/api/mail/inbound`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-postage-secret": env.POSTAGE_SECRET },
@@ -243,7 +341,14 @@ async function ask(
   if (!response.ok) {
     throw new Error(`Gateway returned ${response.status}: ${(await response.text()).slice(0, 300)}`);
   }
-  return (await response.json()) as Verdict;
+  return (await response.json()) as GatewayVerdict;
+}
+
+/// What to write down about a thrown value. A worker can be handed anything - a
+/// fetch rejection, a KV error, a string some library threw - so this is stated
+/// once and every failure in this file is logged the same shape.
+function causeMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
 }
 
 /// The host on its own. Enough to tell a misconfigured gateway from an

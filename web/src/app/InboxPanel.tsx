@@ -7,6 +7,7 @@ import { encodeFunctionData, formatUnits } from "viem";
 import { StampCard, field, primaryButton, secondaryButton } from "@/components/chrome";
 import { publicClient } from "@/lib/client";
 import { POSTAGE_ESCROW, USDC_DECIMALS, escrowAbi } from "@/lib/contracts";
+import { causeMessage } from "@/lib/errors";
 import { formatUsdc, parseUsdc, shortAddress } from "@/lib/format";
 import { postageAddress } from "@/lib/handle";
 
@@ -57,7 +58,7 @@ export function InboxPanel({ inbox, wallet }: { inbox: Inbox; wallet: string }) 
         const next = await readStanding(wallet as `0x${string}`);
         if (live) apply(next);
       } catch (cause) {
-        if (live) setError(String(cause));
+        if (live) setError(causeMessage(cause));
       }
     })();
     return () => {
@@ -76,7 +77,7 @@ export function InboxPanel({ inbox, wallet }: { inbox: Inbox; wallet: string }) 
       await sendTransaction({ to: POSTAGE_ESCROW, data });
       apply(await readStanding(wallet as `0x${string}`));
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(causeMessage(cause));
     } finally {
       setBusy(null);
     }

@@ -1,4 +1,5 @@
-import { claimHold, inboxByHandle, markDelivered } from "./db";
+import { claimHold, markDelivered } from "./db/challenges";
+import { inboxByHandle } from "./db/inboxes";
 import { required } from "./env";
 
 export type Release =
