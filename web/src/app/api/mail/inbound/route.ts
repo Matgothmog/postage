@@ -36,7 +36,12 @@ interface InboundPayload {
 /// instead and nothing leaves the building.
 function senderIsAuthenticated(payload: Partial<InboundPayload>): boolean {
   if (payload.dmarc === "pass") return true;
-  return payload.spf === "pass" && payload.dkim !== "fail";
+  // Not "dkim !== 'fail'": the worker collapses a disagreement between copies
+  // of Authentication-Results to null, so a sender able to add their own
+  // dkim=pass could turn a real dkim=fail into the same null a message that
+  // was never signed at all already carries - and null must not read as
+  // clean. Only an actual verified signature counts.
+  return payload.spf === "pass" && payload.dkim === "pass";
 }
 
 /// The message as the classifier is given it: the envelope, whatever the

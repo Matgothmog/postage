@@ -45,11 +45,20 @@ test("a sender who spent their own slice cannot be delivered free on a degraded 
   assert.equal(deliveredFree(verdictOf("important", true), true, "spent-by-sender"), false);
 });
 
-/// The other half of it. A handle's pool is spent by whoever writes to that
-/// inbox, forged addresses included, so treating it as the recipient's fault
-/// would hand a stranger an hour of leverage over their mail.
-test("a pool drained by other people does not shut the free tier", () => {
-  assert.equal(deliveredFree(verdictOf("important", true), true, "spent-by-handle"), true);
+/// The same rule at the next ceiling out. A domain is bought once and its local
+/// parts are free after that, so a spent domain must buy no more than a spent
+/// address does.
+test("a domain that spent its share cannot be delivered free on a degraded verdict", () => {
+  assert.equal(deliveredFree(verdictOf("important", true), true, "spent-by-domain"), false);
+});
+
+/// The consequential one. This used to return true, on the reasoning that a
+/// handle's pool is somebody else's doing - but somebody else can be the sender
+/// standing here, and emptying it took nothing but authenticated mail from a few
+/// domains. That made free delivery, for every sender for the rest of the hour,
+/// something an attacker could simply arrange.
+test("a drained handle pool does not open the free tier to the next sender", () => {
+  assert.equal(deliveredFree(verdictOf("important", true), true, "spent-by-handle"), false);
 });
 
 test("unauthenticated mail is never delivered free on a degraded verdict", () => {
@@ -172,6 +181,24 @@ test("a pool drained by other people does not re-challenge a sender who proved t
     verdict: verdictOf("commercial"),
     authenticated: true,
     budgetRefusal: "spent-by-handle",
+  });
+
+  assert.deepEqual(forwarded, { reason: "human" });
+});
+
+/// A domain rations a shared cost; it does not name a culprit. `gmail.com` is
+/// millions of unrelated people, so treating a spent domain the way a spent
+/// address is treated would take an unlimited window away from someone for what
+/// a stranger sharing their mail provider did.
+test("a domain drained by others does not re-challenge a sender who proved themselves", async () => {
+  await grantPass(HANDLE, SENDER, "human", null);
+
+  const forwarded = await forwardWithoutChallenge({
+    handle: HANDLE,
+    sender: SENDER,
+    verdict: verdictOf("commercial"),
+    authenticated: true,
+    budgetRefusal: "spent-by-domain",
   });
 
   assert.deepEqual(forwarded, { reason: "human" });
