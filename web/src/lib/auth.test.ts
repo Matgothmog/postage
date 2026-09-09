@@ -13,7 +13,9 @@ const holder = privateKeyToAccount(`0x${"11".repeat(32)}`);
 const impostor = privateKeyToAccount(`0x${"22".repeat(32)}`);
 
 const WALLET = holder.address;
-const FRESHNESS_SECONDS = 5 * 60;
+/// Mirrors `auth.ts`'s `CLOCK_SKEW_TOLERANCE_SECONDS` — the tolerance applied
+/// on each side of "now", not the width of the window itself.
+const CLOCK_SKEW_TOLERANCE_SECONDS = 5 * 60;
 
 const statement = (issuedAt: number): string => readStatement(WALLET, issuedAt);
 
@@ -59,13 +61,13 @@ test("a statement signed this second proves the wallet", async () => {
 });
 
 test("a statement signed exactly five minutes ago still proves the wallet", async () => {
-  const issuedAt = now() - FRESHNESS_SECONDS;
+  const issuedAt = now() - CLOCK_SKEW_TOLERANCE_SECONDS;
 
   assert.equal(await provesWallet(WALLET, issuedAt, await sign(issuedAt), statement), true);
 });
 
 test("a statement signed five minutes and one second ago proves nothing", async () => {
-  const issuedAt = now() - FRESHNESS_SECONDS - 1;
+  const issuedAt = now() - CLOCK_SKEW_TOLERANCE_SECONDS - 1;
 
   assert.equal(await provesWallet(WALLET, issuedAt, await sign(issuedAt), statement), false);
 });
@@ -73,13 +75,13 @@ test("a statement signed five minutes and one second ago proves nothing", async 
 /// The window opens forwards as well as back, because the timestamp is the
 /// signer's and their clock is not ours.
 test("a statement dated exactly five minutes ahead is allowed for a clock that runs fast", async () => {
-  const issuedAt = now() + FRESHNESS_SECONDS;
+  const issuedAt = now() + CLOCK_SKEW_TOLERANCE_SECONDS;
 
   assert.equal(await provesWallet(WALLET, issuedAt, await sign(issuedAt), statement), true);
 });
 
 test("a statement dated five minutes and one second ahead proves nothing", async () => {
-  const issuedAt = now() + FRESHNESS_SECONDS + 1;
+  const issuedAt = now() + CLOCK_SKEW_TOLERANCE_SECONDS + 1;
 
   assert.equal(await provesWallet(WALLET, issuedAt, await sign(issuedAt), statement), false);
 });
@@ -91,7 +93,7 @@ test("a statement dated five minutes and one second ahead proves nothing", async
 test("a timestamp of NaN is stale rather than timeless", async () => {
   const age = now() - Number.NaN;
   assert.ok(
-    !(age < -FRESHNESS_SECONDS) && !(age > FRESHNESS_SECONDS),
+    !(age < -CLOCK_SKEW_TOLERANCE_SECONDS) && !(age > CLOCK_SKEW_TOLERANCE_SECONDS),
     "precondition: NaN sits outside neither edge, so only the finite check can refuse it"
   );
 
@@ -157,7 +159,7 @@ test("a malformed signature proves nothing rather than escaping", async () => {
 test("a signature over one timestamp proves nothing about another", async () => {
   const signedAt = now() - 120;
   const replayedAt = now() - 60;
-  assert.ok(Math.abs(now() - signedAt) < FRESHNESS_SECONDS, "precondition: both are fresh");
+  assert.ok(Math.abs(now() - signedAt) < CLOCK_SKEW_TOLERANCE_SECONDS, "precondition: both are fresh");
 
   const collected = await sign(signedAt);
 
@@ -179,7 +181,7 @@ test("a wallet named in lowercase proves the same wallet", async () => {
 /// Nothing downstream should have to pay for a stale request, and nothing
 /// upstream gets a say in a fresh one.
 test("no request is ever put to the chain, stale or good", async () => {
-  await provesWallet(WALLET, now() - FRESHNESS_SECONDS - 1, await sign(now()), statement);
+  await provesWallet(WALLET, now() - CLOCK_SKEW_TOLERANCE_SECONDS - 1, await sign(now()), statement);
   await provesWallet(WALLET, now(), await sign(now()), statement);
 
   assert.equal(asked.length, 0);

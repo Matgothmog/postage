@@ -5,9 +5,14 @@ import { readProof } from "./wallet-proof";
 
 export { claimStatement, confirmStatement, readStatement } from "./wallet-proof";
 
-/// How long a signed statement stays good for. Long enough to cover a slow
-/// signature prompt, short enough that one lifted from a log is worthless.
-const FRESHNESS_SECONDS = 5 * 60;
+/// How far a signed statement's timestamp may lag or lead the server's clock
+/// and still be trusted. The forward half exists because the timestamp comes
+/// from the signer's device, whose clock may run fast, not the server's; both
+/// halves apply, so the actual window is ten minutes wide — this value in
+/// each direction, not five minutes total. Long enough on the trailing edge
+/// to cover a slow signature prompt, short enough that one lifted from a log
+/// is worthless.
+const CLOCK_SKEW_TOLERANCE_SECONDS = 5 * 60;
 
 /// Proves the caller holds the wallet they claim, rather than merely knowing
 /// its address. Wallet addresses are public — they are indexed, and every
@@ -22,7 +27,12 @@ export async function provesWallet(
   if (!wallet || !isAddress(wallet) || !signature) return false;
 
   const age = now() - issuedAt;
-  if (!Number.isFinite(issuedAt) || age < -FRESHNESS_SECONDS || age > FRESHNESS_SECONDS) return false;
+  if (
+    !Number.isFinite(issuedAt) ||
+    age < -CLOCK_SKEW_TOLERANCE_SECONDS ||
+    age > CLOCK_SKEW_TOLERANCE_SECONDS
+  )
+    return false;
 
   try {
     // viem's standalone `verifyMessage` recovers the signer here and compares
