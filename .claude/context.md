@@ -153,9 +153,6 @@ where `security-review` actually fails).
 - **`node --test` globs a path with `[token]` in it as a character class** —
   `node --test 'src/app/c/[token]/ChallengeActions.test.ts'` silently runs
   **zero** tests. Run the whole suite instead.
-- **`KNOWN_ISSUES.md:17-46` is stale, still marked "Verified."** Claims World
-  ID is unintegrated and idkit removed — both false (packages are back at
-  `web/package.json:17-18`). Do not hand-edit it.
 - **World ID is wired end to end here; `../postage` still has it dead.**
   `web/src/lib/world-id.ts` holds all World ID I/O, gated on
   `identityMode() === "live"`.

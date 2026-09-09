@@ -67,9 +67,10 @@ chain with a volatile gas token, a one-cent price is not a coherent idea.
 **World ID** is the free lane, meant to ask nothing of anybody's wallet. The
 attestation goes onchain against an address derived from the nullifier — an
 identity nobody holds a key to — and a real nullifier is what would stop one
-person minting themselves unlimited free senders. The browser side of that ask
-is not built yet, so today the attestation is written on a click rather than a
-proof — see [KNOWN_ISSUES.md](KNOWN_ISSUES.md#blocking-a-real-demo).
+person minting themselves unlimited free senders. World App's Selfie Check
+supplies that proof through IDKit; the server verifies it against World's
+Developer Portal, and only a verified proof puts the attestation onchain —
+today that runs against World's sandbox environment, not production.
 
 **The Graph** decides what a sender pays. Every payment, every verdict, and every
 time a recipient contradicted the classifier is indexed, and that history prices
@@ -128,7 +129,6 @@ that properly means running the MTA itself inside an enclave. See
     worker/      the Cloudflare mail worker
 
 [ARCHITECTURE.md](ARCHITECTURE.md) explains how the parts fit and why each is
-there. Addresses and endpoints are in [DEPLOYMENTS.md](DEPLOYMENTS.md). What is
-known to be wrong is in [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
+there. Addresses and endpoints are in [DEPLOYMENTS.md](DEPLOYMENTS.md).
 
 Built for ETHOnline 2026.

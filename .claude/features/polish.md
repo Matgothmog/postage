@@ -74,7 +74,7 @@ Charges added mid-run, from findings:
 - [x] D36 README World ID claim (in flight at time of writing)
 - [ ] D37 three security findings · D38 pin the review's applied fixes
 - [ ] D39 six low-severity review observations
-- [ ] Record accepted security findings in `KNOWN_ISSUES.md`
+- [ ] Record accepted security findings
 
 ## Dispatches
 
@@ -202,8 +202,7 @@ pass changed only the token-boundary bug inside it.
   per-handle cap 200; one controlled domain supplies as many envelope senders as it likes,
   and `deliveredFree` still returns true for `spent-by-handle` by design. Result:
   authenticated mail forwarded free for the rest of the hour. Byte-identical to the base,
-  so not this branch's doing — but the most consequential bypass found, and absent from
-  `KNOWN_ISSUES.md`.
+  so not this branch's doing — but the most consequential bypass found.
 - Signed wallet proofs are accepted 5 minutes into the future, so the usable life is ten
   minutes, not five; there is no nonce, so the header triple is a replayable bearer
   credential in that window.

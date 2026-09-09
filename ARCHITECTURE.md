@@ -229,6 +229,11 @@ The worker holds the message and hands it straight to Mailgun. The gateway says
 *send it* and learns whether it went; the message never passes back through
 Vercel.
 
+Depending on a second relay means a second relay can fail. If Mailgun cannot be
+reached, clearing still goes through by the paste-it-back route instead, and the
+message is not lost — it is just no longer the one the sender actually wrote,
+byte for byte.
+
 ### Privy — wallets, and one-click signup
 
 The person clicking an unlock link is a stranger with no wallet and no reason to
@@ -376,8 +381,8 @@ classifier lets someone set prices but not mint personhood.
 
 ## What privacy would actually take
 
-Not storing a message is not the same as not reading one, and it is worth being
-exact about which of those Postage does.
+What follows was chosen, not missed. Not storing a message is not the same as
+not reading one, and it is worth being exact about which of those Postage does.
 
 Five parties see a message in plaintext: Cloudflare terminates the SMTP
 connection, the worker parses the MIME, the gateway receives the parsed fields,
