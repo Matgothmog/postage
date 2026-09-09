@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { after, test } from "node:test";
+import { after, afterEach, test } from "node:test";
 import { IDKitErrorCodes } from "@worldcoin/idkit";
 import type { IDKitResult } from "@worldcoin/idkit";
 import { pollTimeoutMs } from "./rp-context";
@@ -50,6 +50,17 @@ globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise
 
 after(() => {
   globalThis.fetch = realFetch;
+});
+
+/// Mirrors `env.test.ts`'s handling of `IDENTITY_MODE`: save the real value
+/// once, restore it after every test that touches
+/// `NEXT_PUBLIC_WORLD_ENVIRONMENT`, so a test here can never leak its value
+/// into an unrelated one.
+const ORIGINAL_WORLD_ENVIRONMENT = process.env.NEXT_PUBLIC_WORLD_ENVIRONMENT;
+
+afterEach(() => {
+  if (ORIGINAL_WORLD_ENVIRONMENT === undefined) delete process.env.NEXT_PUBLIC_WORLD_ENVIRONMENT;
+  else process.env.NEXT_PUBLIC_WORLD_ENVIRONMENT = ORIGINAL_WORLD_ENVIRONMENT;
 });
 
 test("verifyRequestBody omits proof entirely under mock mode", () => {
@@ -348,5 +359,52 @@ test("runSelfieCheck refuses to open an unbound check rather than producing a pr
   assert.equal(outcome.ok, false);
   // The point is that no proof exists to be replayed, not merely that the
   // server would have refused one.
+  assert.equal(opened, false);
+});
+
+async function environmentSeenByIDKit(): Promise<unknown> {
+  let environmentSeen: unknown;
+  await runSelfieCheck(
+    fakeDeps({
+      openSelfieCheck: async (config) => {
+        environmentSeen = config.environment;
+        return {
+          connectorURI: "https://worldcoin.org/verify/abc",
+          pollUntilCompletion: async () => ({ success: true, result: WELL_FORMED_PROOF }),
+        };
+      },
+    })
+  );
+  return environmentSeen;
+}
+
+test("runSelfieCheck targets production when NEXT_PUBLIC_WORLD_ENVIRONMENT is unset", async () => {
+  delete process.env.NEXT_PUBLIC_WORLD_ENVIRONMENT;
+  assert.equal(await environmentSeenByIDKit(), "production");
+});
+
+test("runSelfieCheck targets production when NEXT_PUBLIC_WORLD_ENVIRONMENT is the empty string", async () => {
+  process.env.NEXT_PUBLIC_WORLD_ENVIRONMENT = "";
+  assert.equal(await environmentSeenByIDKit(), "production");
+});
+
+test("runSelfieCheck targets World's sandbox when NEXT_PUBLIC_WORLD_ENVIRONMENT is set to sandbox", async () => {
+  process.env.NEXT_PUBLIC_WORLD_ENVIRONMENT = "sandbox";
+  assert.equal(await environmentSeenByIDKit(), "sandbox");
+});
+
+test("runSelfieCheck reports a config error, and never opens World App, on an unrecognised NEXT_PUBLIC_WORLD_ENVIRONMENT rather than silently falling back to production", async () => {
+  process.env.NEXT_PUBLIC_WORLD_ENVIRONMENT = "prod";
+  let opened = false;
+  const outcome = await runSelfieCheck(
+    fakeDeps({
+      openSelfieCheck: async () => {
+        opened = true;
+        throw new Error("should never be reached");
+      },
+    })
+  );
+
+  assert.deepEqual(outcome, { ok: false, message: "World ID isn't configured yet. Pay instead, or try again shortly." });
   assert.equal(opened, false);
 });

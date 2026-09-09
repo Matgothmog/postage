@@ -148,6 +148,33 @@ function requireWorldAppId(raw: string | undefined): `app_${string}` {
   return raw as `app_${string}`;
 }
 
+/// Every value idkit-core's own `IDKitRequestConfig.environment` field
+/// accepts — checked against the installed package's own
+/// `@worldcoin/idkit-core/dist/index.d.ts:65` ("Optional environment
+/// override. Defaults to \"production\".") rather than assumed, the same way
+/// the rest of this file treats that package's re-exports. Declared here
+/// rather than imported, since `idkit-core` is itself an undeclared
+/// dependency of `web/package.json` (see the note above
+/// `SelfieCheckHandle`).
+type WorldEnvironment = "production" | "staging" | "sandbox";
+
+/// This client never named an `environment` before this flag existed, and
+/// idkit-core's own default is "production" — so unset or empty stays
+/// exactly what every deployment already does, silently. Anything else must
+/// be one of idkit-core's three accepted values: a near-miss is refused
+/// rather than coerced to "production", because a silent fallback to
+/// production is exactly the sandbox/production mismatch
+/// `NEXT_PUBLIC_WORLD_ENVIRONMENT` exists to catch — a sandbox World App
+/// build that quietly requested a production-targeted Selfie Check would
+/// fail with nothing here to explain why.
+function requireWorldEnvironment(raw: string | undefined): WorldEnvironment {
+  if (!raw) return "production";
+  if (raw === "production" || raw === "staging" || raw === "sandbox") return raw;
+  throw new Error(
+    `NEXT_PUBLIC_WORLD_ENVIRONMENT is set to an unrecognised value: "${raw}". Expected "production", "staging", or "sandbox".`
+  );
+}
+
 /// Refuses to open a Selfie Check that is bound to nothing.
 ///
 /// A caller that forgets the signal gets no proof rather than an unbound one,
@@ -216,9 +243,16 @@ export interface SelfieCheckDeps {
 export async function runSelfieCheck(deps: SelfieCheckDeps): Promise<SelfieCheckOutcome> {
   let appId: `app_${string}`;
   let signal: string;
+  let environment: WorldEnvironment;
   try {
     appId = requireWorldAppId(deps.appId);
     signal = requireSignal(deps.signal);
+    // Read directly here, as a literal `process.env.NEXT_PUBLIC_*` access,
+    // rather than threaded through `SelfieCheckDeps` like `appId` is — Next
+    // only inlines `NEXT_PUBLIC_` variables where the literal property access
+    // itself appears in code that reaches the client bundle, and this module
+    // is that code (see `ChallengeActions.tsx`'s import of `runSelfieCheck`).
+    environment = requireWorldEnvironment(process.env.NEXT_PUBLIC_WORLD_ENVIRONMENT);
   } catch (cause) {
     console.error("Selfie Check cannot start: client is not configured", cause);
     return { ok: false, message: "World ID isn't configured yet. Pay instead, or try again shortly." };
@@ -244,6 +278,7 @@ export async function runSelfieCheck(deps: SelfieCheckDeps): Promise<SelfieCheck
         action: rpContext.action,
         rp_context: rpContext,
         allow_legacy_proofs: ALLOW_LEGACY_PROOFS,
+        environment,
       },
       signal
     );
