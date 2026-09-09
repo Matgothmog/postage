@@ -46,7 +46,52 @@ const ADDED_COLUMNS: { table: string; column: string; type: string; backfill?: s
   // runs, not a standing gap; guessing "paid" for everything would instead
   // make every pre-existing earned pass permanently unrevokable.
   { table: "passes", column: "paid_extended_at", type: "INTEGER" },
+  // Left nullable: a database from before this column existed has no record of
+  // which wallet claimed a handle, and guessing one would send someone else's
+  // earnings to the wrong owner.
+  { table: "inboxes", column: "wallet", type: "TEXT" },
 ];
+
+/// SQLite's own words for a column that is already there. The whole of the
+/// bootstrap is `IF NOT EXISTS` except `ALTER TABLE ADD COLUMN`, which has no
+/// such form, so this string is what stands in for one.
+const DUPLICATE_COLUMN = /duplicate column name/i;
+
+/// Whether a table already has the column, told apart from every other way an
+/// `ALTER TABLE` can fail. Matched on the message rather than on the error
+/// code, which `no such table` shares — and that one has to stay loud, because
+/// it means a table reached this before anything created it.
+function isDuplicateColumn(cause: unknown): boolean {
+  return cause instanceof Error && DUPLICATE_COLUMN.test(cause.message);
+}
+
+/// The columns a table has, or an empty set if there is no such table —
+/// `PRAGMA table_info` answers a name it does not know with no rows rather
+/// than an error, so the two cases arrive looking identical and are separated
+/// by the caller.
+async function existingColumns(client: Client, table: string): Promise<Set<string>> {
+  const existing = await client.execute(`PRAGMA table_info(${table})`);
+  if (existing.rows.length === 0) {
+    console.error("schema migration skipped a table nothing has created", { table });
+  }
+  return new Set(existing.rows.map((row) => String(row.name)));
+}
+
+/// Adds one column, treating a column that is already there as done.
+///
+/// Every instance of a deploy cold-starts at once and every one of them runs
+/// this, so two can read `PRAGMA table_info` before either has altered
+/// anything: both see the column missing, both alter, and the loser is handed
+/// `duplicate column name`. That used to reject `db()` and 500 whatever request
+/// woke the instance — self-healing on the next one, which is no help to the
+/// message that was in flight during the deploy. Nothing else is swallowed.
+async function addColumn(client: Client, table: string, column: string, type: string): Promise<void> {
+  try {
+    await client.execute(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  } catch (cause) {
+    if (!isDuplicateColumn(cause)) throw cause;
+  }
+}
 
 export async function addMissingColumns(client: Client): Promise<void> {
   const known = new Map<string, Set<string>>();
@@ -54,13 +99,21 @@ export async function addMissingColumns(client: Client): Promise<void> {
   for (const { table, column, type, backfill } of ADDED_COLUMNS) {
     let columns = known.get(table);
     if (!columns) {
-      const existing = await client.execute(`PRAGMA table_info(${table})`);
-      columns = new Set(existing.rows.map((row) => String(row.name)));
+      columns = await existingColumns(client, table);
       known.set(table, columns);
     }
+    // A table with no columns is a table that does not exist yet — a statement
+    // `createsTable` in `schema.ts` misread, so it runs after this instead of
+    // before it. Skipping costs that one table its added columns; falling
+    // through to `ALTER TABLE` would throw `no such table` and cost every cold
+    // start from here on, with nothing left able to repair it.
+    if (columns.size === 0) continue;
     if (columns.has(column)) continue;
 
-    await client.execute(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    await addColumn(client, table, column, type);
+    // Run even when the column was already there a moment ago: the instance
+    // that won the race may not have reached its own backfill yet, and every
+    // one of these is an idempotent UPDATE over rows that are already settled.
     if (backfill) await client.execute(backfill);
     columns.add(column);
   }

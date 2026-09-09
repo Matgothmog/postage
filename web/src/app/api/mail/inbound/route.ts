@@ -7,13 +7,13 @@ import {
   purgeOldClassifications,
 } from "@/lib/db/classifications";
 import { inboxByHandle } from "@/lib/db/inboxes";
-import { required } from "@/lib/env";
 import { handleOf, isOurs } from "@/lib/handle";
 // `web/` and `worker/` are separate packages with no workspace tooling between
 // them, so the wire shape this route answers with is declared once outside
 // both and reached by relative path rather than duplicated.
 import type { GatewayVerdict } from "../../../../../../shared/gateway-verdict";
 import { issueChallenge } from "./challenge";
+import { configured, configuredWithoutNaming, during, faultResponse } from "./faults";
 import { forwardWithoutChallenge } from "./forwarding";
 
 interface InboundPayload {
@@ -74,18 +74,37 @@ function refuse(reason: string, bounce: string): Response {
 ///   dangerous   never delivered, whatever anyone does. Charged as a penalty
 ///               if a wallet is attached, and proving personhood does not
 ///               clear it - a real person can still be phishing.
-export async function POST(request: Request) {
-  if (request.headers.get("x-postage-secret") !== required("MAIL_WEBHOOK_SECRET")) {
+export async function POST(request: Request): Promise<Response> {
+  try {
+    return await inbound(request);
+  } catch (cause) {
+    return faultResponse(cause);
+  }
+}
+
+/// The route proper. Everything that can fail on infrastructure rather than on
+/// what the message says is named for the part of the gateway that failed, so
+/// the answer above can tell a database outage from a variable nobody set.
+async function inbound(request: Request): Promise<Response> {
+  // The one setting read before the caller is anyone, and so the one that
+  // answers without naming itself: an unset webhook secret still fails closed,
+  // still as the same 500, but it tells a stranger only that some setting is
+  // missing. `/api/world/context` states the policy and keeps it by ordering —
+  // it reads no key until the token has been checked. Here the secret *is* the
+  // check, so the ordering cannot be had and the answer is narrowed instead.
+  if (request.headers.get("x-postage-secret") !== configuredWithoutNaming("MAIL_WEBHOOK_SECRET")) {
     return Response.json({ error: "Bad secret" }, { status: 401 });
   }
 
-  const appUrl = required("APP_URL");
+  // Past the secret the caller is the mail worker, which is us, and a variable
+  // nobody set is worth naming outright to whoever has to go and set it.
+  const appUrl = configured("APP_URL");
   const payload = (await request.json()) as Partial<InboundPayload>;
   const { from, to } = payload;
   if (!from || !to) return Response.json({ error: "from and to are required" }, { status: 400 });
 
   const handle = handleOf(to);
-  const inbox = await inboxByHandle(handle);
+  const inbox = await during("database", () => inboxByHandle(handle));
   if (!inbox) {
     const wire: GatewayVerdict = { action: "reject", reason: "unknown_inbox" };
     return Response.json(wire, { status: 404 });
@@ -116,7 +135,7 @@ export async function POST(request: Request) {
 
   // Dropped on the way past rather than by a job nobody runs, so the table the
   // budget counts over stays the size of one hour.
-  await purgeOldClassifications();
+  await during("database", () => purgeOldClassifications());
 
   // Read before any pass is honoured. A pass says this sender got through the
   // gate a few minutes ago; it says nothing about what they have written since,
@@ -138,17 +157,13 @@ export async function POST(request: Request) {
   // walk through. Unauthenticated mail is now judged from its headers and held,
   // which costs nothing and unlocks nothing.
   const budgetRefusal: BudgetState = authenticated
-    ? await claimClassification(handle, sender)
+    ? await during("database", () => claimClassification(handle, sender))
     : "spent-by-sender";
   const verdict = budgetRefusal ? classifyFromHeaders(facts) : await classify(facts);
 
-  const forwarded = await forwardWithoutChallenge({
-    handle,
-    sender,
-    verdict,
-    authenticated,
-    budgetRefusal,
-  });
+  const forwarded = await during("database", () =>
+    forwardWithoutChallenge({ handle, sender, verdict, authenticated, budgetRefusal })
+  );
   if (forwarded) {
     const wire: GatewayVerdict = { action: "forward", to: inbox.destination, reason: forwarded.reason };
     // `verdict` rides along for this route's own tests and for logs; the wire

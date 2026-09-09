@@ -326,7 +326,31 @@ database never gets. That is not a theoretical problem: `held_until` was missing
 from a deployment whose `challenges` table predated holding, and every held
 message there answered with a 500 for as long as the feature existed.
 
-Columns added after the fact are applied on connect against `PRAGMA table_info`.
+Columns added after the fact are applied on connect against `PRAGMA table_info`,
+in the middle of a cold start that runs in three phases: every `CREATE TABLE`
+first, then the missing columns, then everything else the schema declares —
+indexes above all.
+
+The order is the point, and getting it wrong is the second outage this section
+has had to record. Applying the whole schema in one pass and migrating
+afterwards puts `CREATE INDEX ... ON claim_sends (wallet, sent_at)` in front of
+the `ALTER TABLE` that adds `wallet`, so connecting throws `no such column`
+before the repair can run, and every route that touches the database answers
+with an empty 500 on every cold start. Migrating first instead breaks the
+opposite case, where `ALTER TABLE` names a table nothing has created yet.
+
+Two consequences worth stating outright:
+
+- **A new indexed column is two edits.** The column goes in the `CREATE TABLE`
+  in `web/src/lib/db/schema.ts` *and* in `ADDED_COLUMNS` in
+  `web/src/lib/db/migrations.ts`. The first is what a database created today
+  gets; the second is the only thing that reaches one created before. The index
+  itself needs no thought — the split puts anything that is not a `CREATE TABLE`
+  into the phase after the migration.
+- **Adding a column is idempotent in both directions.** A column already present
+  is skipped, and a column another instance adds in the same instant is not an
+  error, because a deploy cold-starts several instances at once and only one of
+  them can win the `ALTER TABLE`.
 
 ## Trust boundaries
 

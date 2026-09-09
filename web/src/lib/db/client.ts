@@ -1,12 +1,36 @@
 import { type Client, createClient } from "@libsql/client";
 import { addMissingColumns } from "./migrations";
-import { SCHEMA } from "./schema";
+import { COLUMN_DEPENDENT_STATEMENTS, TABLE_STATEMENTS } from "./schema";
 
 /// Re-exported rather than defined here: pure-logic modules with no database
 /// need it too, and pulling this file in for a timestamp would drag a libsql
 /// connection into places — client components among them — that have no
 /// business opening one.
 export { now } from "../time";
+
+/// Brings a database up to the shape the code expects, in the one order that
+/// works for a database created today *and* one created before a column it now
+/// has existed.
+///
+/// The three phases cannot be collapsed into two. Running the whole schema
+/// first and migrating afterwards — the order this had — leaves a legacy
+/// database permanently unopenable: `CREATE INDEX ... ON claim_sends
+/// (wallet, sent_at)` throws `no such column: wallet` against a table that
+/// predates the column, before the migration that would have added it ever
+/// runs, so `db()` rejects on every cold start and the repair it needs can
+/// never happen — this is what took production down. `inboxes (wallet)` hits
+/// the same shape and is what the tests below exercise. Migrating first
+/// instead breaks the other case, where `ALTER TABLE` names a table nothing
+/// has created yet.
+///
+/// Exported so a test can run it a second time over a database `db()` has
+/// already brought up. Every real caller is a cold start and `db()` keeps the
+/// client it opened, so one process never reaches this twice on its own.
+export async function bootstrap(client: Client): Promise<void> {
+  for (const statement of TABLE_STATEMENTS) await client.execute(statement);
+  await addMissingColumns(client);
+  for (const statement of COLUMN_DEPENDENT_STATEMENTS) await client.execute(statement);
+}
 
 /// The one connection every table module in this directory queries through,
 /// opened and set up once on first use.
@@ -22,8 +46,7 @@ export function db(): Promise<Client> {
       authToken: process.env.DATABASE_AUTH_TOKEN,
     });
     try {
-      for (const statement of SCHEMA) await client.execute(statement);
-      await addMissingColumns(client);
+      await bootstrap(client);
     } catch (cause) {
       // The connection opened even though setting it up did not, so it has to
       // be given back rather than left for the retry to leak one per attempt.

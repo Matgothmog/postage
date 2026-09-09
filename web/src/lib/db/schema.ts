@@ -154,3 +154,49 @@ export const SCHEMA = [
   /// above cannot answer without reading the table.
   `CREATE INDEX IF NOT EXISTS issued_rp_contexts_by_age ON issued_rp_contexts (expires_at)`,
 ];
+
+/// Whether a statement is one of the ones that makes a table exist, which is
+/// the whole basis of the split below.
+///
+/// Deliberately literal, and it only has to be right about the statements in
+/// this file. Reading a statement as *not* creating a table is the harmless
+/// mistake — it merely runs in the later phase, which is where everything that
+/// is not a table belongs anyway. The mistake with teeth is a `CREATE TABLE`
+/// this does not recognise: a lower-case `create table`, or a `CREATE VIRTUAL
+/// TABLE`, both read as false and would have their table created *after* the
+/// migration instead of before it. `addMissingColumns` guards that case rather
+/// than this trying to anticipate every spelling, because the guard is cheap
+/// and the failure is not: `ALTER TABLE` against a table nothing has created
+/// throws `no such table`, and unlike the outage this split fixed, that one
+/// never heals.
+///
+/// `CREATE TABLE ... AS SELECT` is the one that would fail the other way — read
+/// as true, run in the first phase, selecting from columns the migration has
+/// not added yet. Nothing here does that, and nothing here should.
+function createsTable(statement: string): boolean {
+  return statement.trimStart().startsWith("CREATE TABLE");
+}
+
+/// `SCHEMA` split at the one seam a cold start has to break on: the statements
+/// that create a table, and the statements that may name a column on one.
+///
+/// `client.ts` runs the first list, migrates, then runs the second, because
+/// neither half of that order works alone — `bootstrap` there says why. Derived
+/// rather than authored as two lists, so a statement is still written once,
+/// beside the note explaining it.
+export const TABLE_STATEMENTS = SCHEMA.filter(createsTable);
+
+/// Everything else `SCHEMA` holds — today every index, and anything added later
+/// that is not a table. That is the safe side of the split to land on by
+/// default: it runs after the migration rather than before it.
+///
+/// The rule this split does *not* enforce, and the one the next person actually
+/// needs: **a new indexed column is two edits, not one.** Adding it to the
+/// `CREATE TABLE` above is the shape a database made today gets; every database
+/// made before today gets it only from an `ADDED_COLUMNS` entry in
+/// `migrations.ts`. Without that entry the index below names a column half the
+/// world is missing, and running late does not save it — which is exactly how
+/// `claim_sends (wallet, sent_at)` took the gateway down.
+export const COLUMN_DEPENDENT_STATEMENTS = SCHEMA.filter(
+  (statement) => !createsTable(statement)
+);

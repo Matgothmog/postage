@@ -7,8 +7,9 @@ import { HOLD_SECONDS, createChallenge, purgeExpiredHolds } from "@/lib/db/chall
 import { walletForSender } from "@/lib/db/sender-wallets";
 import { quote } from "@/lib/pricing";
 import { messageIdFor, signQuote, type SignedQuote } from "@/lib/quote";
-import { gatherSignals } from "@/lib/reputation";
+import { gatherSignals, type SenderSignals } from "@/lib/reputation";
 import { now } from "@/lib/time";
+import { during, requireConfigured } from "./faults";
 
 /// What a sender is asked for, and where they are sent to answer it.
 export interface IssuedChallenge {
@@ -20,6 +21,18 @@ export interface IssuedChallenge {
   /// Null when nothing is being held. Dangerous mail is never delivered by any
   /// route, so there is nothing to hold and no reason to keep what it said.
   heldUntil: number | null;
+}
+
+/// What the network knows about a sender who has a wallet.
+///
+/// `gatherSignals` settles both of its queries rather than throwing, but the
+/// variables saying where to send them are read outside that: `queryPostage`
+/// reads `GRAPH_QUERY_URL` before it returns a promise at all, so an unset one
+/// throws straight past the `Promise.allSettled` meant to contain it. Checked
+/// here so it arrives as the misconfiguration it is.
+function senderSignals(wallet: string): Promise<SenderSignals> {
+  requireConfigured("GRAPH_QUERY_URL", "GRAPH_API_KEY");
+  return gatherSignals(wallet);
 }
 
 /// Prices one message and records the challenge that stands between it and the
@@ -40,20 +53,28 @@ export async function issueChallenge(mail: {
 
   // A sender who has paid before is priced on that history rather than as a
   // stranger, which is the whole point of indexing payments.
-  const senderWallet = await walletForSender(sender);
-  const signals = senderWallet ? await gatherSignals(senderWallet) : null;
+  const senderWallet = await during("database", () => walletForSender(sender));
+  const signals = senderWallet ? await senderSignals(senderWallet) : null;
 
   // The floor comes from the chain, never from our own database. The escrow
   // reverts on anything below it, so a cached copy that drifts out of date
   // produces quotes nobody can pay. `effectiveFloor` rather than `floorPrice`,
   // so an inbox whose owner never picked a price is still charged for.
-  const floor = await publicClient.readContract({
-    address: POSTAGE_ESCROW,
-    abi: escrowAbi,
-    functionName: "effectiveFloor",
-    args: [wallet],
-  });
+  const floor = await during("chain", () =>
+    publicClient.readContract({
+      address: POSTAGE_ESCROW,
+      abi: escrowAbi,
+      functionName: "effectiveFloor",
+      args: [wallet],
+    })
+  );
   const priced = quote(floor, verdict.tier, signals, verdict.degraded);
+
+  // Named before either is reached for. `messageIdFor` hands its secret to
+  // `createHmac` and `signQuote` hands its key to viem, so an unset one
+  // surfaces as a complaint about a malformed key rather than about a
+  // deployment nobody finished configuring.
+  requireConfigured("MESSAGE_ID_SECRET", "CLASSIFIER_PRIVATE_KEY");
 
   const token = randomUUID().replaceAll("-", "");
   const receivedAt = now();
@@ -61,19 +82,21 @@ export async function issueChallenge(mail: {
   const signed = await signQuote(messageId, wallet, verdict.tier, priced.amount);
 
   const heldUntil = verdict.tier === "dangerous" ? null : receivedAt + HOLD_SECONDS;
-  await purgeExpiredHolds();
+  await during("database", () => purgeExpiredHolds());
 
-  await createChallenge({
-    token,
-    handle,
-    sender,
-    message_id: messageId,
-    tier: verdict.tier,
-    amount: priced.amount.toString(),
-    quote_json: JSON.stringify({ ...signed, reasons: priced.reasons }),
-    held_until: heldUntil,
-    created_at: receivedAt,
-  });
+  await during("database", () =>
+    createChallenge({
+      token,
+      handle,
+      sender,
+      message_id: messageId,
+      tier: verdict.tier,
+      amount: priced.amount.toString(),
+      quote_json: JSON.stringify({ ...signed, reasons: priced.reasons }),
+      held_until: heldUntil,
+      created_at: receivedAt,
+    })
+  );
 
   return {
     token,
