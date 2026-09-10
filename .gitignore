@@ -22,3 +22,6 @@ contracts/lib/
 # wrangler local state and secrets
 worker/.dev.vars
 worker/.wrangler/
+
+# claude development logs
+.claude/

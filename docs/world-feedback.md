@@ -7,6 +7,34 @@ integration is load bearing rather than decorative.
 
 Written as we hit each thing, not reconstructed afterwards.
 
+## At a glance
+
+A judge's checklist mapping each finding below to confusing / missing /
+broken / hard to test, with where it's discussed. Rows are derived from the
+findings that follow, not separate from them.
+
+| Finding | Category | Where |
+|---|---|---|
+| v4 migration is undocumented outside the API reference; search still surfaces v2 material | confusing | :86-98 |
+| RP signing key never surfaced with the same prominence as `app_id`/`rp_id`, the least discoverable required credential | missing | :100-118, :503-510 |
+| Selfie Check's IDKit builder name absent from the credential page | missing | :120-133 |
+| `environment: sandbox` absent from 3 of the 4 IDKit pages that define `environment` | confusing | :142-152 |
+| Verify endpoint's own schema forbids the value the sandbox docs instruct you to send | broken | :154-166 |
+| `allow_legacy_proofs` undocumented as required; SDK throws without it | broken | :168-184 |
+| Verification-limit error carries three unrelated names across doc eras and layers | confusing | :186-196 |
+| Bridge domain named three different ways; one candidate is a dead host | confusing | :198-206 |
+| Portal's own MCP and REST interfaces disagree on whether `environment` exists at creation time | broken | :208-213, :537-540 |
+| Archived SDK repo ranks first in search; live repo findable only via `package.json`; zero issues found for "selfie" or "sandbox" on either | missing | :222-243, :492-496 |
+| Feature-flag grant and Sandbox-access grant are two independent gates, not shown as distinct states | confusing | :245-257 |
+| No Portal screen, badge, or API field answers whether Selfie Check is enabled for an app | missing | :259-295, :526-530 |
+| Sandbox account reset promised twice; no page names the interface | missing | :303-313 |
+| `max_verifications` defaults to 1 per account, forever — indistinguishable from a broken integration on a second attempt | hard to test | :314-320, :320-370 |
+| RP context signature valid 300 seconds; the clock starts before the user even sees the World App screen | hard to test | :325-332 |
+| iOS semi-cold reinstall unreliable around invite codes mid-flow | hard to test | :383-388, :320-370 |
+| Verify-tap produces total silence with no error surface anywhere; one of three causes (a universal-link app-id mismatch) is genuinely World's | broken, hard to test | :390-446 |
+| Diagnosis throughout came from enumerating SDK exports and probing an undocumented endpoint, not from any Portal-provided debugging surface | missing | :521-547 |
+| Sandbox App states (install / invite / signed-in / verified) are never named in World's own material | missing | :320-370 |
+
 ## What went well
 
 **The nullifier design fits the problem exactly.** Postage needs one free-send
@@ -137,21 +165,35 @@ nothing on either page says so, and we spent real time on the wrong hypothesis
 (that a missing staging-scoped action was blocking us) before a fourth,
 independent line of evidence ruled it out.
 
-**C. `allow_legacy_proofs` isn't documented as required, and the SDK requires
-it anyway.** It appears in every code sample set to `true`, but nothing in the
-parameter reference marks it as a required field, and the installed runtime
-disagrees: `idkit-core@4.2.4` throws unless it is passed as an explicit boolean
-(`node_modules/@worldcoin/idkit-core/dist/index.d.ts:60`). A request built by
-omitting a field that reads as optional fails at runtime instead of at a type
-check.
+**C. `allow_legacy_proofs` isn't documented as required, and the type
+declaration doesn't read as optional either — only the prose does.** It
+appears in every code sample set to `true`, and nothing in the parameter
+reference marks it as required, so the natural assumption from the docs alone
+is that it can be omitted. The installed runtime says otherwise before you
+even reach a request: `allow_legacy_proofs: boolean;`, with no `?`, in
+`idkit-core@4.2.4`'s own config type
+(`node_modules/@worldcoin/idkit-core/dist/index.d.ts:59`) — the same file
+that marks `environment` optional a few lines later at `:65`
+(`environment?: "production" | "staging" | "sandbox";`, the line
+`web/src/lib/world-id.ts:151-158` correctly cites). `tsc` catches a missing
+`allow_legacy_proofs` at compile time for anyone who lets the type flow
+through; the risk is narrower than "fails at runtime instead of at a type
+check" — it's that the docs give no reason to expect the field is mandatory
+at all, so a caller who types the request loosely (an inline object literal
+without `IDKitRequestConfig`, a spread, an `any`) only finds out from IDKit's
+own runtime throw.
 
 **D. Three unrelated names for the same failure.** Hitting a verification
 limit surfaces as `exceeded_max_verifications` or `already_verified` in the
 older v2-era material that search still turns up, as nothing at all in the v4
 schema, and as `max_verifications_reached` compiled directly into IDKit's
-shipped WASM binary as a literal enum variant — the actual string our own
-error-mapping table (`web/src/lib/world-id.ts:166-186`) has to catch. Three
-vocabularies, one event, no page connecting them.
+shipped WASM binary as a literal enum variant. None of the three strings
+appears anywhere in our own error-mapping table,
+`describeWorldIdFailure` (`web/src/lib/world-id.ts:193-214`) — a real
+verification-limit failure falls straight through to its generic `default`
+case, indistinguishable there from any other unrecognised error code. Three
+vocabularies, one event, and the one place in our own code meant to name it
+doesn't recognise any of them.
 
 **E. Nobody agrees on the bridge's own domain.** Our own network trace shows
 `bridge.worldcoin.org` handling the real request-and-poll traffic during a live
@@ -289,6 +331,55 @@ rediscover each one separately:
   `rp_signature_expired` — and that clock starts well before the user even
   sees the World App screen.
 
+### Test users and Sandbox App states
+
+The production World App shows no Selfie Check option at all in this
+tester's hands — the Sandbox World App build is, currently, the only
+environment where this integration's flow runs end to end.
+
+**States the Sandbox App actually goes through, as we hit them:**
+
+1. **Not installed.** Getting the build at all requires TestFlight (iOS) or a
+   private Play track (Android), granted per Apple/Google account email
+   through the Portal's "World ID Sandbox" tab (see Navigation, above).
+2. **Invited, not yet signed in.** Where the beta-reliability note applies:
+   an invite code, unreliable specifically on an iOS semi-cold reinstall (see
+   "Beta reliability note," below).
+3. **Signed in, not yet verified.** A World ID account exists inside the
+   Sandbox build; nothing we read or hit distinguishes this state from
+   "verified."
+4. **Verified.** The account has spent its one Selfie Check verification
+   (see "test-user management," next, and "Verified end to end," in What we
+   built).
+
+We never saw a name for any of these states in World's own material — the
+enumeration above is ours, built from what the flow actually required at
+each step.
+
+**Test-user management is a one-shot, per-account workflow, not a quota you
+refill.** `max_verifications: 1` and `max_accounts_per_user: 1` apply to the
+account, forever, not to a test run (see "Sandbox specifics we only learned
+by hitting them," above). The only documented recourse is deleting and
+recreating the account — both the sandbox overview and the access page
+promise this in near-identical language, and neither names the interface it
+happens through. We never had to find out, because our one test account
+still had its verification unused when we needed it.
+
+Access to a tester account is itself gated behind a real person's Apple or
+Google account email, submitted once in the Portal (see "Two separate gates
+that are easy to conflate," above). That makes test-user management a
+named-individual workflow rather than a disposable-account one: adding a
+tester means asking World to grant a specific email, not generating
+throwaway credentials on demand.
+
+<!-- AUTHOR: did you ever find where to reset/delete a sandbox test account,
+or is it still unknown? If you tried and it didn't work through World App,
+the Portal, or support, that's worth stating outright. -->
+
+<!-- AUTHOR: did adding this tester's Apple/Google email to the Sandbox
+require anything beyond submitting it in the Portal — an approval wait, a cap
+on testers, anything else worth a line? -->
+
 ### Beta reliability note
 
 The sandbox testing page flags that iOS semi-cold (reinstall on a new device)
@@ -354,6 +445,110 @@ adds a Sandbox build to their phone without also setting `environment` would
 see exactly the silent nothing we spent a day chasing, for a completely
 different reason than the one we eventually found.
 
+## Developer Portal
+
+Selfie Check's own docs and integration flow are covered above. This section
+is about the Portal itself — the tool you use to register, read, and manage
+an app — considered on its own, separate from the client SDK or the
+credential docs.
+
+### Navigation
+
+**We reached a working onchain personhood attestation without navigating the
+Portal's web UI for any World ID setting.** RP registration status, on-chain
+sync flags, the exact action list — every one of those came back from a
+single MCP call each (see "The Developer Portal's MCP server worked on the
+first try," in What went well, above). That is itself a finding about
+navigation, not an absence of one: for this integration's shape, the
+structured MCP and REST surfaces made the web UI's own navigation redundant
+before we ever needed to reason about where something lived in it.
+
+The one navigation path we did use in the browser has no API or MCP
+equivalent: Sandbox tester access, requested through Portal sidebar → **World
+ID Sandbox** → an iOS tab (Apple Account email → TestFlight) or an Android tab
+(Google Play account email → a testing link).
+
+There is also nothing to navigate *to* for a callback URL or an origin
+allowlist — see "The bridge-and-polling design meant our origin never
+mattered," above. A developer used to registering redirect URIs elsewhere
+will look for that screen and not find one, because the Portal has none.
+
+<!-- AUTHOR: beyond the Sandbox tab, how many clicks/pages did it take in the
+web UI to get from login to an app's World ID action list? Any confusing
+nesting (team > app > action) worth naming? -->
+
+### Search
+
+**Every Portal fact in this document was retrieved without the Portal's own
+in-app search.** RP registration, on-chain sync flags, the action list — all
+of it came from either the MCP server's structured calls or direct
+authenticated REST calls (see "The Developer Portal's MCP server worked on
+the first try," in What went well, above). For an integration built this way,
+a search box inside the Portal UI was never on the critical path: asking the
+MCP tool for the app's configuration answered the question faster and more
+precisely than a search would have. That is a real data point on the
+in-app search's role here, not a gap in our notes.
+
+The only search we can actually report on using is a general web search for
+SDK material, and that one misfires: it surfaces the archived `idkit-js`
+repository first, a full major version behind what's installed, with no
+redirect to the live one (see "The archived repo everyone finds first,"
+above).
+
+<!-- AUTHOR: did the Portal's own search find "Selfie Check", a credential
+list, or anything at all — or did we never use it? -->
+
+### Product discovery
+
+The Portal surfaces `app_id` and `rp_id` prominently — they were the two
+values we saw first and most often. The RP signing key, just as required once
+World ID 4.0's `rp_context` is involved, was not surfaced with the same
+prominence; we found it by reading `RpContext` in the TypeScript definitions,
+not from anything the Portal put in front of us (see "The RP signing key is
+the least discoverable requirement," above). That is a product-discovery gap
+in the literal sense: the Portal is where you'd expect to discover which
+credentials an app needs, and it surfaces two of the three.
+
+We have no record of the Portal ever presenting a browsable catalog of
+available World ID credential types — Orb, Device, Selfie Check — for an app.
+Everything we learned about Selfie Check specifically came from World's
+public docs site, not from inside the Portal.
+
+<!-- AUTHOR: does the Portal UI show a list of credential types you can
+enable for an app, or is enabling one something you only ever did by
+contacting developers@toolsforhumanity.com? -->
+
+### Debugging guidance
+
+Every diagnosis in this integration was assembled by us, not surfaced by the
+Portal:
+
+- Whether Selfie Check was enabled for our app was answered by no Portal
+  screen, badge, or API field (see "No way to inspect app configuration
+  programmatically," above) — we ended up trusting `enable_face_check` in an
+  undocumented precheck response, a field that appears only in example
+  payloads, never as a declared schema property.
+- When the verify button did nothing on a real phone, nothing reached our own
+  server log — every failure mode IDKit knows about renders client-side only
+  (see "A silent failure with three separate causes," above). We found the
+  actual cause by driving a real browser against the page ourselves and
+  reading its console and network tab directly, not from any tool World
+  provided.
+- Where the Portal's own two interfaces disagree with each other — its MCP
+  tool for creating an action takes an `environment` field its own REST
+  schema doesn't have (contradiction F, above) — the only way we found that
+  was reading both schemas side by side ourselves.
+
+The debugging surface that existed for this integration was: enumerate the
+SDK's exports, read the installed package's type declarations and compiled
+source, and probe a REST endpoint that we believed at the time to be
+undocumented. We found no Portal-provided logs, verification history, proof
+inspector, or error-code reference anywhere in this process. That absence is
+itself the finding.
+
+<!-- AUTHOR: is there a logs, verification-history, or proof-inspector tab
+anywhere in the Portal that we never opened, or did we look and find none? -->
+
 ## What we built
 
 Proofs are verified off-chain against the Developer Portal, because the World ID
@@ -370,3 +565,43 @@ verify and send.
 
 So spam pays for verification, and World ID is what decides who is on which
 side of that.
+
+### Verified end to end
+
+A real-phone Selfie Check proof completed successfully at
+**2026-09-09T17:10:42Z**: the challenge resolved (`settled_by = human`), the
+nullifier was bound, and the onchain `HumanRegistry.attest` attestation
+succeeded on its first live execution — this path had only
+ever run under `IDENTITY_MODE=mock` before that. `POST /api/world/verify`
+returned 200 in 8.1 seconds with no error lines.
+
+No transaction hash or explorer link was captured at the time. It has since
+been recovered:
+[`0x48c7b5cd756cdd017d1aa0dc83e4bcdee1ee86c7ec0a8ea47eda27fff34537ee`](https://testnet.arcscan.app/tx/0x48c7b5cd756cdd017d1aa0dc83e4bcdee1ee86c7ec0a8ea47eda27fff34537ee),
+block 61264198, calling `HumanRegistry` at
+`0x0F9A1C7E971df81ADC1b0335a527b30B6F136D05`, status `ok`. It was mined
+2026-09-09T17:10:39Z, three seconds before the 17:10:42Z proof-success
+timestamp above — consistent with the relayer submitting it the moment the
+signed attestation was ready.
+
+**Recovering it is its own finding, because our own subgraph could not
+produce it.** `HumanAttestation` (`subgraph/schema.graphql`) carries no
+transaction-hash or block field — unlike `Payment` in the same schema, which
+has `tx: Bytes!`. Worse, the entity is upserted by wallet
+(`HumanAttestation.load(event.params.wallet)` in `subgraph/src/registry.ts`),
+so a later renewal overwrites `attestedAt` in place rather than appending a
+new row. By the time we went looking, the closest thing the subgraph had on
+record for this wallet pointed at 18:13:18Z — 63 minutes after the actual
+event, because a renewal had silently taken over that field. The subgraph
+was not missing the data by omission; it was actively pointing at the wrong
+event.
+
+We recovered the real hash from the Arc explorer's REST API instead, then
+decoded the transaction's calldata to confirm the wallet and nullifier it
+carried matched the attestation we were looking for, and reconciled the
+count against the contract's total `attest` call history — 15 calls in all,
+which resolve to 9 distinct wallets plus 6 renewals, consistent with the
+upsert behavior above. None of that should have been necessary: storing
+`event.transaction.hash` in the `HumanAttestation` mapping, the same way the
+`Payment` mapping already stores `tx`, would have made this attestation
+self-evidencing from the subgraph alone, the same as a payment already is.
