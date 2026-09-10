@@ -46,7 +46,7 @@ export function quote(
       floor,
       multiplierBps: 0,
       free: true,
-      reasons: ["Something the recipient is waiting for, so it goes through free"],
+      reasons: ["Something they are waiting for"],
     };
   }
 
@@ -54,31 +54,31 @@ export function quote(
   let bps = TIER_BPS[tier];
 
   if (tier === "dangerous") {
-    reasons.push("Classified as an attempt to deceive the recipient");
+    reasons.push("Reads as an attempt to deceive");
   } else if (tier === "human") {
-    reasons.push("Reads as written by a person, but nobody has proved it yet");
+    reasons.push("Reads human, nobody proved it");
   } else {
-    reasons.push("Automated mail the recipient did not ask for");
+    reasons.push("Automated mail nobody asked for");
   }
 
   // A header-only verdict is not confident enough to charge punitively.
   if (degraded && tier === "dangerous") {
     bps = 2 * ONE;
-    reasons.push("Priced down because the classifier was unavailable and this came from headers alone");
+    reasons.push("Priced down: headers only");
   }
 
   if (signals) {
     if (signals.paidCount > 0 && signals.spamRate > 0) {
       bps += Math.round(signals.spamRate * 4 * ONE);
-      reasons.push(`Reported as spam on ${signals.spamReports} of ${signals.paidCount} past messages`);
+      reasons.push(`Spam-reported ${signals.spamReports} of ${signals.paidCount} times here`);
     }
     if (signals.paidCount >= 3 && signals.spamRate < 0.2) {
       bps = Math.round(bps * 0.5);
-      reasons.push(`Well received here across ${signals.paidCount} messages`);
+      reasons.push(`Good history here: ${signals.paidCount} messages`);
     }
     if (signals.ensNames > 0) {
       bps = Math.round(bps * 0.7);
-      reasons.push(`Sender wallet holds ${signals.ensNames} ENS name${signals.ensNames === 1 ? "" : "s"}`);
+      reasons.push(`Holds ${signals.ensNames} ENS name${signals.ensNames === 1 ? "" : "s"}`);
 
       const age = signals.oldestEnsAt !== null ? now() - signals.oldestEnsAt : 0;
       if (age > YEAR_SECONDS) {
@@ -89,7 +89,7 @@ export function quote(
   }
 
   if (bps < ONE) {
-    reasons.push("Already at this inbox's minimum, so the discount stops here");
+    reasons.push("Already at this inbox's floor");
   }
   bps = Math.min(Math.max(bps, ONE), CEILING);
 

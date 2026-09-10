@@ -37,7 +37,7 @@ export function AutoRefresh({ seconds }: { seconds: number }) {
   }, [router, seconds, round]);
 
   return (
-    <span className="inline-flex items-center gap-2 text-xs text-ink-faint">
+    <span className="inline-flex items-center gap-2 text-xs text-faint">
       <span className="relative flex h-1.5 w-1.5">
         <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-good opacity-70" />
         <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-good" />

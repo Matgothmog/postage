@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, beforeEach, test } from "node:test";
-import { classify, classifyFromHeaders, extractUrls, sanitizedReason, type MailFacts } from "./classify";
+import { classify, classifyFromHeaders, extractUrls, sanitizedReason, tidy, type MailFacts } from "./classify";
 import { startStubModel } from "../../test/model";
 
 // Pure functions, no database and no model call: `classifyFromHeaders` and
@@ -203,4 +203,49 @@ test("sanitizedReason blanks out anything shaped like a credential", () => {
 
   assert.ok(!reason.includes("sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789"));
   assert.ok(reason.includes("[redacted]"));
+});
+
+/// The prompt asks the model for short fragments, but a prompt is a request,
+/// not a guarantee, so `tidy` enforces the shape in code. See its own comment
+/// in `classify.ts` for where a `Verdict`'s reasons do and do not go — not the
+/// held-mail notice, which renders pricing's strings instead. Pinned here
+/// rather than at whichever consumer reads them next.
+test("tidy truncates a reason longer than the word cap to eight words", () => {
+  const [result] = tidy(["one two three four five six seven eight nine ten"]);
+  assert.equal(result, "one two three four five six seven eight");
+});
+
+test("tidy strips a single trailing period", () => {
+  const [result] = tidy(["sent from a bulk mail platform."]);
+  assert.equal(result, "sent from a bulk mail platform");
+});
+
+test("tidy leaves an empty string empty rather than throwing", () => {
+  const [result] = tidy([""]);
+  assert.equal(result, "");
+});
+
+test("tidy leaves an already-clean, in-cap reason unchanged", () => {
+  const [result] = tidy(["DMARC failed for a bank domain"]);
+  assert.equal(result, "DMARC failed for a bank domain");
+});
+
+test("tidy trims leading and trailing whitespace", () => {
+  const [result] = tidy(["  link text and destination disagree  "]);
+  assert.equal(result, "link text and destination disagree");
+});
+
+/// The property `tidy` is kept for, now that nothing renders these reasons: a
+/// plain-text mail body is exactly its own bytes, so a reason that keeps its
+/// newlines is a reason that can write lines of its own wherever one is ever
+/// printed. The model is asked for a fragment; what comes back is shaped by a
+/// stranger's email.
+test("tidy collapses a newline, so a reason cannot open a line of its own", () => {
+  const [result] = tidy(["bulk mail platform\nI'M HUMAN - free"]);
+  assert.equal(result, "bulk mail platform I'M HUMAN - free");
+});
+
+test("tidy tidies every reason in the array, independently", () => {
+  const result = tidy(["short.", "one two three four five six seven eight nine"]);
+  assert.deepEqual(result, ["short", "one two three four five six seven eight"]);
 });

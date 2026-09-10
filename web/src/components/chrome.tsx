@@ -2,31 +2,31 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 export const primaryButton =
-  "inline-flex items-center justify-center rounded-xl bg-ink px-5 py-3 text-sm font-medium text-paper transition hover:opacity-85 disabled:opacity-40";
+  "inline-flex items-center justify-center rounded-xl bg-accent px-5 py-3 text-sm font-medium text-on-accent transition hover:bg-accent-hi focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-hi focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:opacity-40";
 
 export const secondaryButton =
-  "inline-flex items-center justify-center rounded-xl border border-rule-strong bg-card px-5 py-3 text-sm font-medium text-ink transition hover:border-ink disabled:opacity-40";
+  "inline-flex items-center justify-center rounded-xl border border-line-strong bg-surface-2 px-5 py-3 text-sm font-medium text-fg transition hover:border-accent-hi focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-hi focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:opacity-40";
 
 export const quietButton =
-  "inline-flex items-center justify-center rounded-lg px-3 py-2 text-sm text-ink-soft transition hover:text-ink";
+  "inline-flex items-center justify-center rounded-lg px-3 py-2 text-sm text-muted transition hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-hi focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
 
 export const field =
-  "w-full rounded-xl border border-rule bg-card px-4 py-3 text-[15px] text-ink outline-none transition placeholder:text-ink-faint focus:border-ink";
+  "w-full rounded-xl border border-line-strong bg-surface px-4 py-3 text-[15px] text-fg outline-none transition placeholder:text-faint focus:border-accent focus:ring-2 focus:ring-accent/30";
 
 function Wordmark({ href = "/" }: { href?: string }) {
   return (
     <Link href={href} className="group inline-flex items-center gap-2.5">
-      <span className="grid h-6 w-6 place-items-center rounded-[5px] bg-stamp text-[11px] font-bold text-white">
+      <span className="grid h-6 w-6 place-items-center rounded-[5px] bg-accent text-[11px] font-bold text-on-accent">
         P
       </span>
-      <span className="text-[13px] font-semibold uppercase tracking-[0.22em] text-ink">Postage</span>
+      <span className="text-[13px] font-semibold uppercase tracking-[0.22em] text-fg">Postage</span>
     </Link>
   );
 }
 
 export function SiteHeader({ actions }: { actions?: ReactNode }) {
   return (
-    <header className="border-b border-rule">
+    <header className="border-b border-line">
       <div className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-5">
         <Wordmark />
         <nav className="flex items-center gap-1 text-sm">{actions}</nav>
@@ -37,18 +37,40 @@ export function SiteHeader({ actions }: { actions?: ReactNode }) {
 
 export function SiteFooter() {
   return (
-    <footer className="mt-24 border-t border-rule">
-      <div className="mx-auto flex w-full max-w-5xl flex-col gap-3 px-6 py-8 text-xs text-ink-faint sm:flex-row sm:items-center sm:justify-between">
-        <p>Postage — a price on the mail that wastes your time.</p>
-        <p className="font-mono">Arc testnet · settled in USDC</p>
+    <footer className="mt-24 border-t border-line">
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-3 px-6 py-8 text-xs text-faint sm:flex-row sm:items-center sm:justify-between">
+        <p>Postage</p>
+        <p className="font-mono">USDC on Arc</p>
       </div>
     </footer>
   );
 }
 
-/// The product, drawn as the thing it is named after. Perforation is masked out
-/// of the card rather than drawn on it, so the edge is genuinely torn.
-export function StampCard({
+/// Shared page chrome: header, the flex-grown content slot, footer. Extracted
+/// from three near-identical local copies (Account.tsx, network's
+/// components.tsx, c/[token]/page.tsx) so the layout lives in one place.
+/// `actions` is the header nav slot each of those three filled differently
+/// (a sign-in control, a static "get an address" link, a static "what is
+/// this?" link) - it is optional here because callers own that decision, not
+/// this component. Callers that need a padded/max-width content wrapper
+/// (only c/[token]/page.tsx's Shell did) supply it themselves as `children`,
+/// the same way Account.tsx's and network/page.tsx's own content already do.
+export function Shell({ actions, children }: { actions?: ReactNode; children: ReactNode }) {
+  return (
+    <div className="flex min-h-dvh flex-col">
+      <SiteHeader actions={actions} />
+      <div className="flex-1">{children}</div>
+      <SiteFooter />
+    </div>
+  );
+}
+
+/// The product, drawn as the thing it is named after: a flat surface with
+/// `.glow`'s radial accent wash standing in for what used to be physical
+/// texture on the retired paper-and-stamp `StampCard`. Same prop shape as
+/// that component had, kept for the two call sites (Landing.tsx,
+/// InboxPanel.tsx).
+export function AddressCard({
   handle,
   price,
   caption,
@@ -58,26 +80,17 @@ export function StampCard({
   caption: string;
 }) {
   return (
-    <div className="perforated guilloche w-full max-w-xs bg-card px-7 py-8 shadow-[0_18px_44px_-28px_rgba(0,0,0,0.5)]">
+    <div className="glow w-full max-w-xs rounded-2xl border border-line-strong bg-surface px-7 py-8">
       <div className="flex items-start justify-between">
-        <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-stamp">
+        <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-accent">
           Postage
         </span>
-        <span className="rounded border border-stamp px-1.5 py-0.5 font-mono text-[10px] text-stamp">
+        <span className="rounded-full border border-accent px-2 py-0.5 font-mono text-[10px] text-accent-hi">
           {price}
         </span>
       </div>
-      <p className="mt-7 font-mono text-[15px] leading-snug break-all text-ink">{handle}</p>
-      <p className="mt-1.5 text-xs text-ink-soft">{caption}</p>
-      <div className="mt-7 flex gap-1" aria-hidden>
-        {Array.from({ length: 18 }).map((_, index) => (
-          <span
-            key={index}
-            className="h-3 w-px bg-rule-strong"
-            style={{ height: `${6 + ((index * 7) % 11)}px` }}
-          />
-        ))}
-      </div>
+      <p className="mt-7 font-mono text-[15px] leading-snug break-all text-fg">{handle}</p>
+      <p className="mt-1.5 text-xs text-muted">{caption}</p>
     </div>
   );
 }
@@ -93,8 +106,8 @@ export function Callout({
 }) {
   const tones = {
     good: "border-good/30 bg-good-soft text-good",
-    bad: "border-stamp/30 bg-stamp-soft text-stamp",
-    quiet: "border-rule bg-card text-ink-soft",
+    bad: "border-bad/30 bg-bad-soft text-bad",
+    quiet: "border-line bg-surface text-muted",
   };
   return (
     <div className={`rounded-xl border p-4 text-sm ${tones[tone]}`}>

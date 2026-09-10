@@ -1,7 +1,6 @@
-import { Account } from "./Account";
+import { Account, ClaimHero } from "./Account";
 import { Landing } from "./Landing";
-import { SignInButton } from "./SignInButton";
 
 export default function Home() {
-  return <Account landing={<Landing cta={<SignInButton />} />} />;
+  return <Account landing={<Landing claim={<ClaimHero />} />} />;
 }

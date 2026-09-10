@@ -52,8 +52,10 @@ delay, and toward "commercial" over "dangerous" when a message is merely
 unwanted. Blocking real mail costs the user more than letting a newsletter
 through.
 
-Give two or three short reasons, each a plain sentence a recipient would
-understand.`;
+Give two or three reasons. Each is at most eight words, a fragment, no closing
+period, concrete about what you actually saw — "sent from a bulk mail
+platform", "link text and destination disagree", "DMARC failed for a bank
+domain". No hedging, no jargon, and never restate the tier name.`;
 
 function userContent(mail: MailFacts): string {
   return [
@@ -99,6 +101,45 @@ export function sanitizedReason(cause: unknown): string {
   return message.replace(KEY_SHAPED, "[redacted]");
 }
 
+const REASON_WORD_CAP = 8;
+
+/// Shapes the model's own reasons before they leave this module: trim, drop
+/// one trailing period, collapse every run of whitespace — newlines included
+/// — and cap at REASON_WORD_CAP words.
+///
+/// Nothing renders these today, whatever the two `reasons` fields being one
+/// word apart suggests. The "Why" list in the held-mail notice
+/// (`lib/challenge-email.ts:118` text, `:133` html) and on the gate page
+/// (`app/c/[token]/page.tsx:92`) is `priced.reasons`, the fixed strings
+/// `quote` writes at `lib/pricing.ts:49-92`, carried over by `issueChallenge`
+/// (`api/mail/inbound/challenge.ts:104`, stored at `:95`) — which is handed
+/// `verdict.tier` and `verdict.degraded` and never a reason (`:71`). A
+/// `Verdict`'s own reasons leave this process only inside the inbound route's
+/// JSON answer (`api/mail/inbound/route.ts:176`, `:191`), and the worker reads
+/// that body as a `GatewayVerdict`, a shape carrying no `reasons` field at all
+/// (`worker/src/index.ts:344`, `shared/gateway-verdict.ts:15`).
+///
+/// Kept anyway, at the source rather than at a renderer that does not exist
+/// yet. These are model output shaped by a stranger's email, and the collapse
+/// is the part that earns its place: a plain-text body is exactly its own
+/// bytes, so a reason ever wired into that half could write its own lines into
+/// a message sent under our name — the forgery `oneLine`
+/// (`lib/challenge-email.ts:59`) already stops for the subject, which does
+/// travel that path. Pure and isolated from the API call, so it unit-tests
+/// without a model.
+export function tidy(reasons: string[]): string[] {
+  return reasons.map(tidyOne);
+}
+
+function tidyOne(reason: string): string {
+  const words = reason
+    .trim()
+    .replace(/\.$/, "")
+    .split(/\s+/)
+    .filter(Boolean);
+  return words.slice(0, REASON_WORD_CAP).join(" ");
+}
+
 async function classifyWithModel(mail: MailFacts): Promise<Verdict> {
   const client = new Anthropic();
 
@@ -113,7 +154,7 @@ async function classifyWithModel(mail: MailFacts): Promise<Verdict> {
   const parsed = response.parsed_output;
   if (!parsed) throw new Error("Classifier returned no parsed output");
 
-  return { ...parsed, degraded: false };
+  return { ...parsed, reasons: tidy(parsed.reasons), degraded: false };
 }
 
 const TRANSACTIONAL =
@@ -128,23 +169,23 @@ export function classifyFromHeaders(mail: MailFacts): Verdict {
   const reasons: string[] = [];
   const authFailed = mail.dmarc === "fail" || (mail.spf === "fail" && mail.dkim !== "pass");
 
-  if (authFailed) reasons.push("Sender authentication failed for this domain");
+  if (authFailed) reasons.push("Domain failed its own auth check");
 
   if (TRANSACTIONAL.test(mail.subject) && !authFailed) {
-    reasons.push("Reads as a transactional message the recipient is waiting for");
+    reasons.push("Looks like a code or a receipt");
     return { tier: "important", confidence: 0.5, reasons, degraded: true };
   }
 
   if (authFailed && LURE.test(`${mail.subject} ${mail.body}`)) {
-    reasons.push("Uses pressure language typical of credential phishing");
+    reasons.push("Pressure language typical of phishing");
     // Still not "dangerous" - a degraded verdict must not charge the top tier.
     return { tier: "commercial", confidence: 0.3, reasons, degraded: true };
   }
 
   if (MARKETING.test(`${mail.subject} ${mail.body}`)) {
-    reasons.push("Looks like bulk or marketing mail");
+    reasons.push("Reads as bulk marketing");
   } else {
-    reasons.push("Classified from headers alone while the model was unavailable");
+    reasons.push("Judged on headers only");
   }
 
   return { tier: "commercial", confidence: 0.3, reasons, degraded: true };

@@ -60,6 +60,64 @@ test("verifyHuman resets verifying and the connector link in a finally, so a thr
   assert.match(finallyBlock![1], /setWorldConnectorUri\(null\)/);
 });
 
+test("the pay lane only ever hands back an outcome the page above it can actually render", () => {
+  // ChallengeActions returns <PayLane> before it reaches its own error render,
+  // so an error handed up from the pay lane is shown to nobody. The narrower
+  // return type is what stops that from being expressible at all.
+  assert.ok(
+    SOURCE.indexOf('if (lane === "paying")') < SOURCE.indexOf('outcome?.kind === "error" &&'),
+    "the <PayLane> return still comes first — the narrowed onSettled type is load-bearing"
+  );
+  assert.match(SOURCE, /type SettledOutcome = Exclude<Outcome, \{ kind: "error" \}>/);
+  assert.match(SOURCE, /onSettled: \(outcome: SettledOutcome\) => void/);
+});
+
+test("the settlement window running out reads as unconfirmed, never as a failed payment", () => {
+  assert.match(SOURCE, /async function settle\(\): Promise<SettledOutcome \| null>/);
+  assert.match(
+    SOURCE,
+    /return outcome\.kind === "error" \? null : outcome/,
+    "an exhausted window must resolve to null, not to an error outcome"
+  );
+});
+
+test("a payment that broadcast keeps its hash and is never offered a second one", () => {
+  assert.match(SOURCE, /const \{ hash \} = await sendTransaction\(/);
+  assert.match(SOURCE, /setBroadcastHash\(hash\)/);
+
+  const broadcastView = SOURCE.match(/if \(broadcastHash\) \{[\s\S]*?\n  \}/);
+  assert.ok(broadcastView, "expected PayLane to return a view of its own while a broadcast is unsettled");
+  assert.match(broadcastView![0], /\{broadcastHash\}/, "the sender needs the hash to point at");
+  assert.doesNotMatch(broadcastView![0], /handlePay|payLabel/, "a broadcast payment must not invite a re-click");
+  assert.ok(
+    SOURCE.indexOf("if (broadcastHash) {") < SOURCE.indexOf("const payLabel"),
+    "the confirmation view must return before the Pay button is ever built"
+  );
+});
+
+test("nothing navigates away from the page the World ID poll is running on", () => {
+  // pollUntilCompletion runs in this page. An automatic redirect unloads it,
+  // taking the verification and the QR fallback with it - fatal on a touch
+  // device with no World App installed.
+  assert.doesNotMatch(SOURCE, /window\.location/, "no automatic navigation on the sender's behalf");
+  assert.doesNotMatch(SOURCE, /matchMedia/, "the connector fallback must not be gated on pointer type");
+});
+
+test("the connector panel offers both a link to tap and a code to scan", () => {
+  assert.match(SOURCE, /href=\{worldConnectorUri\}/);
+  assert.match(SOURCE, /<WorldIdQr uri=\{worldConnectorUri\} \/>/);
+});
+
+test("the human lane keeps a way through to paying, so a failed World ID is not a dead end", () => {
+  const humanLane = SOURCE.match(/lane === "human" && \([\s\S]*?\n      \)\}/);
+  assert.ok(humanLane, 'expected a lane === "human" branch rendering an escape of its own');
+  assert.match(
+    humanLane![0],
+    /setLane\("paying"\)/,
+    "?as=human must not remove the pay option the sender is still entitled to"
+  );
+});
+
 test("page.tsx passes the server-computed identityMode down as a prop, not a public env var", () => {
   assert.match(PAGE_SOURCE, /import\s*\{\s*identityMode\s*\}\s*from\s*"@\/lib\/env"/);
   assert.match(PAGE_SOURCE, /identityMode=\{identityMode\(\)\}/);

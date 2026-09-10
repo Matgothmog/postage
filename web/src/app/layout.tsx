@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Providers } from "./providers";
@@ -7,9 +7,13 @@ const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Postage — your attention already has a price",
+  title: "Postage — make spam pay",
   description:
     "Hand out one address instead of your own. Real mail arrives untouched; machines pay you a cent to interrupt you.",
+};
+
+export const viewport: Viewport = {
+  themeColor: "#0A0E1A",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
