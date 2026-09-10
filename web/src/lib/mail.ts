@@ -46,16 +46,16 @@ export async function sendVerificationCode(to: string, handle: string, code: str
 
 function body(handle: string, code: string): string {
   return [
-    `Your code is ${code}.`,
+    code,
     "",
-    `Someone asked us to forward ${postageAddress(handle)} to this address.`,
-    "Enter the code to confirm it was you.",
+    `Someone pointed ${postageAddress(handle)} at this address. Enter the code`,
+    "above to confirm it was you.",
     "",
-    "Cloudflare, who carries the mail, has sent a separate email asking you to",
-    "confirm the same thing. Both are needed before anything is forwarded here.",
+    "Cloudflare, who carries the mail, is sending a separate confirmation too.",
+    "Both are needed before anything forwards here.",
     "",
-    "If you were not expecting this, ignore both. Nothing reaches you unless you",
-    `confirm, and the code expires in ${CODE_TTL_SECONDS / 60} minutes.`,
+    "Not you? Ignore both. Nothing forwards without confirming, and this code",
+    `expires in ${CODE_TTL_SECONDS / 60} minutes.`,
   ].join("\n");
 }
 
@@ -81,8 +81,8 @@ export async function relayHeldMessage(message: {
         message.body,
         "",
         "—",
-        `Sent to ${postageAddress(message.handle)} by ${message.from}, who cleared the gate.`,
-        "Replying goes straight to them.",
+        `${message.from} cleared the gate. Sent to ${postageAddress(message.handle)}.`,
+        "Reply goes straight to them.",
       ].join("\n"),
     },
     "Could not deliver it"

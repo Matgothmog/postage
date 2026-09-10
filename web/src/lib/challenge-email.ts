@@ -1,3 +1,4 @@
+import { accent, bg, card, ink, inkSoft, line, onAccent } from "./brand";
 import { formatUsdc } from "./format";
 import { postageAddress } from "./handle";
 import { now } from "./time";
@@ -73,7 +74,7 @@ export function challengeMail(facts: ChallengeMailFacts): ChallengeMail {
   };
 
   return {
-    subject: `Held for ${rendered.inbox}: did a person write this?`,
+    subject: `Held: your mail to ${rendered.inbox}`,
     html: html(facts, rendered),
     text: text(facts, rendered),
   };
@@ -101,18 +102,16 @@ function escape(value: string): string {
 
 function text(facts: ChallengeMailFacts, { inbox, subject, price, deadline }: Rendered): string {
   return [
-    `Your message to ${inbox} is being held.`,
+    `Your mail to ${inbox} is held.`,
     "",
     `Subject: ${subject}`,
     "",
-    "It has not been delivered and it has not been thrown away. Answer one",
-    "question and we deliver the message you already sent, exactly as you wrote",
-    "it. There is nothing to send again.",
+    "Answer once and we send it. Nothing to rewrite.",
     "",
-    "A PERSON WROTE IT - free",
+    "I'M HUMAN - free",
     `${facts.challengeUrl}?as=human`,
     "",
-    `A MACHINE SENT IT - ${price}`,
+    `I'M A BOT - ${price}`,
     `${facts.challengeUrl}?as=bot`,
     "",
     "Why this was held:",
@@ -134,8 +133,8 @@ function html(facts: ChallengeMailFacts, { inbox, subject, price, deadline }: Re
   const reasons = facts.reasons
     .map(
       (reason) =>
-        `<tr><td style="padding:0 0 8px 0;color:#6b6761;font-size:14px;line-height:21px;">
-           <span style="color:#cf3f27;">&#8212;</span>&nbsp;&nbsp;${escape(reason)}</td></tr>`
+        `<tr><td style="padding:0 0 8px 0;color:${inkSoft};font-size:14px;line-height:21px;">
+           <span style="color:${accent};">&#8212;</span>&nbsp;&nbsp;${escape(reason)}</td></tr>`
     )
     .join("");
 
@@ -145,88 +144,86 @@ function html(facts: ChallengeMailFacts, { inbox, subject, price, deadline }: Re
 <meta name="color-scheme" content="light">
 <title>${escape(inbox)}</title>
 </head>
-<body style="margin:0;padding:0;background:#faf8f4;">
-<div style="display:none;max-height:0;overflow:hidden;opacity:0;">Your message is held, not lost. One click sends it.</div>
+<body style="margin:0;padding:0;background:${bg};" bgcolor="${bg}">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0;">One click sends it.</div>
 
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#faf8f4;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${bg};" bgcolor="${bg}">
 <tr><td align="center" style="padding:32px 16px;">
 
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;">
 
   <tr><td style="padding:0 0 20px 4px;">
-    <span style="font:600 13px/1 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;letter-spacing:.22em;text-transform:uppercase;color:#17161b;">Postage</span>
-    <span style="display:inline-block;margin-left:10px;padding:4px 9px;border:1px solid #cf3f27;border-radius:3px;font:600 10px/1 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;letter-spacing:.16em;text-transform:uppercase;color:#cf3f27;">Held</span>
+    <span style="font:600 13px/1 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;letter-spacing:.22em;text-transform:uppercase;color:${ink};">Postage</span>
+    <span style="display:inline-block;margin-left:10px;padding:4px 9px;border:1px solid ${accent};border-radius:3px;font:600 10px/1 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;letter-spacing:.16em;text-transform:uppercase;color:${accent};">Held</span>
   </td></tr>
 
-  <tr><td style="background:#ffffff;border:1px solid #e6e1d7;border-radius:14px;padding:36px 32px 32px 32px;">
+  <tr><td style="background:${card};border:1px solid ${line};border-radius:14px;padding:36px 32px 32px 32px;" bgcolor="${card}">
 
-    <h1 style="margin:0;font:600 26px/1.25 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;letter-spacing:-.02em;color:#17161b;">
-      Did a person write this?
+    <h1 style="margin:0;font:600 26px/1.25 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;letter-spacing:-.02em;color:${ink};">
+      Held at the door.
     </h1>
-    <p style="margin:14px 0 0 0;font:400 16px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#6b6761;">
-      Your message to <span style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:15px;color:#17161b;">${escape(inbox)}</span>
-      is being held. It was not delivered, and it was not thrown away.
-      Answer this and we send the one you already wrote &#8212; you do not write it twice.
+    <p style="margin:14px 0 0 0;font:400 16px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:${inkSoft};">
+      Your mail to <span style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:15px;color:${ink};">${escape(inbox)}</span>
+      is safe. Answer once and we send it &#8212; you don&#8217;t write it twice.
     </p>
 
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:22px 0 26px 0;">
-      <tr><td style="border-left:3px solid #e6e1d7;padding:2px 0 2px 14px;font:400 14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#9c968d;">
+      <tr><td style="border-left:3px solid ${line};padding:2px 0 2px 14px;font:400 14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:${inkSoft};">
         Subject<br>
-        <span style="color:#17161b;font-size:15px;">${escape(subject)}</span>
+        <span style="color:${ink};font-size:15px;">${escape(subject)}</span>
       </td></tr>
     </table>
 
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
       <tr><td style="padding:0 0 10px 0;">
         <a href="${escape(facts.challengeUrl)}?as=human"
-           style="display:block;background:#17161b;border-radius:10px;padding:15px 20px;text-decoration:none;">
-          <span style="display:block;font:600 16px/1.3 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#ffffff;">A person wrote it</span>
-          <span style="display:block;margin-top:3px;font:400 13px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#b8b3ab;">Prove it once and it goes through free. No account, no wallet.</span>
+           style="display:block;background:${accent};border-radius:10px;padding:15px 20px;text-decoration:none;" bgcolor="${accent}">
+          <span style="display:block;font:600 16px/1.3 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:${onAccent};">I&#8217;m human &#8212; free</span>
+          <span style="display:block;margin-top:3px;font:400 13px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:${onAccent};">World ID. No account, no wallet.</span>
         </a>
       </td></tr>
       <tr><td>
         <a href="${escape(facts.challengeUrl)}?as=bot"
-           style="display:block;background:#ffffff;border:1px solid #d5cec1;border-radius:10px;padding:14px 19px;text-decoration:none;">
-          <span style="display:block;font:600 16px/1.3 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#17161b;">A machine sent it &#8212; pay ${escape(price)}</span>
-          <span style="display:block;margin-top:3px;font:400 13px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#6b6761;">The money goes to the person you are writing to, not to us.</span>
+           style="display:block;background:${card};border:1px solid ${line};border-radius:10px;padding:14px 19px;text-decoration:none;" bgcolor="${card}">
+          <span style="display:block;font:600 16px/1.3 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:${ink};">I&#8217;m a bot &#8212; pay ${escape(price)}</span>
+          <span style="display:block;margin-top:3px;font:400 13px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:${inkSoft};">Goes to them, not us.</span>
         </a>
       </td></tr>
     </table>
 
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:28px 0 0 0;border-top:1px solid #e6e1d7;">
-      <tr><td style="padding:20px 0 10px 0;font:600 11px/1 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;letter-spacing:.14em;text-transform:uppercase;color:#9c968d;">Why it was held</td></tr>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:28px 0 0 0;border-top:1px solid ${line};">
+      <tr><td style="padding:20px 0 10px 0;font:600 11px/1 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;letter-spacing:.14em;text-transform:uppercase;color:${inkSoft};">Why</td></tr>
       ${reasons}
-      <tr><td style="padding:10px 0 0 0;font:400 13px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#9c968d;">
-        Held for ${escape(deadline)}. Ignore this and it is erased unread &#8212; nobody reads it and nobody is charged.
+      <tr><td style="padding:10px 0 0 0;font:400 13px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:${inkSoft};">
+        Held ${escape(deadline)}, then erased. Nobody reads it, nobody is charged.
       </td></tr>
     </table>
 
   </td></tr>
 
   <tr><td style="padding:14px 0 0 0;">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#fbeeea;border:1px solid #f0d4cc;border-radius:14px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${card};border:1px solid ${line};border-radius:14px;" bgcolor="${card}">
       <tr><td style="padding:22px 24px;">
-        <span style="font:600 11px/1 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;letter-spacing:.14em;text-transform:uppercase;color:#cf3f27;">Your inbox could be earning</span>
-        <p style="margin:10px 0 0 0;font:600 18px/1.35 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;letter-spacing:-.01em;color:#17161b;">
+        <span style="font:600 11px/1 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;letter-spacing:.14em;text-transform:uppercase;color:${accent};">Your inbox could be earning</span>
+        <p style="margin:10px 0 0 0;font:600 18px/1.35 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;letter-spacing:-.01em;color:${ink};">
           On the other side of this, someone is being paid.
         </p>
-        <p style="margin:8px 0 0 0;font:400 14px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#6b6761;">
+        <p style="margin:8px 0 0 0;font:400 14px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:${inkSoft};">
           Hand out a Postage address instead of your own. Real people and anything urgent
           reach you free; everything else pays you for the interruption. Keep the inbox you
           already have &#8212; setup is one click.
         </p>
         <a href="${escape(facts.appUrl)}"
-           style="display:inline-block;margin-top:14px;background:#cf3f27;border-radius:8px;padding:11px 18px;text-decoration:none;font:600 14px/1 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#ffffff;">
+           style="display:inline-block;margin-top:14px;background:${accent};border-radius:8px;padding:11px 18px;text-decoration:none;font:600 14px/1 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:${onAccent};" bgcolor="${accent}">
           Create an account and start earning
         </a>
       </td></tr>
     </table>
   </td></tr>
 
-  <tr><td style="padding:20px 4px 0 4px;font:400 12px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#9c968d;">
-    You are getting this because you wrote to ${escape(inbox)}, an address filtered by Postage.
-    We keep your message only until it is delivered or the hold runs out, and we never sell it,
-    read it back to anyone, or add you to a list.
+  <tr><td style="padding:20px 4px 0 4px;font:400 12px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:${inkSoft};">
+    You got this because you wrote to ${escape(inbox)}, filtered by Postage. We keep it until
+    it&#8217;s delivered or the hold ends. Never sold, never listed.
   </td></tr>
 
 </table>
