@@ -1081,10 +1081,11 @@ test("a failed attestation tells the sender nothing was saved", async () => {
   // behind them to undo. This fails before any hash exists, so unlike the
   // receipt-wait-failed case, "nothing was saved" is not a guess here.
   assert.match(body.error ?? "", /nothing was saved/i);
-  // World's own one-time verification for this World ID is already spent —
-  // `verifyWithWorld` ran before `recordPersonhood` ever did — so the message
-  // must not promise a retry will work; paying is the door that still does.
-  assert.doesNotMatch(body.error ?? "", /try again/i);
+  // The action's `max_verifications` ceiling is raised well past one now, so
+  // spending another Selfie Check is a real option, not advice that is
+  // guaranteed to run the sender straight back into the verification-limit
+  // rejection. Paying stays offered alongside it, not in its place.
+  assert.match(body.error ?? "", /try again/i);
   assert.match(body.error ?? "", /pay instead/i);
 });
 
@@ -1169,11 +1170,11 @@ test("send succeeded but the receipt wait failed: the sender is told the outcome
   );
   // A hash exists here, so unlike every pre-send or confirmed-revert failure
   // above, this response must not claim "nothing was saved" — it does not
-  // know that. It also must not tell the sender to try again: World's own
-  // one-time verification for this World ID is already spent by this point
-  // regardless of how the chain write resolves.
+  // know that. It may still tell the sender to try again: the action's
+  // raised `max_verifications` ceiling means another Selfie Check is a real
+  // attempt regardless of how this chain write resolves.
   assert.doesNotMatch(body.error ?? "", /nothing was saved/i);
-  assert.doesNotMatch(body.error ?? "", /try again/i);
+  assert.match(body.error ?? "", /try again/i);
   assert.match(body.error ?? "", /may still complete/i);
   assert.match(body.error ?? "", /pay instead/i);
   assert.equal(await senderHoldingNullifier(NULLIFIER_HASH), null);
@@ -1238,9 +1239,12 @@ test("an attestation that reverts onchain is not personhood", async () => {
 
   assert.equal(status, 502);
   // A receipt confirmed the revert, so this is known, not guessed — the
-  // message may still say "nothing was saved" even though a hash exists.
+  // message may still say "nothing was saved" even though a hash exists. It
+  // may also say "try again": the action's raised `max_verifications`
+  // ceiling makes a fresh Selfie Check a real attempt, not a guaranteed
+  // refusal.
   assert.match(body.error ?? "", /nothing was saved/i);
-  assert.doesNotMatch(body.error ?? "", /try again/i);
+  assert.match(body.error ?? "", /try again/i);
   assert.match(body.error ?? "", /pay instead/i);
   assert.equal(await senderHoldingNullifier(NULLIFIER_HASH), null);
   assert.equal(await hasLivePass(HANDLE, SENDER), false);

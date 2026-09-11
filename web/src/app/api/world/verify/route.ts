@@ -561,26 +561,39 @@ export async function POST(request: Request) {
     // revert, and both really do leave the registry exactly where they
     // started, so that claim stays true for them.
     //
-    // Neither branch offers "try again". In live mode, `verifyWithWorld` has
-    // already spent this sender's one-time World verification by the time
-    // `recordPersonhood` can fail at all — World does not give it back
-    // because our own infrastructure dropped the ball afterwards — so a
-    // retry here almost always means reopening World App only to be refused
-    // by the verification-limit rejection above, not a fresh attempt. Mock
-    // mode's own ceiling (`spendMockVerificationSlot`) is not permanent the
-    // same way, but this response has no way to know which mode produced it,
-    // so it is written for the case where "try again" would be advice the
-    // sender cannot follow rather than promising something that only
-    // sometimes holds. Paying is named because it is ours, not theirs, and it
-    // does not depend on the credential that just failed.
+    // Both branches now offer "try again". They didn't before: this app's
+    // action allowed exactly one successful World verification per account,
+    // ever, so in live mode, by the time `recordPersonhood` could fail at
+    // all, `verifyWithWorld` had already spent the sender's only one —
+    // retrying meant reopening World App only to be refused by the
+    // verification-limit rejection above. The action's `max_verifications`
+    // ceiling has since been raised well past one, so that is no longer the
+    // outcome a live-mode retry runs into: redoing Selfie Check spends
+    // another verification the account actually has, and stands a real
+    // chance of landing this time. Mock mode's own ceiling
+    // (`spendMockVerificationSlot`) was never this absolute to begin with —
+    // it is a per-token, time-windowed allowance, not a lifetime one — so a
+    // retry there was never the guaranteed refusal live mode's used to be.
+    // This response has no way to know which mode produced it, but now
+    // neither mode makes "try again" false advice, so it no longer has to
+    // hedge against the worse of the two.
+    //
+    // The verification-limit rejection above is a different case, not a
+    // smaller version of this one — it fires only once World reports the
+    // account has used up whatever that ceiling currently is, one or many,
+    // so there is nothing left for a retry to spend no matter how high the
+    // number sits. That is why it keeps "pay instead" alone, while these two
+    // gain "try again" beside it. Paying is offered here too, not in its
+    // place, because it is ours and does not depend on the sender's
+    // remaining allowance at all.
     if (cause instanceof AttestationOutcomeUnknown) {
       return Response.json(
-        { error: "Could not confirm the attestation in time. It may still complete on its own. Pay instead" },
+        { error: "Could not confirm the attestation in time. It may still complete on its own. Try again, or pay instead" },
         { status: 502 }
       );
     }
     return Response.json(
-      { error: "Could not record the attestation. Nothing was saved. Pay instead" },
+      { error: "Could not record the attestation. Nothing was saved. Try again, or pay instead" },
       { status: 502 }
     );
   }

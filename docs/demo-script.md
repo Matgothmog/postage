@@ -95,15 +95,16 @@ real take.
    resolves to plain `world.org` instead, the env var did not take effect —
    fix it and re-check before recording. Inspecting the link this way
    doesn't submit anything, so it costs neither sandbox account any of its
-   one-shot verification budget and is safe to repeat.
+   verification budget and is safe to repeat.
 2. **Stage two World ID sandbox accounts on the iPhone.** Install World App,
    sign in to the account you intend to film with, and confirm it has not
    yet completed a Selfie Check against this project's sandbox action (its
-   `max_verifications` budget is 1 — one successful verification is all it
-   gets, ever). Sign in a **second** account on the same phone (or a second
-   phone) as a backup. Do not run a real Selfie Check on either account
-   before the take — that is what Shot 9 (the Selfie Check take) below is
-   for, and it must not happen twice.
+   `max_verifications` budget is configurable per action and has been raised
+   since the integration first shipped, but it is still finite — do not
+   spend it before the take). Sign in a **second** account on the same phone
+   (or a second phone) as a backup. Do not run a real Selfie Check on either
+   account before the take — that is what Shot 9 (the Selfie Check take)
+   below is for, and it must not happen twice.
 3. **Create two fresh throwaway sender mailboxes.** One for the machine-path
    test, one for the human-path test, at a major provider, neither of which
    has ever emailed `you@usepostage.com` before. Confirm this by checking

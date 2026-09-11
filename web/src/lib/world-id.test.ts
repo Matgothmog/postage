@@ -170,7 +170,9 @@ test("describeWorldIdFailure falls back to generic copy for an error code it doe
 /// `IDKitErrorCodes` member, so IDKit itself can hand this exact code back
 /// from `pollUntilCompletion`, and before the shared table this fell straight
 /// through to the generic fallback — which offers "try again", advice this
-/// sender cannot act on since World's own limit is permanent.
+/// sender cannot act on: this code means the account has used up the
+/// action's verification ceiling, whatever it is currently set to, so a
+/// fresh attempt gets refused the same way.
 test("describeWorldIdFailure recognises a verification-limit rejection instead of falling back to generic copy", () => {
   const message = describeWorldIdFailure(IDKitErrorCodes.MaxVerificationsReached);
   assert.match(message, /already been used/i);
