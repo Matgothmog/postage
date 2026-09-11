@@ -268,6 +268,35 @@ test("runSelfieCheck reports the sender dismissing World App as a client-side fa
   assert.equal(announcedUri, handle.connectorURI);
 });
 
+/// idkit's own type documents `pollUntilCompletion` as never throwing, so the
+/// only thing that reaches this branch is the SDK breaking its word. What is
+/// pinned is `runSelfieCheck`'s own "never throws" promise surviving that:
+/// every failure, including one nobody predicted, leaves as an `{ ok: false }`
+/// the caller can render.
+///
+/// There is deliberately nothing here about cancelling the poll. The two
+/// earlier tests on this spot asserted that an `AbortController` owned by
+/// `runSelfieCheck` was aborted in this `catch`, which was true and meant
+/// nothing: idkit reads `signal` only at the top of each turn of its poll loop
+/// (`pollUntilCompletionLoop`, `@worldcoin/idkit-core/dist/index.js`), and by
+/// the time this `catch` runs that loop has already exited by throwing. They
+/// have gone along with the controller rather than being loosened — asserting
+/// a real no-op is worse than asserting nothing.
+test("runSelfieCheck converts an unexpected rejection from pollUntilCompletion into a result instead of throwing", async () => {
+  const outcome = await runSelfieCheck(
+    fakeDeps({
+      openSelfieCheck: async () => ({
+        connectorURI: "https://worldcoin.org/verify/abc",
+        pollUntilCompletion: async () => {
+          throw new Error("native bridge crashed");
+        },
+      }),
+    })
+  );
+
+  assert.deepEqual(outcome, { ok: false, message: "Could not complete World ID verification. Try again." });
+});
+
 test("runSelfieCheck resolves the real IDKit proof on success", async () => {
   const outcome = await runSelfieCheck(fakeDeps());
 

@@ -25,6 +25,10 @@ const ALLOW_LEGACY_PROOFS = true;
 /// gets the same treatment below, for the same reason.
 export interface SelfieCheckHandle {
   readonly connectorURI: string;
+  /// Only `timeout` is named, because it is the only option this module
+  /// passes — see `runSelfieCheck` on why a cancellation signal is not one of
+  /// them. idkit's real `WaitOptions` carries more; this stays the minimum
+  /// reconstruction of what is actually used, like the rest of this shape.
   pollUntilCompletion(options?: { timeout?: number }): Promise<SelfieCheckCompletion>;
 }
 
@@ -237,9 +241,9 @@ export interface SelfieCheckDeps {
 /// we don't", isolated from the fetch/IDKit calls that do it so it can be
 /// tested against fakes for both. Never throws: every failure path — bad
 /// client config, an unreachable World ID context endpoint, IDKit itself
-/// rejecting the request, or the sender never completing it — resolves to
-/// `{ ok: false, message }` rather than leaving the caller to guess which
-/// catch clause applies.
+/// rejecting the request, the poll itself rejecting unexpectedly, or the
+/// sender never completing it — resolves to `{ ok: false, message }` rather
+/// than leaving the caller to guess which catch clause applies.
 export async function runSelfieCheck(deps: SelfieCheckDeps): Promise<SelfieCheckOutcome> {
   let appId: `app_${string}`;
   let signal: string;
@@ -289,7 +293,28 @@ export async function runSelfieCheck(deps: SelfieCheckDeps): Promise<SelfieCheck
 
   deps.onConnectorReady?.(handle.connectorURI);
 
-  const completion = await handle.pollUntilCompletion({ timeout: pollTimeoutMs(rpContext) });
+  let completion: SelfieCheckCompletion;
+  // No cancellation signal is passed, because none this function could build
+  // would cancel anything. idkit reads `signal` only at the top of each turn
+  // of its own poll loop (`pollUntilCompletionLoop`,
+  // `@worldcoin/idkit-core/dist/index.js`), and the only moment this function
+  // could abort — the `catch` below — is after that promise has settled and
+  // the loop has already exited. The cases that genuinely leave a request
+  // dangling are the sender walking away from World App and the caller
+  // navigating off the page; both are observable only by whoever owns the
+  // page, so a signal for them belongs to that caller and does not exist
+  // here today.
+  try {
+    completion = await handle.pollUntilCompletion({ timeout: pollTimeoutMs(rpContext) });
+  } catch (cause) {
+    // idkit's own type documents `pollUntilCompletion` as never throwing
+    // (`IDKitCompletionResult`, `@worldcoin/idkit-core/dist/index.d.ts:467`),
+    // so this is here for the SDK breaking its word rather than for any
+    // failure it describes — and it is what keeps this function's own "never
+    // throws" promise true either way.
+    console.error("Selfie Check polling rejected unexpectedly", cause);
+    return { ok: false, message: "Could not complete World ID verification. Try again." };
+  }
   if (!completion.success) return { ok: false, message: describeWorldIdFailure(completion.error) };
   return { ok: true, proof: completion.result };
 }
