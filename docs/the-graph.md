@@ -190,12 +190,12 @@ a message, and they do not share inputs.
 `classify(mail: MailFacts)`. `MailFacts`
 (`classify.ts:6-16`) is `from`, `to`, `subject`, `body`, `spf`, `dkim`,
 `dmarc`, `urls` — the message and what the receiving MTA already computed
-about its authenticity. `classifyWithModel` (`classify.ts:102-117`) calls
-`claude-opus-5` (`classify.ts:106`) through the Anthropic SDK with a
+about its authenticity. `classifyWithModel` (`classify.ts:143-158`) calls
+`claude-opus-5` (`classify.ts:147`) through the Anthropic SDK with a
 structured output schema (`classify.ts:27-31`) and returns one of four tiers
 — `human`, `important`, `commercial`, `dangerous` — with a confidence and
 plain-language reasons (`classify.ts:18-25`). On failure it falls back to
-`classifyFromHeaders` (`classify.ts:127-151`), a deterministic, deliberately
+`classifyFromHeaders` (`classify.ts:168-192`), a deterministic, deliberately
 conservative fallback that can never reach the top tier.
 
 **Lane two — the pricing engine.** `pricing.ts:37-103` (`quote`) takes that

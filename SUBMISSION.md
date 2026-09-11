@@ -114,7 +114,7 @@ subgraph does not carry what would prove them:
   `HumanRegistry` at `0x0F9A1C7E971df81ADC1b0335a527b30B6F136D05`. Its calldata
   carries a nullifier hash whose low 20 bytes *are* the wallet argument beside
   it, which is technical highlight 3's
-  `address(uint160(uint256(nullifierHash)))` identity visible onchain, and an
+  `identityFor` identity — the nullifier hash's low 160 bits as a checksummed `getAddress` value — visible onchain, and an
   `expiresAt` 90 days out. (`recordPersonhood` is the **server** function that
   signs and submits this — `web/src/app/api/world/verify/route.ts:706` — not the
   contract call; the contract call is `attest`.) The subgraph cannot corroborate

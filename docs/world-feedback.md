@@ -175,7 +175,7 @@ even reach a request: `allow_legacy_proofs: boolean;`, with no `?`, in
 (`node_modules/@worldcoin/idkit-core/dist/index.d.ts:59`) — the same file
 that marks `environment` optional a few lines later at `:65`
 (`environment?: "production" | "staging" | "sandbox";`, the line
-`web/src/lib/world-id.ts:151-158` correctly cites). `tsc` catches a missing
+`web/src/lib/world-id.ts:156-163` correctly cites). `tsc` catches a missing
 `allow_legacy_proofs` at compile time for anyone who lets the type flow
 through; the risk is narrower than "fails at runtime instead of at a type
 check" — it's that the docs give no reason to expect the field is mandatory
