@@ -46,10 +46,8 @@ syntactically separate:
 
 - `queryPostage` (`graph.ts:29-31`) hits `required("GRAPH_QUERY_URL")` — the
   project's own subgraph above, deployed to **Subgraph Studio** and queried
-  directly with an API key. That is one of the two provider paths the prize
-  criteria name outright (see *Meeting the prize's stated criteria* below);
-  Studio is a hosted query endpoint, distinct from the decentralized-network
-  gateway used below for ENS.
+  directly with an API key. Studio is a hosted query endpoint, distinct from
+  the decentralized-network gateway used below for ENS.
 - `queryNetwork` (`graph.ts:34-36`) hits
   `https://gateway.thegraph.com/api/${GRAPH_API_KEY}/subgraphs/id/${subgraphId}`
   — the **decentralized-network gateway**, authenticated with an API key, used
@@ -281,25 +279,21 @@ will produce a quote whose `reasons` array (`pricing.ts:73,77,81,86`) names
 which Graph-derived signal moved the price, and that price can be checked
 against `sender(id: $wallet)` on the Studio endpoint directly.
 
-## Meeting the prize's stated criteria
+## Summary: real integration, not decoration
 
-- **"Use The Graph as a load-bearing part of the project"** — as the rule
-  frames it, either the AI tooling targets The Graph's products, or the
-  agent/app uses The Graph as its source of blockchain data; Postage is the
-  latter. See *Load-bearing by construction* above: `challenge.ts:34`
-  hard-fails pricing for any returning sender if the Graph endpoints are
-  unset, with no fallback of the kind the classifier has.
-- **"Consume live data from a Graph provider, for example querying Subgraphs
-  with an API key from Subgraph Studio, or streaming Substreams via The Graph
-  Market. Mocked, local-only, or static datasets do not qualify."** Postage's
-  own subgraph is queried through Subgraph Studio with an API key
-  (`graph.ts:29-31`) — exactly the first provider path the rule names. See
-  *Live, not fixtures*: `graph.ts:17`'s `cache: "no-store"` fetch, no fixtures
-  anywhere in the tree, and the live `/network` page and
-  `DEPLOYMENTS.md:94-98` agreeing on the same indexed numbers independently.
-- **"Do meaningful work with the data: reasoning, decisions, automation, or a
-  natural-language interface, not just printing a raw query result."** See
-  *The query-to-decision trace*: the Graph-derived `SenderSignals` are reduced
+- **Load-bearing, not optional.** The app uses The Graph as its actual source
+  of blockchain data, and that dependency is not decorative. See
+  *Load-bearing by construction* above: `challenge.ts:34` hard-fails pricing
+  for any returning sender if the Graph endpoints are unset, with no fallback
+  of the kind the classifier has.
+- **Live data, not a fixture.** Postage's own subgraph is queried through
+  Subgraph Studio with an API key (`graph.ts:29-31`) — never a mocked,
+  local-only, or static dataset. See *Live, not fixtures*: `graph.ts:17`'s
+  `cache: "no-store"` fetch, no fixtures anywhere in the tree, and the live
+  `/network` page and `DEPLOYMENTS.md:94-98` agreeing on the same indexed
+  numbers independently.
+- **Data that decides something, not data that's just printed.** See *The
+  query-to-decision trace*: the Graph-derived `SenderSignals` are reduced
   to a priced, EIP-712-signed quote (`pricing.ts:70-89`, `quote.ts:51-68`)
   that a smart contract independently verifies and enforces
   (`PostageEscrow.sol:162-193`) before it will accept payment. That is a

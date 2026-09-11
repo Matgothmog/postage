@@ -372,13 +372,11 @@ named-individual workflow rather than a disposable-account one: adding a
 tester means asking World to grant a specific email, not generating
 throwaway credentials on demand.
 
-<!-- AUTHOR: did you ever find where to reset/delete a sandbox test account,
-or is it still unknown? If you tried and it didn't work through World App,
-the Portal, or support, that's worth stating outright. -->
-
-<!-- AUTHOR: did adding this tester's Apple/Google email to the Sandbox
-require anything beyond submitting it in the Portal — an approval wait, a cap
-on testers, anything else worth a line? -->
+World's own sandbox access page documents an approval step on both
+platforms: for iOS, "Once your request is approved, you'll get a TestFlight
+invitation email"; for Android, "Wait until access is granted before opening
+the Google Play testing link." Neither page, nor anything else we found,
+documents a cap on how many testers can be added.
 
 ### Beta reliability note
 
@@ -473,9 +471,10 @@ allowlist — see "The bridge-and-polling design meant our origin never
 mattered," above. A developer used to registering redirect URIs elsewhere
 will look for that screen and not find one, because the Portal has none.
 
-<!-- AUTHOR: beyond the Sandbox tab, how many clicks/pages did it take in the
-web UI to get from login to an app's World ID action list? Any confusing
-nesting (team > app > action) worth naming? -->
+On an earlier, unrelated visit to the Portal — not part of this integration
+and not something it required us to work through — we navigated the Portal's
+own action list and found the team → app → action nesting confusing. The
+Sandbox tab above was the only web UI path this integration itself needed.
 
 ### Search
 
@@ -495,9 +494,6 @@ repository first, a full major version behind what's installed, with no
 redirect to the live one (see "The archived repo everyone finds first,"
 above).
 
-<!-- AUTHOR: did the Portal's own search find "Selfie Check", a credential
-list, or anything at all — or did we never use it? -->
-
 ### Product discovery
 
 The Portal surfaces `app_id` and `rp_id` prominently — they were the two
@@ -512,11 +508,13 @@ credentials an app needs, and it surfaces two of the three.
 We have no record of the Portal ever presenting a browsable catalog of
 available World ID credential types — Orb, Device, Selfie Check — for an app.
 Everything we learned about Selfie Check specifically came from World's
-public docs site, not from inside the Portal.
-
-<!-- AUTHOR: does the Portal UI show a list of credential types you can
-enable for an app, or is enabling one something you only ever did by
-contacting developers@toolsforhumanity.com? -->
+public docs site, not from inside the Portal. Getting Selfie Check itself
+enabled for our app was a request through a World contact (see "Two separate
+gates that are easy to conflate," above), not a selection made in any Portal
+screen. World's own credentials page corroborates the shape of that path: it
+links `mailto:developers@toolsforhumanity.com` to request Selfie Check
+access, and names no Portal screen for browsing or self-service enabling of
+credentials.
 
 ### Debugging guidance
 
@@ -542,12 +540,13 @@ Portal:
 The debugging surface that existed for this integration was: enumerate the
 SDK's exports, read the installed package's type declarations and compiled
 source, and probe a REST endpoint that we believed at the time to be
-undocumented. We found no Portal-provided logs, verification history, proof
-inspector, or error-code reference anywhere in this process. That absence is
-itself the finding.
-
-<!-- AUTHOR: is there a logs, verification-history, or proof-inspector tab
-anywhere in the Portal that we never opened, or did we look and find none? -->
+undocumented. Nothing in the MCP tool schemas, the Portal's own OpenAPI spec,
+or the SDK's type declarations exposes a logs, verification-history, or
+proof-inspection surface, and no public World documentation describes one
+either. Outside the Sandbox-tab visit above — tester access, not diagnostics
+— we never opened the Portal's dashboard UI looking for a debugging screen,
+so we can't say whether one exists there — only that nothing in the
+interfaces we actually used names one.
 
 ## What we built
 

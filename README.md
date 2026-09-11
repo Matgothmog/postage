@@ -38,16 +38,18 @@ A held sender gets a **reply to the message they just sent**, threaded to it,
 asking one question: did a person write this, or a machine? Two links, one
 answer. Nothing asks them to write the message again, because it is still here.
 
-Say a person wrote it and the sender is routed into a World ID Selfie Check.
-Passing it binds a nullifier to their wallet in `HumanRegistry` onchain, so the
-same credential cannot clear a second identity — proven end to end by a
-real-phone Selfie Check on 2026-09-09, attested
+Say a person wrote it and the sender is routed into a World ID Selfie Check —
+live identity mode, which is the default. Passing it binds a nullifier to
+their wallet in `HumanRegistry` onchain, so the same credential cannot clear a
+second identity — proven end to end by a real-phone Selfie Check on
+2026-09-09, attested
 [onchain](https://testnet.arcscan.app/tx/0x48c7b5cd756cdd017d1aa0dc83e4bcdee1ee86c7ec0a8ea47eda27fff34537ee).
-That check only runs in live identity mode; the default is mock, where the
-claim clears on a sender-keyed stand-in and nothing is actually verified. **No
-wallet, no account, nothing to sign up for** — the free lane should not charge
-a toll in setup. A machine pays instead, and only then is there anything to
-create an account for, because only then is there money to move.
+Set `IDENTITY_MODE=mock` and the claim clears on a sender-keyed stand-in
+instead, with nothing actually verified — the escape hatch for running this
+without World credentials, not the default. **No wallet, no account, nothing
+to sign up for** — the free lane should not charge a toll in setup. A machine
+pays instead, and only then is there anything to create an account for,
+because only then is there money to move.
 
 ## What arrives is what was sent
 
@@ -82,7 +84,11 @@ supplies that proof through IDKit; the server verifies it against World's
 Developer Portal, and only a verified proof puts the attestation onchain. The
 flow is proven against World's Sandbox App on a sandbox-configured preview
 deploy — the production deploy is built for production World, where Selfie
-Check is not offered.
+Check is not offered. Vercel production also sets `IDENTITY_MODE=mock`
+explicitly, so it clears every claim on the sender-keyed stand-in regardless
+of that env var's own default; `identityMode()` now defaulting to live
+changes behavior for local development and preview deploys only, not for
+[postage-seven.vercel.app](https://postage-seven.vercel.app).
 
 **The Graph** decides what a sender pays. Every payment, every verdict, and every
 time a recipient contradicted the classifier is indexed, and that history prices
@@ -118,7 +124,9 @@ transaction, a balance, or a decision.
 ## This is a proof of concept
 
 It runs, it charges real testnet USDC, and the parts do what this file says they
-do. It is not a service to point your real mail at yet.
+do. It is not a service to point your real mail at yet. Built during ETHOnline
+2026 — first commit 2026-09-05, no code carried in from before the event —
+which is a statement about how young this is, not a claim about what it is.
 
 **A held message is kept, and that is a real cost.** For a sender to answer one
 question and have their mail arrive without writing it twice, Postage has to
@@ -162,6 +170,20 @@ cp .env.local.example .env.local
 npm run dev         # next dev -p 3210 → http://localhost:3210
 ```
 
+The server starts, but the app won't render past a configuration notice
+without `NEXT_PUBLIC_PRIVY_APP_ID` set — `Providers`
+(`web/src/app/providers.tsx:10-20`) short-circuits the whole tree to a
+"NEXT_PUBLIC_PRIVY_APP_ID is not set." message otherwise. The challenge page
+adds its own requirement: identity checking defaults to **live** World ID
+Selfie Check, and the first time a sender tries to prove personhood,
+`/api/world/context` throws unless `WORLD_RP_ID`, `WORLD_RP_SIGNING_KEY`, and
+`WORLD_ACTION` are set, and `/api/world/verify` throws unless `WORLD_RP_ID`
+is set. A missing `NEXT_PUBLIC_WORLD_APP_ID` doesn't throw — the client-side
+Selfie Check fails softly instead, reporting "World ID isn't configured yet"
+for the challenge page to show. Set `IDENTITY_MODE=mock` in `.env.local` to
+skip World entirely and clear the check on a sender-keyed stand-in — the way
+to work on anything else in this tree without World credentials.
+
 ```bash
 npm test            # node --test, src/**/*.test.ts
 npm run lint         # eslint
@@ -175,11 +197,13 @@ npm run build        # next build
 - **Ship with a working local default already in the example file**, nothing
   to fill in: `APP_URL` (`http://localhost:3210`), `DATABASE_URL`
   (`file:.data/postage.db`, local SQLite), `MAIL_FROM`.
-- **Only matter in live identity mode.** `IDENTITY_MODE` unset/blank defaults
-  to `mock`, which the file calls "safe for local development." Live mode
-  additionally needs `NEXT_PUBLIC_WORLD_APP_ID`,
-  `NEXT_PUBLIC_WORLD_ENVIRONMENT`, `WORLD_RP_ID`, `WORLD_RP_SIGNING_KEY`,
-  `WORLD_ACTION`.
+- **Only matter in live identity mode, which is the default.**
+  `IDENTITY_MODE` unset or blank means live. Live mode needs
+  `NEXT_PUBLIC_WORLD_APP_ID`, `WORLD_RP_ID`, `WORLD_RP_SIGNING_KEY`, and
+  `WORLD_ACTION`; set `IDENTITY_MODE=mock` to skip all four and clear the
+  check on a sender-keyed stand-in instead. `NEXT_PUBLIC_WORLD_ENVIRONMENT`
+  is separate and always safe to leave blank — it defaults to World's
+  production backend and only needs setting to target World's sandbox.
 - **Gate one integration each, blank otherwise:** `NEXT_PUBLIC_PRIVY_APP_ID`
   (Privy wallet/signup), `ATTESTER_PRIVATE_KEY` (onchain attestations to
   `HumanRegistry`), `MAIL_WEBHOOK_SECRET` / `MAIL_WORKER_URL` (talking to the
@@ -262,37 +286,54 @@ No World ID sandbox build, no Mailgun key, no Graph API key, no Privy app —
 here is what still works:
 
 - **All three test suites, unconditionally.** `web` (`cd web && npm test`,
-  492 tests), `worker` (`cd worker && npm test`, 51 tests), and `contracts`
+  551 tests), `worker` (`cd worker && npm test`, 51 tests), and `contracts`
   (`cd contracts && forge test`, 68 tests, once `lib/` is fetched — see
   "Run it"). None of the three reach out to a live service.
 - **`subgraph/`** — `codegen` and `build` compile the mappings locally; only
   `deploy` needs Studio auth.
-- **`web/`** — the dev server starts in mock identity mode (`IDENTITY_MODE`
-  unset) against a local SQLite file; neither needs a key. What will not work
-  without the matching credential: wallet signup, live World ID verification,
-  subgraph-priced holds, onchain writes, talking to a deployed mail worker,
-  outbound email — see the breakdown under "Run it" → `web/`.
+- **`web/`** — the app boots against a local SQLite file, but the UI won't
+  render past a configuration notice without `NEXT_PUBLIC_PRIVY_APP_ID` set
+  (`web/src/app/providers.tsx:10-20`), and the challenge page's identity
+  check separately defaults to **live** World ID. Set `IDENTITY_MODE=mock`
+  to run the challenge flow without `WORLD_RP_ID`, `WORLD_RP_SIGNING_KEY`,
+  `WORLD_ACTION`, and `NEXT_PUBLIC_WORLD_APP_ID`. With that set, what still
+  will not work without its own credential: wallet signup, subgraph-priced
+  holds, onchain writes, talking to a deployed mail worker, outbound email —
+  see the breakdown under "Run it" → `web/`.
 - **`worker/`** — the test suite runs standalone; real inbound mail and
   `wrangler deploy` need Cloudflare and Mailgun credentials this repo does
   not ship.
 
-## Submission documents
+## Documentation
 
-- [SUBMISSION.md](SUBMISSION.md) — the ETHOnline submission: prize tracks
-  entered, AI-tool disclosure.
-- [docs/the-graph.md](docs/the-graph.md) — how The Graph drives pricing.
-- [docs/world-feedback.md](docs/world-feedback.md) — feedback on integrating
-  World ID Selfie Check.
-- [docs/privy-notes.md](docs/privy-notes.md) — how Privy carries the payment
-  UX.
-- [docs/demo-script.md](docs/demo-script.md) — the demo video script.
-- [ARCHITECTURE.md](ARCHITECTURE.md) — how the parts fit together and why
-  each is there.
-- [DEPLOYMENTS.md](DEPLOYMENTS.md) — contract addresses and endpoints.
+Everything above is the pitch. For the parts that need more depth:
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) — how the four tiers, the four
+  sub-projects, and the trust boundaries fit together, including what is
+  deliberately not built yet. For anyone changing the system, or checking
+  what's real versus aspirational.
+- [DEPLOYMENTS.md](DEPLOYMENTS.md) — contract addresses, deploy blocks, and
+  explorer links on Arc Testnet. For anyone verifying a transaction or
+  pointing a client at a specific address.
+- [docs/the-graph.md](docs/the-graph.md) — how an indexed onchain event
+  becomes the price a sender pays, cited against the subgraph mappings line
+  by line. For anyone auditing the pricing logic or extending the subgraph.
+- [docs/privy-notes.md](docs/privy-notes.md) — why Privy is what lets a
+  stranger clear a hold without ever installing a wallet. For anyone
+  evaluating the signup and identity UX.
+- [docs/world-feedback.md](docs/world-feedback.md) — friction found
+  integrating World ID Selfie Check, written for World's own team. For anyone
+  building against World ID, or World engineers themselves.
+
+`docs/demo-script.md` is the shot list for the submission demo video —
+stagecraft for a camera, not documentation about the system — and by its own
+recommendation isn't linked from here.
+
+[SUBMISSION.md](SUBMISSION.md) is the ETHOnline 2026 submission as filed:
+prize-track writeups and an AI-tool disclosure. It is kept as an archival
+record of what was submitted and is not maintained as product documentation
+— read the sections above for how Postage actually works today.
 
 ## Licence
 
 MIT. See [LICENSE](LICENSE).
-
-Built for ETHOnline 2026. All work began after the event's start date: first
-commit 2026-09-05, no pre-existing code.

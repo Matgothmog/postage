@@ -7,10 +7,9 @@ requires a decision while filming.
 > **Before linking this file publicly:** the Pre-flight and "WOW moment"
 > sections below narrate how to engineer the judges' reaction on camera —
 > useful to the person recording, but it is stagecraft shown to an audience,
-> not project documentation. `README.md` and `SUBMISSION.md` currently link
-> here. Recommend this file is *not* linked from the public README; whoever
-> does the final pass on that file should make that call deliberately rather
-> than by leaving the link in by default.
+> not project documentation. `SUBMISSION.md` still links here (`:568`,
+> `:587`, `:606`); the README no longer does — README.md's own note explains
+> why it stays unlinked from there.
 
 ## The rules (quoted, automatic, non-negotiable)
 
@@ -113,7 +112,7 @@ real take.
 4. **Pin the demo inbox's floor price to one cent.** Sign in as
    `you@usepostage.com`'s own account on the landing page to open its inbox
    panel. It reads `floorPrice` and `effectiveFloor` straight off the chain
-   and shows whether a floor was ever chosen (`web/src/app/InboxPanel.tsx:22`
+   and shows whether a floor was ever chosen (`web/src/app/InboxPanel.tsx:22-24`
    — `chosen`). If `chosen` is false, the inbox is already on
    `DEFAULT_FLOOR` (`contracts/src/PostageEscrow.sol:41`) — one cent — and
    needs no change. If `chosen` is true, read the floor shown: if it isn't
@@ -262,7 +261,7 @@ baseline number you wrote down at the end of the pre-flight dry run
 (step 8); and the sender-rows count also reads at least one higher than
 that same baseline. Do not require the $0.024/$0.006 split to be
 visible — `/network` never displays a per-payment split, only the
-aggregate "Paid to inboxes" total (`web/src/app/network/page.tsx:73`). Hold
+aggregate "Paid out" total (`web/src/app/network/page.tsx:105`). Hold
 each figure long enough to read, roughly 5–6 seconds apiece.
 
 **Shot 12 — 15s — Environment: Production**
