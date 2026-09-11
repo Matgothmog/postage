@@ -29,10 +29,11 @@ import { startStubModel } from "../../../test/model";
 /// (`startStubModel`), and the mail worker's own `/release` endpoint set up
 /// below — the same shape `hold.test.ts` and
 /// `challenge/deliver/route.test.ts` use for their own outbound legs. Running
-/// under `IDENTITY_MODE=mock` (the unset default, set explicitly here so this
-/// file's mode never depends on a value nobody set) means the World ID leg
-/// itself is stubbed too: `verifyWithWorld` is never called, so no proof, no
-/// IDKit and no World endpoint are exercised by this test at all.
+/// under `IDENTITY_MODE=mock` (no longer the unset default — set explicitly
+/// here because this pipeline needs the World ID leg stubbed, not live) means
+/// the World ID leg itself is stubbed too: `verifyWithWorld` is never called,
+/// so no proof, no IDKit and no World endpoint are exercised by this test at
+/// all.
 const workspace = mkdtempSync(join(tmpdir(), "postage-pipeline-"));
 process.env.DATABASE_URL = `file:${join(workspace, "test.db")}`;
 process.env.DATABASE_AUTH_TOKEN = "";

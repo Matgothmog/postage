@@ -10,14 +10,14 @@ afterEach(() => {
   else process.env.IDENTITY_MODE = ORIGINAL_IDENTITY_MODE;
 });
 
-test("defaults to mock when IDENTITY_MODE is unset", () => {
+test("defaults to live when IDENTITY_MODE is unset", () => {
   delete process.env.IDENTITY_MODE;
-  assert.equal(identityMode(), "mock");
+  assert.equal(identityMode(), "live");
 });
 
-test("defaults to mock when IDENTITY_MODE is the empty string", () => {
+test("defaults to live when IDENTITY_MODE is the empty string", () => {
   process.env.IDENTITY_MODE = "";
-  assert.equal(identityMode(), "mock");
+  assert.equal(identityMode(), "live");
 });
 
 test("returns live for the exact value \"live\"", () => {
@@ -30,22 +30,22 @@ test("returns mock for the explicit value \"mock\"", () => {
   assert.equal(identityMode(), "mock");
 });
 
-test("rejects a capitalised near-miss instead of silently defaulting to mock", () => {
+test("rejects a capitalised near-miss instead of silently resolving to live", () => {
   process.env.IDENTITY_MODE = "Live";
   assert.throws(() => identityMode(), /IDENTITY_MODE/);
 });
 
-test("rejects an all-caps near-miss instead of silently defaulting to mock", () => {
+test("rejects an all-caps near-miss instead of silently resolving to live", () => {
   process.env.IDENTITY_MODE = "LIVE";
   assert.throws(() => identityMode(), /IDENTITY_MODE/);
 });
 
-test("rejects a trailing-space near-miss instead of silently defaulting to mock", () => {
+test("rejects a trailing-space near-miss instead of silently resolving to live", () => {
   process.env.IDENTITY_MODE = "live ";
   assert.throws(() => identityMode(), /IDENTITY_MODE/);
 });
 
-test("rejects an unrelated value instead of silently defaulting to mock", () => {
+test("rejects an unrelated value instead of silently resolving to live", () => {
   process.env.IDENTITY_MODE = "production";
   assert.throws(() => identityMode(), /IDENTITY_MODE/);
 });
