@@ -412,12 +412,12 @@ one, and logged the sender and subject as written (`DEPLOYMENTS.md:135-140`).
 
 ### 3. Gasless pseudonymous personhood
 
-The onchain identity of a verified person is
-`address(uint160(uint256(nullifierHash)))` — an address derived from the
-nullifier that **nobody holds the private key to**
-(`web/src/app/api/world/verify/route.ts:355-360`). It is a name, not an account:
-one person is one record by construction, and there is no wallet to link the
-record back to.
+The onchain identity of a verified person comes from `identityFor`, which
+turns the low 160 bits of the nullifier hash into a checksummed address with
+`getAddress` — an address derived from the nullifier that **nobody holds the
+private key to** (`web/src/app/api/world/verify/route.ts:685-687`). It is a
+name, not an account: one person is one record by construction, and there is
+no wallet to link the record back to.
 
 Nothing is asked of that identity, including gas. `attest()` is callable by
 anyone because the signature names the wallet it belongs to
