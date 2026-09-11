@@ -116,7 +116,7 @@ subgraph does not carry what would prove them:
   it, which is technical highlight 3's
   `address(uint160(uint256(nullifierHash)))` identity visible onchain, and an
   `expiresAt` 90 days out. (`recordPersonhood` is the **server** function that
-  signs and submits this — `web/src/app/api/world/verify/route.ts:362` — not the
+  signs and submits this — `web/src/app/api/world/verify/route.ts:706` — not the
   contract call; the contract call is `attest`.) The subgraph cannot corroborate
   this particular attestation and never will: `HumanAttestation` carries no
   transaction hash, and it upserts by wallet, so a later renewal overwrote
@@ -262,10 +262,10 @@ channel in the product. So the proof is bound three ways: to a person, to one
 message, and in time.
 
 **One nullifier, one identity — by construction, then again onchain.** The
-onchain identity is derived from the nullifier itself,
-`address(uint160(uint256(nullifierHash)))`
-(`web/src/app/api/world/verify/route.ts:358-360`), so one person maps to one
-record before any contract check runs. `HumanRegistry` then keeps
+onchain identity is derived from the nullifier itself: `identityFor` turns the
+low 160 bits of the nullifier hash into a checksummed address with
+`getAddress` (`web/src/app/api/world/verify/route.ts:685-687`), so one person
+maps to one record before any contract check runs. `HumanRegistry` then keeps
 `nullifierOwner` (`contracts/src/HumanRegistry.sol:33`) and reverts
 `NullifierAlreadyBound` if a nullifier is ever presented for a different wallet
 (`:67-68`). The contract's own comment is explicit that this second check is
@@ -278,26 +278,26 @@ is hashed into the proof as the signal, and the hash is a public input to the
 zero-knowledge proof, so it cannot be edited without the proof failing at World.
 `requireBoundToChallenge` compares World App's returned `signal_hash` against
 `hashSignal(token)` and refuses a mismatch — or a proof carrying no
-`signal_hash` at all (`web/src/app/api/world/verify/route.ts:114-119`, the
-comparison at `:116`). A proof that both verifies at World and carries this hash
+`signal_hash` at all (`web/src/app/api/world/verify/route.ts:161-166`, the
+comparison at `:163`). A proof that both verifies at World and carries this hash
 was made for this one challenge.
 
 **A pass expires, and so does the credential.** Proving personhood opens a
 **15-minute** window (`PASS_WINDOW_SECONDS`, `web/src/lib/db/passes.ts:5`), and
 the attested credential itself is written with a **90-day** lifetime
-(`CREDENTIAL_LIFETIME_SECONDS`, `web/src/app/api/world/verify/route.ts:15`)
-chosen to match the Selfie Check credential's own lifetime (`:13`). Writing
+(`CREDENTIAL_LIFETIME_SECONDS`, `web/src/app/api/world/verify/route.ts:20`)
+chosen to match the Selfie Check credential's own lifetime (`:18`). Writing
 again tomorrow means answering again. Personhood here is a check that somebody
 was there a moment ago, not a permanent property of an address.
 
 **Exactly one Selfie Check credential is accepted.** The verifier filters the
 proof's responses for the `selfie` identifier and refuses anything that is not
-exactly one such credential (`verify/route.ts:90-95`), and separately re-checks
-World's response the same defensive way (`:454-462`). Selfie Check issues World
+exactly one such credential (`verify/route.ts:137-143`), and separately re-checks
+World's response the same defensive way (`:967-975`). Selfie Check issues World
 ID 3.0 proofs, which IDKit's v4 default rejects outright, so the request sets
-`allow_legacy_proofs` explicitly — the constant at `web/src/lib/world-id.ts:13`,
-passed into the request config at `:280`. (`selfieCheckLegacy`, imported at `:1`
-and applied at `:63`, is the preset builder that binds the signal; it is not the
+`allow_legacy_proofs` explicitly — the constant at `web/src/lib/world-id.ts:14`,
+passed into the request config at `:266`. (`selfieCheckLegacy`, imported at `:1`
+and applied at `:68`, is the preset builder that binds the signal; it is not the
 thing that makes a 3.0 proof acceptable.)
 
 **The proof costs the sender nothing.** The attestation is signed by the backend
@@ -329,8 +329,8 @@ and the app renders a configuration error instead of a UI when
 methods are email and passkey (`:26`), and an **embedded wallet is minted on
 login** for anyone who does not have one —
 `embeddedWallets: { ethereum: { createOnLogin: "users-without-wallets" } }`
-(`providers.tsx:27`) — on Arc, which is set as both `defaultChain` and the only
-supported chain (`:28-29`).
+(`providers.tsx:27-28`) — on Arc, which is set as both `defaultChain` and the
+only supported chain (`:34-35`).
 
 That matters because of who is paying. The person clicking an unlock link is a
 stranger who wrote one email and has no wallet, no seed phrase and no reason to
@@ -339,15 +339,15 @@ install either.
 **The financial flow is a real value transfer, not a signature.** The embedded
 wallet sends a transaction carrying USDC value straight to
 `PostageEscrow.payToSend`: `useSendTransaction` from Privy
-(`web/src/app/c/[token]/ChallengeActions.tsx:191`), then `sendTransaction({ to:
+(`web/src/app/c/[token]/ChallengeActions.tsx:274`), then `sendTransaction({ to:
 POSTAGE_ESCROW, value: BigInt(quote.amount), data: encodeFunctionData(...
-"payToSend" ...) })` (`:232-247`). **On Arc, native gas is USDC**
+"payToSend" ...) })` (`:342-357`). **On Arc, native gas is USDC**
 (`ARCHITECTURE.md:144-148`), so `value` is a stablecoin amount — the payment and
 the gas that moves it are the same unit, and there is no ERC-20 `approve` step
 for a first-time user to get wrong (`ARCHITECTURE.md:157-160`).
 
 Because a broadcast transaction is not yet a mined one, settlement is polled
-rather than asserted (`ChallengeActions.tsx:216-226`), and the money lands as
+rather than asserted (`ChallengeActions.tsx:326-336`), and the money lands as
 accrued earnings on the recipient's inbox (`PostageEscrow.sol:189`) with 20%
 routed to the vault (`:188`, `:192`).
 
@@ -473,7 +473,7 @@ what the demo can show.
   throws at build time if `VERCEL_ENV === "production"` while
   `NEXT_PUBLIC_WORLD_ENVIRONMENT` is anything other than unset or
   `"production"`, and unset itself resolves to `"production"`
-  (`web/src/lib/world-id.ts:170-172`). The site builds and serves, so production
+  (`web/src/lib/world-id.ts:175-177`). The site builds and serves, so production
   is on production World. But **the production World App offers no Selfie Check
   option at all** today (`docs/world-feedback.md`, "Test users and Sandbox App
   states"), so the free lane cannot be completed against the production URL.
@@ -483,7 +483,7 @@ what the demo can show.
   being the case it is written to allow. One code path, two configurations: the
   environment value is validated rather than coerced, precisely so a sandbox
   World App cannot silently request a production-targeted Selfie Check
-  (`world-id.ts:161-176`). Everything else in the product — classification,
+  (`world-id.ts:166-181`). Everything else in the product — classification,
   pricing, payment, release — behaves identically on both.
 - **The project's own subgraph is on Subgraph Studio**, at
   `https://api.studio.thegraph.com/query/1758667/usepostage/v0.4.0`, and is not
@@ -518,7 +518,7 @@ under that heading, so they are separated here.
 
 Claude is a **runtime component of the product**, not a development tool. The
 classifier at `web/src/lib/classify.ts` calls the Anthropic API with model
-`claude-opus-5` (`classify.ts:103-111`; the model id at `:106`) and returns the
+`claude-opus-5` (`classify.ts:143-151`; the model id at `:147`) and returns the
 tier that decides whether a message is delivered free, held for personhood, held
 for payment, or blocked. Its input is the mail only — from, to, subject, body,
 SPF/DKIM/DMARC results and the URLs in the body (`MailFacts`,
@@ -526,11 +526,11 @@ SPF/DKIM/DMARC results and the URLs in the body (`MailFacts`,
 
 This is a hard dependency with a defined failure mode. If the model is
 unreachable, the gateway falls back to `classifyFromHeaders`
-(`classify.ts:127-151`), which reads the DMARC/SPF/DKIM results the MTA computed
+(`classify.ts:168-192`), which reads the DMARC/SPF/DKIM results the MTA computed
 plus keyword patterns in the subject and body — not the sender's domain. That
 degraded path is **barred from returning the `dangerous` tier**: every branch
 returns `important` or `commercial`, including the one that has just matched
-phishing language (`classify.ts:124-126`, the refusal made explicit at `:140`).
+phishing language (`classify.ts:165-167`, the refusal made explicit at `:181`).
 Pricing then declines to charge punitively on a degraded verdict wherever one
 still arrives (`web/src/lib/pricing.ts:64-68`, `ARCHITECTURE.md:68-71`) — a
 wrong verdict there would both block real mail and bill for it.
@@ -591,8 +591,8 @@ the box-ticking view.
 
 | Stated requirement | Evidence | Status |
 | --- | --- | --- |
-| Uses Selfie Check, or a compatible World ID credential flow, in a meaningful way | The free lane is gated on a Selfie Check proof bound to the challenge token as its signal; exactly one `selfie` credential is accepted, checked on the incoming proof and again on World's response (`web/src/app/api/world/verify/route.ts:90-95`, `:114-119`, `:454-462`) | **Met** |
-| Treats Selfie Check as a risk, eligibility, fairness, continuity, or abuse-prevention signal | Abuse prevention, structurally rather than decoratively: without a sound proof the free lane would be the cheapest bulk-mail channel in the product. The proof is bound to a person (nullifier → identity, `HumanRegistry.sol:33`, `:67-68`), to one message (signal hash, `verify/route.ts:114-119`), and in time (15-minute pass, 90-day credential) | **Met** |
+| Uses Selfie Check, or a compatible World ID credential flow, in a meaningful way | The free lane is gated on a Selfie Check proof bound to the challenge token as its signal; exactly one `selfie` credential is accepted, checked on the incoming proof and again on World's response (`web/src/app/api/world/verify/route.ts:137-143`, `:161-166`, `:967-975`) | **Met** |
+| Treats Selfie Check as a risk, eligibility, fairness, continuity, or abuse-prevention signal | Abuse prevention, structurally rather than decoratively: without a sound proof the free lane would be the cheapest bulk-mail channel in the product. The proof is bound to a person (nullifier → identity, `HumanRegistry.sol:33`, `:67-68`), to one message (signal hash, `verify/route.ts:161-166`), and in time (15-minute pass, 90-day credential) | **Met** |
 | Includes a feedback document — Selfie Check docs and integration flow, Developer Portal navigation/search/discovery/debugging, Sandbox App states, proof flows, test users, errors and edge cases, and what was confusing, missing, broken or hard to test | [`docs/world-feedback.md`](docs/world-feedback.md) | **Met** |
 | Shows a working app | https://postage-seven.vercel.app, plus a real-phone proof that succeeded 2026-09-09 and attested onchain in [`0x48c7b5cd…37ee`](https://testnet.arcscan.app/tx/0x48c7b5cd756cdd017d1aa0dc83e4bcdee1ee86c7ec0a8ea47eda27fff34537ee) | **Met, with one caveat stated in Known limitations**: the Selfie Check lane runs on the sandbox-configured preview deploy, because the production World App offers no Selfie Check today |
 
@@ -601,8 +601,8 @@ the box-ticking view.
 | Stated requirement | Evidence | Status |
 | --- | --- | --- |
 | Integrate Privy as a core part of the product | The only authentication path in the product — no second login and no injected-wallet fallback. `PrivyProvider` is the root provider and the app renders a configuration error rather than a UI without `NEXT_PUBLIC_PRIVY_APP_ID` (`web/src/app/providers.tsx:8-20`) | **Met** |
-| Create or use at least one Privy wallet | An embedded wallet is minted on login for anyone without one (`providers.tsx:27`). The wallet that settled the live payment is **`0xdd769553802be81d4eb1f8588de4c120d318b38e`** — the `from` of the `payToSend` transaction the ledger shows, [`0xd6a36eae…b7b5`](https://testnet.arcscan.app/tx/0xd6a36eae30aafc30d13a0d8c80563077c875c25e4a9bfcf8e32ed2ec2149b7b5), 0.03 USDC into `PostageEscrow`. See [`docs/privy-notes.md`](docs/privy-notes.md) | **Met** |
-| Complete at least one functional financial flow using a generally available Privy feature | A value transfer, not a signature: Privy's `useSendTransaction` sends USDC value into `PostageEscrow.payToSend` (`web/src/app/c/[token]/ChallengeActions.tsx:191`, `:232-247`) — a supported wallet action, settled onchain and indexed. Nothing about this flow is mocked | **Met** |
+| Create or use at least one Privy wallet | An embedded wallet is minted on login for anyone without one (`providers.tsx:27-28`). The wallet that settled the live payment is **`0xdd769553802be81d4eb1f8588de4c120d318b38e`** — the `from` of the `payToSend` transaction the ledger shows, [`0xd6a36eae…b7b5`](https://testnet.arcscan.app/tx/0xd6a36eae30aafc30d13a0d8c80563077c875c25e4a9bfcf8e32ed2ec2149b7b5), 0.03 USDC into `PostageEscrow`. See [`docs/privy-notes.md`](docs/privy-notes.md) | **Met** |
+| Complete at least one functional financial flow using a generally available Privy feature | A value transfer, not a signature: Privy's `useSendTransaction` sends USDC value into `PostageEscrow.payToSend` (`web/src/app/c/[token]/ChallengeActions.tsx:274`, `:342-357`) — a supported wallet action, settled onchain and indexed. Nothing about this flow is mocked | **Met** |
 | Provide a working demo and access to the project's source code | https://postage-seven.vercel.app and https://github.com/Matgothmog/postage | **Source met; video outstanding** — script at [`docs/demo-script.md`](docs/demo-script.md) |
 | Clearly explain how Privy improves the user experience | The Privy section above, and [`docs/privy-notes.md`](docs/privy-notes.md) | **Met** |
 
