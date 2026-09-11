@@ -6,6 +6,7 @@ import type {
   RpContext as SignedRpContext,
 } from "@worldcoin/idkit";
 import { pollTimeoutMs } from "./rp-context";
+import { GENERIC_WORLD_ID_FAILURE_MESSAGE, worldIdFailureMessage } from "./world-id-messages";
 
 /// Selfie Check issues World ID 3.0 proofs, so IDKit must be told explicitly
 /// to accept them - the v4 default rejects anything but a v4 proof. See
@@ -195,26 +196,7 @@ function requireSignal(raw: string | undefined): string {
 /// "you stopped", "we couldn't reach World", and "World said no" call for
 /// different next steps and only one of them is worth retrying immediately.
 export function describeWorldIdFailure(errorCode: IDKitErrorCodes): string {
-  switch (errorCode) {
-    case "user_rejected":
-    case "cancelled":
-      return "You closed the World App before finishing. Try again when you're ready.";
-    case "verification_rejected":
-    case "nullifier_replayed":
-    case "identity_attributes_not_matched":
-      return "World ID could not verify you for this. Nothing was charged or sent.";
-    case "timeout":
-      return "That took too long and the request expired. Try again.";
-    case "connection_failed":
-      return "Could not reach the World App. Check your connection and try again.";
-    case "credential_unavailable":
-    case "feature_unavailable":
-    case "world_id_4_not_available":
-    case "world_id_3_not_available":
-      return "Selfie Check isn't available for this app yet. Pay instead, or try again later.";
-    default:
-      return "Verification failed. Try again, or pay instead.";
-  }
+  return worldIdFailureMessage(errorCode) ?? GENERIC_WORLD_ID_FAILURE_MESSAGE;
 }
 
 export interface SelfieCheckDeps {

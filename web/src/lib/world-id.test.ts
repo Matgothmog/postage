@@ -165,6 +165,19 @@ test("describeWorldIdFailure falls back to generic copy for an error code it doe
   assert.match(describeWorldIdFailure(IDKitErrorCodes.GenericError), /verification failed/i);
 });
 
+/// The client-side half of sharing one table with `logAndDescribeWorldVerifyFailure`
+/// (`@/app/api/world/verify/route.ts`): `max_verifications_reached` is a real
+/// `IDKitErrorCodes` member, so IDKit itself can hand this exact code back
+/// from `pollUntilCompletion`, and before the shared table this fell straight
+/// through to the generic fallback — which offers "try again", advice this
+/// sender cannot act on since World's own limit is permanent.
+test("describeWorldIdFailure recognises a verification-limit rejection instead of falling back to generic copy", () => {
+  const message = describeWorldIdFailure(IDKitErrorCodes.MaxVerificationsReached);
+  assert.match(message, /already been used/i);
+  assert.doesNotMatch(message, /try again/i);
+  assert.match(message, /pay instead/i);
+});
+
 const SIGNAL = "challenge-token";
 
 function fakeDeps(overrides: Partial<SelfieCheckDeps> = {}): SelfieCheckDeps {
