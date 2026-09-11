@@ -187,13 +187,17 @@ own runtime throw.
 limit surfaces as `exceeded_max_verifications` or `already_verified` in the
 older v2-era material that search still turns up, as nothing at all in the v4
 schema, and as `max_verifications_reached` compiled directly into IDKit's
-shipped WASM binary as a literal enum variant. None of the three strings
-appears anywhere in our own error-mapping table,
-`describeWorldIdFailure` (`web/src/lib/world-id.ts:193-214`) — a real
-verification-limit failure falls straight through to its generic `default`
-case, indistinguishable there from any other unrecognised error code. Three
-vocabularies, one event, and the one place in our own code meant to name it
-doesn't recognise any of them.
+shipped WASM binary as a literal enum variant. Three vocabularies for one
+event, and nothing on World's side connects them — the v4 schema does not
+even mention the two older names, let alone say they are the same failure as
+the third. On our end, all three now carry the same sentence in our own
+error-mapping table (`WORLD_ID_FAILURE_MESSAGES`,
+`web/src/lib/world-id-messages.ts:83-85`, read by `describeWorldIdFailure`,
+`web/src/lib/world-id.ts:198`), which is what it took to stop a real
+verification-limit failure from landing on whichever one of the three names
+actually got sent — but that took us enumerating all three ourselves, from
+search results and IDKit's own binary, rather than anything in World's
+material saying so.
 
 **E. Nobody agrees on the bridge's own domain.** Our own network trace shows
 `bridge.worldcoin.org` handling the real request-and-poll traffic during a live
