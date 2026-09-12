@@ -25,3 +25,5 @@ worker/.wrangler/
 
 # claude development logs
 .claude/
+.vercel
+.env*
