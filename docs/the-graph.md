@@ -5,6 +5,9 @@ states plainly what role an LLM plays alongside it. Every claim below cites a
 file and line in this repository so it can be checked directly rather than
 taken on faith.
 
+For the endpoints, entities, and example queries an agent would actually run
+against this data, see `../SKILL.md`.
+
 ## What we index
 
 `subgraph/subgraph.yaml` defines one subgraph with four data sources, all on

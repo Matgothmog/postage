@@ -318,6 +318,8 @@ Everything above is the pitch. For the parts that need more depth:
 - [docs/the-graph.md](docs/the-graph.md) — how an indexed onchain event
   becomes the price a sender pays, cited against the subgraph mappings line
   by line. For anyone auditing the pricing logic or extending the subgraph.
+- [SKILL.md](SKILL.md) — agent-executable queries against the Graph and how signals
+  map to prices. For an AI agent or tool automating decisions with Postage's subgraph data.
 - [docs/privy-notes.md](docs/privy-notes.md) — why Privy is what lets a
   stranger clear a hold without ever installing a wallet. For anyone
   evaluating the signup and identity UX.

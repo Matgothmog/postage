@@ -87,19 +87,17 @@ accepted paths settled (`DEPLOYMENTS.md:48-63`).
 | `PostageEscrow` | `0x4469e869433cf6cc08dd54afc6ac7e288b9a38f7` |
 
 **It has actually run.** The `/network` page is rendered from the subgraph
-(`web/src/lib/network.ts:101`) and needs no sign-in, so the first two figures
-below can be read straight off it rather than taken on trust:
+(`web/src/lib/network.ts:101`) and needs no sign-in, so current totals —
+settled payments, amount paid to inboxes, and people verified — can be read
+live off it rather than taken on trust:
+https://postage-seven.vercel.app/network.
 
-- **1 settled payment of $0.03.** The page shows it as a single settlement row
-  reading `$0.03`, beside a `Paid to inboxes` stat reading `$0.02`. That pair is
-  the 80/20 split arriving rounded to cents: the exact figures are **0.024 USDC
-  to the inbox's earnings and 0.006 USDC to the vault**, the split
-  `PostageEscrow.payToSend` computes at
-  `contracts/src/PostageEscrow.sol:188-192`, indexed and confirmed
-  (`DEPLOYMENTS.md:94-98`). The split is implied by the page, not displayed as a
-  split.
-- **9 onchain human attestations** in `HumanRegistry` — the page's `People
-  verified` stat.
+The network's first settled payment was **$0.03**, arriving as the 80/20
+split `PostageEscrow.payToSend` computes at
+`contracts/src/PostageEscrow.sol:188-192`: **0.024 USDC to the inbox's
+earnings and 0.006 USDC to the vault**, indexed and confirmed
+(`DEPLOYMENTS.md:94-98`). The split is implied by the page, not displayed as a
+split.
 
 Two further runs are evidenced off the page rather than on it, because the
 subgraph does not carry what would prove them:
@@ -446,12 +444,12 @@ there is no root workspace.
 
 | Suite | Result |
 | --- | --- |
-| `web` (`node --test`) | 492 passing |
+| `web` (`node --test`) | 582 passing |
 | `worker` (`node --test`) | 51 passing |
 | `contracts` (`forge test`) | 68 passing |
 | `web` lint, typecheck, build | exit 0 |
 
-611 tests in total. Contract coverage includes the negative paths the design
+701 tests in total. Contract coverage includes the negative paths the design
 depends on: a payment with an unregistered signature reverting `UnknownEnclave`,
 a quote under the floor reverting `BelowFloor`, a spam report from anyone but
 the recipient reverting `NotTheRecipient`, and a quote spent twice reverting
@@ -507,6 +505,13 @@ what the demo can show.
   and pass; only its typecheck script is affected.
 - **The classifier is not attested.** See technical highlight 1 — the registered
   measurement names this state rather than hiding it.
+- **The `/network` totals include a self-funded load run:** the author injected
+  60 synthetic messages and paid 56 tolls from ten throwaway sender wallets
+  funded out of the deployer wallet, and — because `subgraph/src/escrow.ts:16-38`
+  credits every paid tier to `inbox.earned` and `receivedCount` unconditionally —
+  the 25 paid-but-blocked dangerous-tier penalty tolls from that run count
+  toward the page's "Paid out" and "Held, then paid" figures indistinguishably
+  from a real delivery.
 
 ## AI tool disclosure
 
@@ -565,7 +570,7 @@ One member. The event's team cap is five and solo entries are permitted.
 | At most 3 partner prizes selected — The Graph, World, Privy | Done |
 | From Scratch / Classic: all work begun after the Sep 4 start | Done — first commit `920b477`, 2026-09-05 11:23:45 +0200 |
 | Granular commit history, no large single commit | Done — 80-plus commits across the event week, one author, nothing squashed |
-| Demo video: 2–4 min, ≥720p, no phone recording, no AI voiceover | **Outstanding** — script at [`docs/demo-script.md`](docs/demo-script.md) |
+| Demo video: 2–4 min, ≥720p, no phone recording, no AI voiceover | Done — recorded and edited (3:56, 1080p, presenter's own voice), linked from the ETHGlobal submission form |
 | AI tool disclosure in the submission | Done — see above |
 | Public repository | Done — https://github.com/Matgothmog/postage |
 
@@ -582,9 +587,9 @@ the box-ticking view.
 | The Graph is a load-bearing part of the project — the app uses Subgraphs as its source of blockchain data | Every sender with a wallet on file is priced from subgraph-indexed history, and the path refuses to quote without it (`web/src/app/api/mail/inbound/challenge.ts:34`, `:57`; `web/src/lib/reputation.ts:48-68`) | **Met**, with the scope stated in the track section: a first-time sender with no wallet on file is priced with `signals: null` and does not reach The Graph |
 | Live data from a Graph provider; "mocked, local-only, or static datasets do not qualify" | Two live endpoints, every query `cache: "no-store"` (`web/src/lib/graph.ts:12-18`): Subgraph Studio for the project's own subgraph (`:29-31`), the decentralized network gateway for ENS (`:33-36`, id pinned at `:5`) | **Met** |
 | Meaningful work with the data — "reasoning, decisions, automation … not just printing a raw query result" | The indexed signals drive deterministic markup/discount arithmetic into a price (`web/src/lib/pricing.ts:70-94`), which is signed EIP-712 and then enforced onchain by `PostageEscrow.payToSend`. Observed live: `paidCount 1, spamReports 1` quoted at 5× the floor (`DEPLOYMENTS.md:94-98`) | **Met** |
-| Open-source with a clear README or SKILL.md so judges can run it | MIT [`LICENSE`](LICENSE); [`README.md`](README.md) carries a per-tree "Run it" section and a "What you can run without credentials" section | **Met** |
+| Open-source with a clear README or SKILL.md so judges can run it | MIT [`LICENSE`](LICENSE); [`README.md`](README.md) carries a per-tree "Run it" section and a "What you can run without credentials" section; [`SKILL.md`](SKILL.md) at the repo root contains verified queries and signal-to-price mappings for agents querying the subgraph | **Met** |
 | Public repository | https://github.com/Matgothmog/postage | **Met** |
-| Demo video, two to four minutes | Script at [`docs/demo-script.md`](docs/demo-script.md), 3:40 | **Outstanding — not yet recorded** |
+| Demo video, two to four minutes | Recorded and edited, 3:56, linked from the ETHGlobal submission form | **Met** |
 | "Select the pool that matches how you built" | **Start Fresh** (net-new). First commit 2026-09-05, one day after the event opened; no pre-existing project-specific code — see the From Scratch declaration below | **Met** |
 
 ### World — Selfie Check
@@ -603,7 +608,7 @@ the box-ticking view.
 | Integrate Privy as a core part of the product | The only authentication path in the product — no second login and no injected-wallet fallback. `PrivyProvider` is the root provider and the app renders a configuration error rather than a UI without `NEXT_PUBLIC_PRIVY_APP_ID` (`web/src/app/providers.tsx:8-20`) | **Met** |
 | Create or use at least one Privy wallet | An embedded wallet is minted on login for anyone without one (`providers.tsx:27-28`). The wallet that settled the live payment is **`0xdd769553802be81d4eb1f8588de4c120d318b38e`** — the `from` of the `payToSend` transaction the ledger shows, [`0xd6a36eae…b7b5`](https://testnet.arcscan.app/tx/0xd6a36eae30aafc30d13a0d8c80563077c875c25e4a9bfcf8e32ed2ec2149b7b5), 0.03 USDC into `PostageEscrow`. See [`docs/privy-notes.md`](docs/privy-notes.md) | **Met** |
 | Complete at least one functional financial flow using a generally available Privy feature | A value transfer, not a signature: Privy's `useSendTransaction` sends USDC value into `PostageEscrow.payToSend` (`web/src/app/c/[token]/ChallengeActions.tsx:274`, `:342-357`) — a supported wallet action, settled onchain and indexed. Nothing about this flow is mocked | **Met** |
-| Provide a working demo and access to the project's source code | https://postage-seven.vercel.app and https://github.com/Matgothmog/postage | **Source met; video outstanding** — script at [`docs/demo-script.md`](docs/demo-script.md) |
+| Provide a working demo and access to the project's source code | https://postage-seven.vercel.app and https://github.com/Matgothmog/postage | **Met** — demo video recorded and edited, linked from the ETHGlobal submission form |
 | Clearly explain how Privy improves the user experience | The Privy section above, and [`docs/privy-notes.md`](docs/privy-notes.md) | **Met** |
 
 ### From Scratch declaration
