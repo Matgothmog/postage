@@ -2,11 +2,20 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+pub mod auth;
 pub mod chain;
+pub mod claims;
 pub mod classify;
+pub mod cloudflare;
 pub mod config;
 pub mod db;
+pub mod gate;
 pub mod graph;
+pub mod hold;
+#[cfg(test)]
+mod http_stub;
+mod log;
+pub mod mail;
 pub mod network;
 pub mod privy;
 pub mod reputation;

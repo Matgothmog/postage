@@ -152,93 +152,9 @@ impl Graph {
 }
 
 #[cfg(test)]
-pub(crate) mod testing {
-    //! A loopback GraphQL endpoint that records what it was sent and answers
-    //! from a canned status and body per path.
-
-    use std::collections::HashMap;
-    use std::sync::{Arc, Mutex};
-
-    use axum::Router;
-    use axum::extract::{Request, State};
-    use axum::http::StatusCode;
-    use axum::response::IntoResponse;
-    use serde_json::Value;
-
-    #[derive(Debug, Clone)]
-    pub(crate) struct Sent {
-        pub path: String,
-        pub content_type: Option<String>,
-        pub body: Value,
-    }
-
-    #[derive(Debug, Clone, Default)]
-    struct Stub {
-        answers: Arc<HashMap<String, (u16, String)>>,
-        sent: Arc<Mutex<Vec<Sent>>>,
-    }
-
-    #[derive(Debug)]
-    pub(crate) struct GraphStub {
-        pub base: String,
-        sent: Arc<Mutex<Vec<Sent>>>,
-    }
-
-    impl GraphStub {
-        pub(crate) fn sent(&self) -> Vec<Sent> {
-            self.sent.lock().unwrap().clone()
-        }
-    }
-
-    async fn answer(State(stub): State<Stub>, request: Request) -> impl IntoResponse {
-        let path = request.uri().path().to_owned();
-        let content_type = request
-            .headers()
-            .get("content-type")
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned);
-        let bytes = axum::body::to_bytes(request.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-        stub.sent.lock().unwrap().push(Sent {
-            path: path.clone(),
-            content_type,
-            body,
-        });
-        let (status, body) = stub
-            .answers
-            .get(&path)
-            .cloned()
-            .unwrap_or((404, String::new()));
-        (StatusCode::from_u16(status).unwrap(), body)
-    }
-
-    /// Serves `answers` (path → status and body) on a loopback port.
-    pub(crate) async fn serve(answers: &[(&str, u16, &str)]) -> GraphStub {
-        let answers = answers
-            .iter()
-            .map(|(path, status, body)| ((*path).to_owned(), (*status, (*body).to_owned())))
-            .collect();
-        let stub = Stub {
-            answers: Arc::new(answers),
-            sent: Arc::default(),
-        };
-        let sent = stub.sent.clone();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let base = format!("http://{}", listener.local_addr().unwrap());
-        let app = Router::new().fallback(answer).with_state(stub);
-        tokio::spawn(async move {
-            let _ = axum::serve(listener, app).await;
-        });
-        GraphStub { base, sent }
-    }
-}
-
-#[cfg(test)]
 mod tests {
-    use super::testing::serve;
     use super::*;
+    use crate::http_stub::{closed_port, serve};
 
     #[derive(Debug, PartialEq, Eq, Deserialize)]
     struct Answer {
@@ -367,9 +283,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_unreachable_endpoint_is_a_transport_failure() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let closed = format!("http://{}", listener.local_addr().unwrap());
-        drop(listener);
+        let closed = closed_port();
 
         let error = postage_graph(&closed)
             .query_postage::<Answer>("q", json!({}))

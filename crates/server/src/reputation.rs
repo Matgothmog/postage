@@ -27,7 +27,7 @@ pub async fn gather_signals(graph: &Graph, wallet: &str) -> SenderSignals {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::testing::serve;
+    use crate::http_stub::serve;
 
     const ENS_PATH: &str = "/api/key/subgraphs/id/5XqPmWe6gjyrJtFn9cLy237i4cWw2j9HcUJEXsP5qGtH";
 

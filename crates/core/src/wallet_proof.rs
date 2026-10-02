@@ -10,6 +10,8 @@
 
 pub use crate::statements::{claim_statement, confirm_statement, read_statement};
 
+use crate::js_number::to_js_string;
+
 /// Privy's identity token. It already names the wallets Privy minted for
 /// whoever is signed in, so a session holding one has nothing left to sign.
 pub const IDENTITY_TOKEN_HEADER: &str = "privy-id-token";
@@ -59,11 +61,12 @@ pub fn identity_proof(identity_token: &str) -> ProofHeaders {
 
 /// The proof every other session offers, from a signature it has already
 /// collected. Prompting a wallet is kept out of here so this half of the
-/// contract stays callable from a test and a route.
-pub fn signed_proof(wallet: &str, issued_at: i64, signature: &str, nonce: &str) -> ProofHeaders {
+/// contract stays callable from a test and a route. The timestamp is written
+/// as JavaScript's `String(number)` would, the same text the statement signs.
+pub fn signed_proof(wallet: &str, issued_at: f64, signature: &str, nonce: &str) -> ProofHeaders {
     vec![
         (WALLET_HEADER, wallet.to_owned()),
-        (ISSUED_AT_HEADER, issued_at.to_string()),
+        (ISSUED_AT_HEADER, to_js_string(issued_at)),
         (SIGNATURE_HEADER, signature.to_owned()),
         (NONCE_HEADER, nonce.to_owned()),
     ]
@@ -166,7 +169,7 @@ mod tests {
 
     #[test]
     fn what_the_writer_puts_on_the_wire_is_what_the_reader_takes_off_it() {
-        let written = signed_proof(WALLET, 1_757_332_800, "0xsignature", "0xnonce");
+        let written = signed_proof(WALLET, 1_757_332_800.0, "0xsignature", "0xnonce");
 
         assert_eq!(
             read_proof(lookup(written)),

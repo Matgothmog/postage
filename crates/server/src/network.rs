@@ -13,7 +13,7 @@ pub async fn fetch_overview(graph: &Graph) -> Result<Overview, GraphError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::testing::serve;
+    use crate::http_stub::serve;
 
     const ANSWER: &str = r#"{"data":{
         "vaults":[{"totalFunded":"10","toTreasury":"3","toSponsorship":"5","refilledToRelayer":"2","fundingEvents":4}],

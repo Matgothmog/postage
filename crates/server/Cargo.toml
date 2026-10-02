@@ -27,6 +27,7 @@ tokio = { workspace = true, features = ["sync", "time"] }
 
 [dev-dependencies]
 alloy-consensus = { version = "~1.7", features = ["k256"] }
+alloy-signer = "~1.7"
 base64 = "0.22.1"
 p256 = { version = "0.13.2", default-features = false, features = ["ecdsa"] }
 rand_core = { version = "0.9.5", features = ["os_rng"] }
