@@ -1,0 +1,64 @@
+# The root is both the workspace and the `postage-api` package: Vercel's Rust
+# runtime builds the [[bin]] targets of the Cargo.toml at the project root, one
+# function per file under api/. All logic lives in crates/*; api/index.rs only
+# wires the server crate's router into the Vercel runtime.
+[package]
+name = "postage-api"
+description = "Vercel function entry point for the Postage API"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "index"
+path = "api/index.rs"
+
+[dependencies]
+postage-server = { workspace = true }
+tokio = { workspace = true }
+tower = { workspace = true }
+vercel_runtime = { workspace = true }
+
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+postage-shared = { path = "crates/shared" }
+postage-core = { path = "crates/core" }
+postage-server = { path = "crates/server" }
+axum = "0.8"
+console_error_panic_hook = "0.1"
+leptos = { version = "0.8", features = ["csr"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tower = { version = "0.5", default-features = false, features = ["util"] }
+vercel_runtime = { version = "2", features = ["axum"] }
+wasm-bindgen = "0.2"
+worker = "0.8"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+dbg_macro = "warn"
+todo = "warn"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1

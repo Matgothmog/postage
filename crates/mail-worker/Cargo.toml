@@ -1,0 +1,17 @@
+[package]
+name = "postage-mail-worker"
+description = "Cloudflare Worker (workers-rs) for inbound mail handling"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+postage-shared = { workspace = true }
+worker = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,9 @@
+# Copy-ready config for the Rust worker. It does not replace worker/wrangler.toml
+# (the live TypeScript worker); copy the bindings and vars across at cut-over.
+name = "postage-mail-rs"
+main = "build/worker/shim.mjs"
+compatibility_date = "2026-09-01"
+workers_dev = true
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"

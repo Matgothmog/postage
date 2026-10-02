@@ -25,3 +25,7 @@ worker/.wrangler/
 
 # claude development logs
 .claude/
+
+# rust
+/target
+crates/web/dist

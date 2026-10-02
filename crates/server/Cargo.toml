@@ -1,0 +1,20 @@
+[package]
+name = "postage-server"
+description = "I/O layer and Axum router for the Postage API"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+postage-core = { workspace = true }
+postage-shared = { workspace = true }
+axum = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+[lints]
+workspace = true
