@@ -4,7 +4,8 @@
 //!
 //! There is no Rust SDK, so this writes what the TypeScript SDK's
 //! `messages.parse` + `zodOutputFormat` put on the wire (checked against
-//! `@anthropic-ai/sdk` 0.124.0, request captured from a loopback server) and
+//! `@anthropic-ai/sdk` 0.124.0, request captured from a loopback server),
+//! except for the tier enum and the timeout and retry budget, and
 //! does what its parser does with the reply: take every text block, read the
 //! first as JSON, check it against the verdict shape.
 
@@ -14,6 +15,7 @@ use postage_core::classify::{
     MailFacts, ModelVerdict, SYSTEM_PROMPT, Verdict, VerdictParseError, classify_from_headers,
     sanitized_reason, user_content,
 };
+use postage_shared::Tier;
 use serde_json::{Value, json};
 
 use crate::config::{ConfigError, required};
@@ -25,11 +27,12 @@ const MODEL: &str = "claude-opus-5";
 const MAX_TOKENS: u32 = 2048;
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
-/// What the SDK allows one request: its 10 minute default, which a
-/// non-streaming call with this `max_tokens` keeps.
-pub const SDK_TIMEOUT: Duration = Duration::from_secs(600);
-/// Retries after the first attempt, as the SDK's default `maxRetries`.
-const SDK_MAX_RETRIES: u32 = 2;
+/// What one attempt may take. Far below the SDK's 10 minute default: a
+/// classifier that has not answered in 20s is worth less than the header
+/// check it would delay.
+pub const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(20);
+/// Retries after the first attempt, so two attempts in all.
+pub const MAX_RETRIES: u32 = 1;
 /// The SDK's backoff: 0.5s, doubling, never more than 8s.
 const SDK_RETRY_START: Duration = Duration::from_millis(500);
 const SDK_RETRY_CEILING: Duration = Duration::from_secs(8);
@@ -73,8 +76,8 @@ impl Classifier {
             client: reqwest::Client::default(),
             api_key,
             base_url: base_url.into().trim_end_matches('/').to_owned(),
-            timeout: SDK_TIMEOUT,
-            max_retries: SDK_MAX_RETRIES,
+            timeout: ATTEMPT_TIMEOUT,
+            max_retries: MAX_RETRIES,
             retry_start: SDK_RETRY_START,
         }
     }
@@ -217,24 +220,22 @@ fn is_retryable(error: &ClassifyError) -> bool {
     }
 }
 
-/// The JSON schema `zodOutputFormat` derives for the verdict, as sent. Its
-/// `tier` carries the enum only as description text and the root carries the
-/// `$schema` URI the same way: the SDK's schema transform moves keywords it
-/// does not support into `description` rather than keeping them.
+/// The JSON schema for the verdict, as sent. `tier` carries a real `enum`
+/// built from the shared `Tier`, so the list cannot drift from the type the
+/// reply is parsed into. (The TypeScript SDK's schema transform moved the enum
+/// and the root `$schema` URI into `description` text; both were residue of
+/// that transform, not intent, and are not reproduced.)
 fn verdict_schema() -> Value {
+    let tiers: Vec<&str> = Tier::ALL.iter().map(|tier| tier.as_str()).collect();
     json!({
         "type": "object",
         "properties": {
-            "tier": {
-                "type": "string",
-                "description": "{enum: [\"human\",\"important\",\"commercial\",\"dangerous\"]}",
-            },
+            "tier": { "type": "string", "enum": tiers },
             "confidence": { "type": "number" },
             "reasons": { "type": "array", "items": { "type": "string" } },
         },
         "additionalProperties": false,
         "required": ["tier", "confidence", "reasons"],
-        "description": "{$schema: \"https://json-schema.org/draft/2020-12/schema\"}",
     })
 }
 
@@ -281,14 +282,12 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
+    use super::*;
     use axum::body::Bytes;
     use axum::extract::State;
     use axum::http::{HeaderMap, StatusCode};
     use axum::response::IntoResponse;
     use axum::routing::post;
-    use postage_shared::Tier;
-
-    use super::*;
 
     type LastRequest = Arc<Mutex<Option<(HeaderMap, Vec<u8>)>>>;
 
@@ -567,14 +566,13 @@ mod tests {
                 "properties": {
                     "tier": {
                         "type": "string",
-                        "description": "{enum: [\"human\",\"important\",\"commercial\",\"dangerous\"]}"
+                        "enum": ["human", "important", "commercial", "dangerous"]
                     },
                     "confidence": {"type": "number"},
                     "reasons": {"type": "array", "items": {"type": "string"}}
                 },
                 "additionalProperties": false,
-                "required": ["tier", "confidence", "reasons"],
-                "description": "{$schema: \"https://json-schema.org/draft/2020-12/schema\"}"
+                "required": ["tier", "confidence", "reasons"]
             })
         );
         assert_eq!(
@@ -661,11 +659,71 @@ mod tests {
     }
 
     #[test]
-    fn the_defaults_are_the_sdks() {
+    fn the_defaults_are_twenty_seconds_per_attempt_and_one_retry() {
         let classifier =
             Classifier::from_env(|name| (name == "ANTHROPIC_API_KEY").then(|| "k".to_owned()));
         assert_eq!(classifier.base_url, "https://api.anthropic.com");
-        assert_eq!(classifier.timeout, Duration::from_secs(600));
-        assert_eq!(classifier.max_retries, 2);
+        assert_eq!(classifier.timeout, Duration::from_secs(20));
+        assert_eq!(classifier.max_retries, 1);
+        assert_eq!(classifier.retry_start, Duration::from_millis(500));
+        assert_eq!(ATTEMPT_TIMEOUT, Duration::from_secs(20));
+        assert_eq!(MAX_RETRIES, 1);
+    }
+
+    #[test]
+    fn the_schemas_tier_enum_is_exactly_the_shared_tiers_in_order() {
+        let schema = verdict_schema();
+        let listed: Vec<&str> = schema["properties"]["tier"]["enum"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|name| name.as_str().unwrap())
+            .collect();
+        let tiers: Vec<&str> = Tier::ALL.iter().map(|tier| tier.as_str()).collect();
+        assert_eq!(listed, tiers);
+        assert!(schema["properties"]["tier"].get("description").is_none());
+        assert!(schema.get("description").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_model_slower_than_the_timeout_gets_exactly_two_attempts_then_degrades() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let seen = calls.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = axum::Router::new().route(
+            "/v1/messages",
+            post(move || {
+                let seen = seen.clone();
+                async move {
+                    seen.fetch_add(1, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    "late"
+                }
+            }),
+        );
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        let attempt_timeout = Duration::from_millis(150);
+        let backoff = Duration::from_millis(50);
+        // The default retry count, with only the clock shortened.
+        let classifier = Classifier::new(Ok("k".to_owned()), format!("http://{address}"))
+            .with_timeout(attempt_timeout)
+            .with_retries(MAX_RETRIES, backoff);
+
+        let started = std::time::Instant::now();
+        let (verdict, logged) = classify_logged(&classifier, &mail()).await;
+        let elapsed = started.elapsed();
+        server.abort();
+
+        assert!(verdict.degraded);
+        assert_eq!(logged.len(), 1);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert!(elapsed >= attempt_timeout * 2 + backoff, "{elapsed:?}");
+        assert!(
+            elapsed < attempt_timeout * 2 + backoff + Duration::from_secs(2),
+            "{elapsed:?}"
+        );
     }
 }
