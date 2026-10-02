@@ -56,7 +56,7 @@ pub async fn settle_claim(
     // account-wide Cloudflare quota and the route that leads here is polled by
     // an anonymous browser, so the question is rationed per claim rather than
     // per request.
-    if let (false, Some(address_id)) = (cloudflare_verified, claim.cf_address_id.as_deref()) {
+    if let (false, Some(address_id)) = (cloudflare_verified, registered_address_id(&claim)) {
         if take_cloudflare_check(db, &claim.handle, now).await? {
             let current = cloudflare.destination_status(address_id).await?;
             if let Some(verified_at) = current.and_then(|destination| destination.verified_at) {
@@ -91,6 +91,15 @@ pub async fn settle_claim(
         live,
         stalled,
     }))
+}
+
+/// The Cloudflare address id, when the claim has a usable one. An empty id
+/// means nothing was registered, as the TypeScript's falsy check took it.
+fn registered_address_id(claim: &InboxClaim) -> Option<&str> {
+    claim
+        .cf_address_id
+        .as_deref()
+        .filter(|id| !id.trim().is_empty())
 }
 
 #[cfg(test)]
@@ -314,6 +323,25 @@ mod tests {
 
         assert!(!state.cloudflare_verified && !state.live && !state.stalled);
         assert!(stub.sent().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_empty_address_id_is_unregistered_and_spends_no_check() {
+        for blank in ["", "  "] {
+            let db = TestDb::fresh().await;
+            claiming(&db, Some(blank), true).await;
+            let (stub, cloudflare) = confirmed_cloudflare().await;
+
+            let state = settle_claim(&db, &cloudflare, HANDLE, NOW)
+                .await
+                .unwrap()
+                .unwrap();
+
+            assert!(!state.cloudflare_verified && !state.live && !state.stalled);
+            assert!(stub.sent().is_empty(), "{blank:?} asked Cloudflare");
+            let claim = claim_by_handle(&db, HANDLE).await.unwrap().unwrap();
+            assert_eq!(claim.cf_checks, 0, "{blank:?} consumed a check slot");
+        }
     }
 
     /// An outage is a failure, never "not verified yet"; the check it spent

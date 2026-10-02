@@ -13,6 +13,7 @@ use crate::config::{ConfigError, required};
 use crate::db::challenges::{claim_hold, mark_delivered};
 use crate::db::inboxes::inbox_by_handle;
 use crate::db::{Db, DbError};
+use crate::log;
 
 /// How long the worker may take to say whether it sent the message. The
 /// TypeScript set none; the request is bounded so a hung worker cannot hold a
@@ -71,8 +72,8 @@ pub struct MailWorker {
     secret: String,
     timeout: Duration,
     /// Set when the worker's settings were missing when it was built: every
-    /// release then fails as the TypeScript's did, by `required()` throwing
-    /// inside the send and the gate carrying on without the message.
+    /// release then fails without touching the hold, and the gate carries on
+    /// without the message.
     missing: Option<ConfigError>,
 }
 
@@ -130,7 +131,8 @@ impl MailWorker {
 
     /// Sends the message held under `token` to `handle`'s inbox.
     ///
-    /// The hold is claimed first, and claiming is one conditional update: two
+    /// A worker with missing settings fails before anything is claimed. Then
+    /// the hold is claimed, and claiming is one conditional update: two
     /// clicks a second apart cannot both come away believing they may send
     /// it, so a message cannot be delivered twice. A failure afterwards leaves
     /// the sender with the paste-it-back route rather than a duplicate in
@@ -146,6 +148,15 @@ impl MailWorker {
         let Some(inbox) = inbox_by_handle(db, handle).await? else {
             return Ok(Release::Undelivered(Undelivered::NoInbox));
         };
+        if let Some(missing) = &self.missing {
+            // Before the claim: spending the hold on a send that cannot happen
+            // would lose a message that is still waiting on the worker.
+            log::error(
+                "mail worker not configured, held message kept",
+                &[("reason", missing)],
+            );
+            return Ok(Release::Undelivered(Undelivered::SendFailed));
+        }
         if !claim_hold(db, token, now).await? {
             return Ok(Release::Undelivered(Undelivered::Expired));
         }
@@ -163,9 +174,6 @@ impl MailWorker {
     /// Whether the worker answered 2xx. The body is not read: the TypeScript
     /// took any success status as sent.
     async fn send(&self, token: &str, destination: &str) -> bool {
-        if self.missing.is_some() {
-            return false;
-        }
         let request = ReleaseRequest {
             token: token.to_owned(),
             to: destination.to_owned(),
@@ -461,20 +469,41 @@ mod tests {
         );
     }
 
-    /// The TypeScript read both settings inside the send, so a deployment
-    /// without them still opened the gate and only lost the release.
+    /// Missing settings must not spend the hold: the message is still on the
+    /// worker, and once the deployment is fixed the same token can release it.
+    /// (The TypeScript claimed first and lost the message.) The sender sees the
+    /// same outcome as any failed send.
     #[tokio::test]
-    async fn an_unconfigured_worker_fails_the_send_but_not_the_release() {
+    async fn an_unconfigured_worker_fails_the_release_but_keeps_the_hold_claimable() {
+        use crate::log::captured;
+
         let db = with_inbox().await;
         held(&db, "unconfigured").await;
-        let worker = MailWorker::from_env_or_unconfigured(|_| None);
+        let unconfigured = MailWorker::from_env_or_unconfigured(|_| None);
 
-        let release = worker
+        let (release, lines) =
+            captured::during(unconfigured.release_held_message(&db, "unconfigured", HANDLE, NOW))
+                .await;
+
+        assert_eq!(
+            release.unwrap(),
+            Release::Undelivered(Undelivered::SendFailed)
+        );
+        let challenge = challenge_by_token(&db, "unconfigured")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(challenge.held_until, Some(NOW + 900));
+        assert_eq!(challenge.delivered_at, None);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("MAIL_WORKER_URL"), "{}", lines[0]);
+
+        let stub = serve(&[(RELEASE_PATH, 200, r#"{"sent":true}"#)]).await;
+        let release = worker(&stub)
             .release_held_message(&db, "unconfigured", HANDLE, NOW)
             .await
             .unwrap();
-
-        assert_eq!(release, Release::Undelivered(Undelivered::SendFailed));
+        assert_eq!(release, Release::Delivered);
     }
 
     #[test]
