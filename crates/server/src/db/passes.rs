@@ -179,7 +179,8 @@ pub async fn extend_pass_if_expiring(
 
 /// Adds one paid delivery. Never reduces what is already there: an unlimited
 /// window earned by proving personhood is left alone, a counted pass gains a
-/// use, and a sender with neither gets one. Overwriting instead would let a
+/// use - even one whose window has lapsed, which comes back fresh with the
+/// unspent uses plus this one - and a sender with neither gets one. Overwriting instead would let a
 /// second payment land on a pass that already had a use and buy nothing.
 ///
 /// The unlimited-window branch also stamps `paid_extended_at`. There is no
@@ -192,10 +193,18 @@ pub async fn add_paid_use(db: &Db, handle: &str, sender: &str, now: i64) -> Resu
     let sender_key = sender.to_lowercase();
     let topped = db
         .run(
-            "UPDATE passes SET uses_left = uses_left + 1, expires_at = ?
-          WHERE handle = ? AND sender = ? AND expires_at > ? AND uses_left IS NOT NULL",
+            "UPDATE passes SET
+            uses_left = uses_left + 1,
+            expires_at = ?,
+            reason = CASE WHEN expires_at > ? THEN reason ELSE 'paid' END,
+            created_at = CASE WHEN expires_at > ? THEN created_at ELSE ? END
+          WHERE handle = ? AND sender = ? AND uses_left IS NOT NULL
+            AND (expires_at > ? OR uses_left > 0)",
             params![
                 now + PASS_WINDOW_SECONDS,
+                now,
+                now,
+                now,
                 handle_key.as_str(),
                 sender_key.as_str(),
                 now
@@ -269,6 +278,28 @@ mod tests {
             .unwrap();
         rows.into_iter().next().and_then(|row| row.uses_left)
     }
+
+    #[derive(Debug, PartialEq, Eq, Deserialize)]
+    struct StoredPass {
+        reason: String,
+        expires_at: i64,
+        uses_left: Option<i64>,
+        created_at: i64,
+    }
+
+    async fn stored_pass(db: &Db) -> StoredPass {
+        let rows: Vec<StoredPass> = db
+            .all(
+                "SELECT reason, expires_at, uses_left, created_at FROM passes
+                 WHERE handle = ? AND sender = ?",
+                params![HANDLE, SENDER],
+            )
+            .await
+            .unwrap();
+        rows.into_iter().next().expect("the pass row must exist")
+    }
+
+    const AFTER_EXPIRY: i64 = NOW + PASS_WINDOW_SECONDS + 100;
 
     async fn matches_earned_condition(db: &Db, handle: &str, sender: &str) -> bool {
         let rows: Vec<Present> = db
@@ -436,5 +467,159 @@ mod tests {
 
         assert_eq!(delivered, 1);
         assert_eq!(uses_left_of(&first, HANDLE, SENDER).await, Some(0));
+    }
+
+    #[tokio::test]
+    async fn a_payment_on_an_expired_pass_with_uses_left_adds_one_use_in_a_fresh_window() {
+        let db = TestDb::fresh().await;
+        grant_pass(&db, HANDLE, SENDER, "paid", Some(3), NOW)
+            .await
+            .unwrap();
+
+        add_paid_use(&db, HANDLE, SENDER, AFTER_EXPIRY)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            stored_pass(&db).await,
+            StoredPass {
+                reason: "paid".to_owned(),
+                expires_at: AFTER_EXPIRY + PASS_WINDOW_SECONDS,
+                uses_left: Some(4),
+                created_at: AFTER_EXPIRY,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_payment_on_a_live_counted_pass_adds_one_use_and_renews_the_window() {
+        let db = TestDb::fresh().await;
+        grant_pass(&db, HANDLE, SENDER, "paid", Some(2), NOW)
+            .await
+            .unwrap();
+
+        add_paid_use(&db, HANDLE, SENDER, NOW + 10).await.unwrap();
+
+        assert_eq!(
+            stored_pass(&db).await,
+            StoredPass {
+                reason: "paid".to_owned(),
+                expires_at: NOW + 10 + PASS_WINDOW_SECONDS,
+                uses_left: Some(3),
+                created_at: NOW,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_payment_with_no_pass_creates_one_with_a_single_use() {
+        let db = TestDb::fresh().await;
+
+        add_paid_use(&db, HANDLE, SENDER, NOW).await.unwrap();
+
+        assert_eq!(
+            stored_pass(&db).await,
+            StoredPass {
+                reason: "paid".to_owned(),
+                expires_at: NOW + PASS_WINDOW_SECONDS,
+                uses_left: Some(1),
+                created_at: NOW,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_payment_on_a_live_unlimited_window_extends_it_and_leaves_uses_left_null() {
+        let db = TestDb::fresh().await;
+        grant_pass(&db, HANDLE, SENDER, "human", None, NOW)
+            .await
+            .unwrap();
+
+        add_paid_use(&db, HANDLE, SENDER, NOW + 10).await.unwrap();
+
+        assert_eq!(
+            stored_pass(&db).await,
+            StoredPass {
+                reason: "human".to_owned(),
+                expires_at: NOW + 10 + PASS_WINDOW_SECONDS,
+                uses_left: None,
+                created_at: NOW,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_payment_on_an_expired_pass_with_no_uses_left_grants_a_single_use() {
+        let db = TestDb::fresh().await;
+        grant_pass(&db, HANDLE, SENDER, "paid", Some(1), NOW)
+            .await
+            .unwrap();
+        spend_pass(&db, HANDLE, SENDER, false, NOW).await.unwrap();
+
+        add_paid_use(&db, HANDLE, SENDER, AFTER_EXPIRY)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            stored_pass(&db).await,
+            StoredPass {
+                reason: "paid".to_owned(),
+                expires_at: AFTER_EXPIRY + PASS_WINDOW_SECONDS,
+                uses_left: Some(1),
+                created_at: AFTER_EXPIRY,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_payment_on_an_expired_unlimited_window_grants_a_single_use() {
+        let db = TestDb::fresh().await;
+        grant_pass(&db, HANDLE, SENDER, "human", None, NOW)
+            .await
+            .unwrap();
+
+        add_paid_use(&db, HANDLE, SENDER, AFTER_EXPIRY)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            stored_pass(&db).await,
+            StoredPass {
+                reason: "paid".to_owned(),
+                expires_at: AFTER_EXPIRY + PASS_WINDOW_SECONDS,
+                uses_left: Some(1),
+                created_at: AFTER_EXPIRY,
+            }
+        );
+    }
+
+    /// Two payments arriving together on a lapsed pass must both count: the
+    /// first renews the window, the second lands on the renewed pass.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn two_concurrent_payments_on_an_expired_pass_add_two_uses() {
+        let first = Arc::new(TestDb::fresh().await);
+        let second = Arc::new(first.second_handle().await);
+        grant_pass(&first, HANDLE, SENDER, "paid", Some(3), NOW)
+            .await
+            .unwrap();
+
+        let racers: Vec<_> = (0..2)
+            .map(|index| {
+                let first = Arc::clone(&first);
+                let second = Arc::clone(&second);
+                tokio::spawn(async move {
+                    if index == 0 {
+                        add_paid_use(&first, HANDLE, SENDER, AFTER_EXPIRY).await
+                    } else {
+                        add_paid_use(&second, HANDLE, SENDER, AFTER_EXPIRY).await
+                    }
+                })
+            })
+            .collect();
+        for racer in racers {
+            racer.await.unwrap().unwrap();
+        }
+
+        assert_eq!(uses_left_of(&first, HANDLE, SENDER).await, Some(5));
     }
 }
