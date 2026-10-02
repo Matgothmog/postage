@@ -5,6 +5,8 @@
 //! environment underneath other tests running in parallel. Production passes
 //! [`process_env`].
 
+use alloy_signer_local::PrivateKeySigner;
+use postage_core::quote::{QuoteSigner, private_key_bytes};
 use postage_core::secret::{MessageIdSecret, SecretError};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -15,6 +17,10 @@ pub enum ConfigError {
         "IDENTITY_MODE is set to an unrecognised value: \"{0}\". Expected \"live\" or \"mock\"."
     )]
     UnrecognisedIdentityMode(String),
+    /// Set, but to something that cannot be what the name says. The value is
+    /// left out: several of these are keys.
+    #[error("{0} is set but is not valid")]
+    Invalid(&'static str),
     #[error(transparent)]
     Secret(#[from] SecretError),
 }
@@ -42,6 +48,26 @@ where
     F: Fn(&str) -> Option<String>,
 {
     Ok(MessageIdSecret::new(required(env, "MESSAGE_ID_SECRET")?)?)
+}
+
+/// The key quotes are signed with; the escrow only honours quotes from the
+/// address it has registered for it.
+pub fn classifier_signer<F>(env: F) -> Result<QuoteSigner, ConfigError>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let key = required(env, "CLASSIFIER_PRIVATE_KEY")?;
+    QuoteSigner::from_hex(&key).map_err(|_| ConfigError::Invalid("CLASSIFIER_PRIVATE_KEY"))
+}
+
+/// The key that pays gas for attestations, read the same way viem reads it.
+pub fn relayer_signer<F>(env: F) -> Result<PrivateKeySigner, ConfigError>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let invalid = || ConfigError::Invalid("RELAYER_PRIVATE_KEY");
+    let bytes = private_key_bytes(&required(env, "RELAYER_PRIVATE_KEY")?).map_err(|_| invalid())?;
+    PrivateKeySigner::from_slice(&bytes).map_err(|_| invalid())
 }
 
 /// The Privy app identity tokens must be issued for, and whose JWKS signs them.
@@ -199,6 +225,55 @@ mod tests {
             message_id_secret(|_| None).map(|_| ()),
             Err(ConfigError::Missing("MESSAGE_ID_SECRET"))
         );
+    }
+
+    fn with_key(name: &'static str, value: &str) -> impl Fn(&str) -> Option<String> {
+        let value = value.to_owned();
+        move |asked| (asked == name).then(|| value.clone())
+    }
+
+    #[test]
+    fn a_classifier_key_is_read_into_a_signer() {
+        let key = format!("0x{}", "11".repeat(32));
+        let signer = classifier_signer(with_key("CLASSIFIER_PRIVATE_KEY", &key)).unwrap();
+        assert_eq!(
+            signer.address().to_checksum(None),
+            "0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A"
+        );
+    }
+
+    #[test]
+    fn a_missing_or_malformed_classifier_key_is_named_without_its_value() {
+        assert_eq!(
+            classifier_signer(|_| None).map(|_| ()),
+            Err(ConfigError::Missing("CLASSIFIER_PRIVATE_KEY"))
+        );
+        let error = classifier_signer(with_key("CLASSIFIER_PRIVATE_KEY", "0xdeadbeef"))
+            .map(|_| ())
+            .unwrap_err();
+        assert_eq!(error, ConfigError::Invalid("CLASSIFIER_PRIVATE_KEY"));
+        assert!(!error.to_string().contains("deadbeef"));
+    }
+
+    #[test]
+    fn a_relayer_key_is_read_into_a_signer_with_the_same_address_viem_derives() {
+        let key = format!("0x{}", "11".repeat(32));
+        let signer = relayer_signer(with_key("RELAYER_PRIVATE_KEY", &key)).unwrap();
+        assert_eq!(
+            signer.address().to_checksum(None),
+            "0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A"
+        );
+    }
+
+    #[test]
+    fn a_relayer_key_without_its_prefix_or_of_zero_is_invalid() {
+        for key in ["11".repeat(32), format!("0x{}", "00".repeat(32))] {
+            assert_eq!(
+                relayer_signer(with_key("RELAYER_PRIVATE_KEY", &key)).map(|_| ()),
+                Err(ConfigError::Invalid("RELAYER_PRIVATE_KEY")),
+                "{key}"
+            );
+        }
     }
 
     #[test]

@@ -88,7 +88,7 @@ where
 /// JavaScript's `Number(text)` for a string: surrounding whitespace ignored,
 /// empty is 0, `0x`/`0o`/`0b` literals and signed `Infinity` accepted, and
 /// anything else that is not a plain decimal literal is NaN.
-fn js_number(text: &str) -> f64 {
+pub(crate) fn js_number(text: &str) -> f64 {
     let trimmed = text.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
     if trimmed.is_empty() {
         return 0.0;

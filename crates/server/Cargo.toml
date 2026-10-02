@@ -9,6 +9,13 @@ publish.workspace = true
 [dependencies]
 postage-core = { workspace = true }
 postage-shared = { workspace = true }
+# alloy 1.7 is the last line on reqwest 0.12, the version this crate shares.
+alloy-network = "~1.7"
+alloy-primitives = "1"
+alloy-provider = { version = "~1.7", default-features = false, features = ["reqwest", "reqwest-rustls-tls"] }
+alloy-rpc-types-eth = "~1.7"
+alloy-signer-local = "~1.7"
+alloy-sol-types = "1"
 axum = { workspace = true }
 futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
 libsql = { version = "0.9.30", default-features = false, features = ["core", "remote", "tls", "serde"] }
@@ -16,9 +23,10 @@ reqwest = { version = "0.12.28", default-features = false, features = ["rustls-t
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["sync", "time"] }
 
 [dev-dependencies]
+alloy-consensus = { version = "~1.7", features = ["k256"] }
 base64 = "0.22.1"
 p256 = { version = "0.13.2", default-features = false, features = ["ecdsa"] }
 rand_core = { version = "0.9.5", features = ["os_rng"] }

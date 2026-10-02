@@ -42,6 +42,14 @@ impl MessageIdSecret {
         }
         Ok(Self(value.into_bytes()))
     }
+
+    /// A fresh MAC keyed with the raw secret, which is what message ids are
+    /// HMACed with (`quote::message_id_for`). Unlike the derived keys below,
+    /// this predates the HKDF split: ids made under it are already onchain,
+    /// so it stays the raw bytes they were made with.
+    pub(crate) fn message_id_mac(&self) -> Result<HmacSha256, SecretError> {
+        HmacSha256::new_from_slice(&self.0).map_err(|_| SecretError::Derivation("message id"))
+    }
 }
 
 impl fmt::Debug for MessageIdSecret {

@@ -2,10 +2,14 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+pub mod chain;
 pub mod classify;
 pub mod config;
 pub mod db;
+pub mod graph;
+pub mod network;
 pub mod privy;
+pub mod reputation;
 
 use axum::{Json, Router, routing::get};
 use serde_json::{Value, json};

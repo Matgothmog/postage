@@ -1,5 +1,23 @@
 use serde::Deserialize;
 
+/// The one query the network page renders from, sent to our own subgraph.
+pub const OVERVIEW: &str = r#"
+  query Overview {
+    vaults(first: 1) { totalFunded toTreasury toSponsorship refilledToRelayer fundingEvents }
+    enclaves(first: 5) { id measurement revoked registeredAt }
+    humanAttestations(first: 500, orderBy: attestedAt, orderDirection: desc) { id attestedAt }
+    inboxes(first: 12, orderBy: earned, orderDirection: desc) {
+      id floorPrice receivedCount earned claimed
+    }
+    senders(first: 12, orderBy: paidCount, orderDirection: desc) {
+      id paidCount totalPaid spamReports spamRate humanUntil
+    }
+    payments(first: 25, orderBy: paidAt, orderDirection: desc) {
+      id tier amount toVault reportedAsSpam paidAt tx sender { id } inbox { id }
+    }
+  }
+"#;
+
 /// Gas one attestation costs on Arc at 25 gwei, measured. Used to state the
 /// sponsorship pool in the unit that means something: people onboarded.
 pub const ATTESTATION_COST: u128 = 75_395 * 25_000_000_000;
