@@ -9,10 +9,19 @@ publish.workspace = true
 [dependencies]
 alloy-primitives = "1"
 alloy-sol-types = { version = "1", features = ["json"] }
+hex = "0.4.3"
+hkdf = "0.12.4"
+hmac = "0.12.1"
 postage-shared = { workspace = true }
+rand_core = "0.9.5"
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = "0.10.9"
+subtle = "2.6.1"
 thiserror = { workspace = true }
+
+[dev-dependencies]
+rand_core = { version = "0.9.5", features = ["os_rng"] }
 
 [lints]
 workspace = true

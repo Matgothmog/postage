@@ -1,5 +1,7 @@
 //! Axum router served by the Vercel function in `api/index.rs`.
 
+pub mod config;
+
 use axum::{Json, Router, routing::get};
 use serde_json::{Value, json};
 
