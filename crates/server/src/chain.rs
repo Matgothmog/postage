@@ -211,8 +211,14 @@ impl Chain {
 
     /// Reads the receipt now and then every `poll_interval` until one exists
     /// or `timeout` passes. `Ok(true)` is a mined success, `Ok(false)` a mined
-    /// revert: a receipt is not a success on its own. A failed read ends the
-    /// wait with that error, since the outcome is then just as unknown.
+    /// revert: a receipt is not a success on its own.
+    ///
+    /// A read that fails for a transient reason (see
+    /// [`ChainError::is_transient`]) does not end the wait: the next poll asks
+    /// again, as viem's `waitForTransactionReceipt` does with a failed read,
+    /// and only the bound gives up, as [`ChainError::ReceiptTimeout`]. Any
+    /// other failure is a misconfiguration that more polling cannot fix, so
+    /// it ends the wait with that error.
     pub async fn wait_for_receipt(
         &self,
         hash: TxHash,
@@ -221,8 +227,15 @@ impl Chain {
     ) -> Result<bool, ChainError> {
         let poll = async {
             loop {
-                if let Some(receipt) = self.provider.get_transaction_receipt(hash).await? {
-                    return Ok(receipt.status());
+                match self.provider.get_transaction_receipt(hash).await {
+                    Ok(Some(receipt)) => return Ok(receipt.status()),
+                    Ok(None) => {}
+                    Err(error) => {
+                        let error = ChainError::from(error);
+                        if !error.is_transient() {
+                            return Err(error);
+                        }
+                    }
                 }
                 tokio::time::sleep(poll_interval).await;
             }
@@ -692,6 +705,76 @@ mod tests {
 
         assert!(succeeded);
         assert_eq!(stub.calls("eth_getTransactionReceipt").len(), 3);
+    }
+
+    /// A node whose receipt reads answer from `script` in order, then with
+    /// `then` forever.
+    async fn scripted_receipt_node(script: Vec<Answer>, then: Answer) -> Stub {
+        let reads = Arc::new(Mutex::new(0usize));
+        node(move |method, _| match method {
+            "eth_getTransactionReceipt" => {
+                let mut count = reads.lock().unwrap();
+                let answer = script.get(*count).unwrap_or(&then).clone();
+                *count += 1;
+                answer
+            }
+            other => Err((-32601, format!("{other} not stubbed"))),
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn a_transient_read_failure_does_not_end_the_receipt_wait() {
+        let stub = scripted_receipt_node(
+            vec![
+                Err((-32005, "limit exceeded".to_owned())),
+                Err((-32603, "internal error".to_owned())),
+                Ok(Value::Null),
+            ],
+            Ok(receipt("0x1")),
+        )
+        .await;
+
+        let succeeded = Chain::new(stub.url.clone())
+            .wait_for_receipt(B256::repeat_byte(0xcd), Duration::from_secs(5), FAST)
+            .await
+            .unwrap();
+
+        assert!(succeeded);
+        assert_eq!(stub.calls("eth_getTransactionReceipt").len(), 4);
+    }
+
+    #[tokio::test]
+    async fn read_failures_until_the_bound_are_an_unknown_outcome_naming_the_hash() {
+        let stub = scripted_receipt_node(vec![], Err((-32005, "limit exceeded".to_owned()))).await;
+        let hash = B256::repeat_byte(0xcd);
+
+        let error = Chain::new(stub.url.clone())
+            .wait_for_receipt(hash, Duration::from_millis(100), FAST)
+            .await
+            .unwrap_err();
+
+        assert_eq!(error, ChainError::ReceiptTimeout(hash));
+        assert!(stub.calls("eth_getTransactionReceipt").len() > 1);
+    }
+
+    #[tokio::test]
+    async fn a_non_transient_read_failure_ends_the_receipt_wait_at_once() {
+        let stub = scripted_receipt_node(vec![], Err((-32000, "bad request".to_owned()))).await;
+
+        let error = Chain::new(stub.url.clone())
+            .wait_for_receipt(B256::repeat_byte(0xcd), Duration::from_secs(5), FAST)
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            error,
+            ChainError::Rpc {
+                code: -32000,
+                message: "bad request".to_owned()
+            }
+        );
+        assert_eq!(stub.calls("eth_getTransactionReceipt").len(), 1);
     }
 
     #[tokio::test]
