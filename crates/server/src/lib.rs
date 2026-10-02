@@ -22,6 +22,8 @@ pub mod network;
 pub mod privy;
 pub mod reputation;
 mod routes;
+pub mod world;
+pub mod world_verify;
 
 pub use app::AppState;
 pub use routes::router;

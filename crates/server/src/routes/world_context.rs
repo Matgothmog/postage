@@ -21,7 +21,7 @@ use rand_core::{OsRng, TryRngCore};
 use serde::Serialize;
 use serde_json::Value;
 
-use super::js::{TypeError, property, request_json};
+use super::js::{TypeError, field, request_json};
 use super::{Exit, RouteResult, json, refuse};
 use crate::app::AppState;
 use crate::config::required;
@@ -48,7 +48,9 @@ pub(crate) async fn post(State(state): State<AppState>, body: Bytes) -> RouteRes
     let Ok(body) = request_json(&body) else {
         return Err(refuse(StatusCode::BAD_REQUEST, "Body must be JSON"));
     };
-    let token = match property(&body, "token")? {
+    // `null` or a non-object has no token: refused here, before anything is
+    // read or signed, where destructuring it threw in the TypeScript.
+    let token = match field(&body, "token") {
         Some(Value::String(token)) if !token.is_empty() => token,
         _ => {
             return Err(refuse(
@@ -382,6 +384,29 @@ mod tests {
         for token in [json!(42), json!(""), json!(null), json!(["tok"])] {
             let answer = context(&db, &json!({ "token": token }).to_string()).await;
             assert_eq!(answer.status, StatusCode::BAD_REQUEST, "{token}");
+        }
+    }
+
+    /// Destructuring a `null` body threw in the TypeScript, which Next.js
+    /// answered with a bare 500. A deliberate change: refused with a 400
+    /// before the challenge is read or a context recorded.
+    #[tokio::test]
+    async fn a_body_with_no_token_to_read_is_refused_and_nothing_is_issued() {
+        let db = seeded().await;
+
+        for body in ["null", "[]", "42", r#""tok""#] {
+            let answer = context(&db, body).await;
+
+            assert_eq!(answer.status, StatusCode::BAD_REQUEST, "{body}");
+            assert_eq!(
+                answer.body,
+                json!({ "error": "A challenge token is required" }),
+                "{body}"
+            );
+        }
+        for issued in 0..MAX_LIVE_CONTEXTS_PER_TOKEN {
+            let answer = context(&db, &token_body(TOKEN)).await;
+            assert_eq!(answer.status, StatusCode::OK, "context {issued}");
         }
     }
 

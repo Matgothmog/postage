@@ -11,7 +11,7 @@ mod challenge_resolve;
 mod challenge_view;
 mod inbox;
 mod inbox_verify;
-mod js;
+pub(crate) mod js;
 mod mail_inbound;
 mod network_view;
 #[cfg(test)]
@@ -34,7 +34,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::app::AppState;
-use crate::faults::{reason_chain, redact};
+use crate::faults::{BoxError, reason_chain, redact};
 use crate::log;
 
 /// Builds the API router. Vercel rewrites every request to the single
@@ -122,6 +122,19 @@ pub(crate) struct Unhandled(Arc<dyn Error + Send + Sync + 'static>);
 impl<E: Error + Send + Sync + 'static> From<E> for Unhandled {
     fn from(error: E) -> Self {
         Self(Arc::new(error))
+    }
+}
+
+impl Unhandled {
+    /// For a failure that arrives already boxed, as a `catch` clause's would.
+    pub(crate) fn from_boxed(error: BoxError) -> Self {
+        Self(Arc::from(error))
+    }
+
+    /// What will be logged, for a test that answers without the router.
+    #[cfg(test)]
+    pub(crate) fn error(&self) -> &(dyn Error + Send + Sync + 'static) {
+        self.0.as_ref()
     }
 }
 

@@ -31,6 +31,7 @@ use crate::mail::Mailer;
 use crate::privy::{
     Clock, HttpJwks, JwksError, JwksFetch, JwksResponse, PrivyVerifier, system_clock,
 };
+use crate::world::WorldVerify;
 
 /// A database handle shared by every request: the process's own, or a test's
 /// `TestDb`, which owns the temporary directory the file lives in.
@@ -54,6 +55,7 @@ struct Services {
     classifier: OnceLock<Classifier>,
     /// One per process: the JWKS cache lives inside it.
     privy: OnceLock<PrivyVerifier>,
+    world: OnceLock<WorldVerify>,
 }
 
 impl fmt::Debug for AppState {
@@ -83,6 +85,7 @@ impl AppState {
             cloudflare: None,
             classifier: None,
             privy: None,
+            world: None,
         }
     }
 
@@ -161,6 +164,12 @@ impl AppState {
             .get_or_init(|| Cloudflare::from_env_or_unconfigured(self.0.env.lookup()))
     }
 
+    /// World's Developer Portal verify endpoint. Needs no settings of its
+    /// own: the relying party id is read per call, as the TypeScript did.
+    pub fn world(&self) -> &WorldVerify {
+        self.0.world.get_or_init(WorldVerify::default)
+    }
+
     pub fn classifier(&self) -> &Classifier {
         self.0
             .classifier
@@ -211,6 +220,7 @@ pub struct AppStateBuilder {
     cloudflare: Option<Cloudflare>,
     classifier: Option<Classifier>,
     privy: Option<PrivyVerifier>,
+    world: Option<WorldVerify>,
 }
 
 impl fmt::Debug for AppStateBuilder {
@@ -268,6 +278,11 @@ impl AppStateBuilder {
         self
     }
 
+    pub fn world(mut self, world: WorldVerify) -> Self {
+        self.world = Some(world);
+        self
+    }
+
     pub fn build(self) -> AppState {
         AppState(Arc::new(Services {
             env: self.env,
@@ -280,6 +295,7 @@ impl AppStateBuilder {
             cloudflare: preset(self.cloudflare),
             classifier: preset(self.classifier),
             privy: preset(self.privy),
+            world: preset(self.world),
         }))
     }
 }

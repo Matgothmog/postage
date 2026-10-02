@@ -20,6 +20,7 @@ pub mod reputation;
 pub mod rp_context;
 pub mod rp_signature;
 pub mod secret;
+pub mod signal;
 pub mod statements;
 pub mod tiers;
 pub mod time;
