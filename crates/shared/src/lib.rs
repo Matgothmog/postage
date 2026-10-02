@@ -1,9 +1,11 @@
 //! Wire types shared across the Postage crates.
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn crate_builds_and_tests_run() {
-        assert_eq!(2 + 2, 4);
-    }
-}
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+
+mod release;
+mod tier;
+mod verdict;
+
+pub use release::{RELEASE_PATH, RELEASE_SECRET_HEADER, ReleaseRequest, ReleaseResponse};
+pub use tier::Tier;
+pub use verdict::{GatewayAction, GatewayNotice, GatewayVerdict};

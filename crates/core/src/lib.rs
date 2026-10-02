@@ -1,9 +1,10 @@
 //! Pure domain logic: no network, database or clock access lives here.
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn crate_builds_and_tests_run() {
-        assert_eq!(2 + 2, 4);
-    }
-}
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+
+pub mod brand;
+pub mod errors;
+pub mod format;
+pub mod handle;
+pub mod tiers;
+pub mod time;
