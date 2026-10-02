@@ -22,6 +22,7 @@ pub mod testing;
 
 use std::borrow::Cow;
 use std::fmt;
+use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use libsql::params::IntoParams;
@@ -35,10 +36,16 @@ pub use libsql::Value;
 /// same default the TypeScript had.
 pub const DEFAULT_DATABASE_URL: &str = "file:.data/postage.db";
 
-/// How long a local connection waits for another one's write lock before
-/// giving up. Transactions open a connection of their own, so on a local file
-/// two writers can genuinely meet; Turso serialises writes on its side.
-const LOCAL_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long a local connection waits for another one's lock before giving
+/// up. Every operation runs on a connection of its own, so on a local file two
+/// of them can genuinely meet; Turso serialises writes on its side. Five
+/// seconds was too short for a burst of 160 first payments queueing behind
+/// each other's disk syncs in `passes`' race test.
+const LOCAL_BUSY_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How many finished connections a handle keeps for the next operation. Past
+/// this, a burst's extra connections are closed instead of held open forever.
+const MAX_IDLE_CONNECTIONS: usize = 16;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
@@ -88,12 +95,17 @@ enum Location {
     Remote,
 }
 
+/// Every operation borrows a connection no other operation is using, and
+/// hands it back when done. Sharing one between concurrent requests is wrong
+/// twice over: SQLite reports a changed-row count per connection, so one
+/// request could be handed another's count, and on a local file a read in
+/// flight on a shared connection makes a concurrent write on it fail with
+/// "database is locked" at once rather than wait for the lock.
 pub struct Db {
     database: Database,
-    /// Shared by every plain query. Transactions never use it: a `BEGIN` on a
-    /// connection other requests are also using would sweep their statements
-    /// into this transaction.
-    connection: Connection,
+    /// Connections with no operation running on them, kept so the next
+    /// operation does not pay to open one - on Turso, a TLS handshake.
+    idle: Mutex<Vec<Connection>>,
     location: Location,
 }
 
@@ -126,10 +138,12 @@ impl Db {
             }
         };
         let database = database.map_err(DbError::Open)?;
+        // Opened now so a database that cannot be connected to fails here,
+        // not on the first query.
         let connection = new_connection(&database, location)?;
         Ok(Self {
             database,
-            connection,
+            idle: Mutex::new(vec![connection]),
             location,
         })
     }
@@ -184,12 +198,18 @@ impl Db {
     where
         T: DeserializeOwned,
     {
-        query_all(&self.connection, sql, params).await
+        let connection = self.checkout()?;
+        let rows = query_all(&connection, sql, params).await;
+        self.check_in(connection, rows.is_ok());
+        rows
     }
 
     /// Runs a statement that returns no rows, and says how many it changed.
     pub async fn run(&self, sql: &str, params: impl IntoParams) -> Result<u64, DbError> {
-        execute(&self.connection, sql, params).await
+        let connection = self.checkout()?;
+        let changed = execute(&connection, sql, params).await;
+        self.check_in(connection, changed.is_ok());
+        changed
     }
 
     /// Runs every statement or none of them.
@@ -210,6 +230,37 @@ impl Db {
             .await
             .map_err(|source| query_error("BEGIN IMMEDIATE", source))?;
         Ok(Transaction { inner })
+    }
+
+    /// A connection no other operation is using: an idle one when there is
+    /// one, a new one otherwise.
+    fn checkout(&self) -> Result<Connection, DbError> {
+        let reused = self.idle_connections().pop();
+        match reused {
+            Some(connection) => Ok(connection),
+            None => new_connection(&self.database, self.location),
+        }
+    }
+
+    /// Keeps `connection` for the next operation. One whose operation failed,
+    /// or that is somehow inside a transaction, is closed instead: whatever
+    /// state the failure left it in must not leak into an unrelated request.
+    /// A future dropped mid-operation never gets here, so its connection is
+    /// closed too.
+    fn check_in(&self, connection: Connection, succeeded: bool) {
+        if !succeeded || !connection.is_autocommit() {
+            return;
+        }
+        let mut idle = self.idle_connections();
+        if idle.len() < MAX_IDLE_CONNECTIONS {
+            idle.push(connection);
+        }
+    }
+
+    /// The idle list holds no invariant a panic elsewhere could have broken
+    /// halfway, so a poisoned lock is safe to keep using.
+    fn idle_connections(&self) -> std::sync::MutexGuard<'_, Vec<Connection>> {
+        self.idle.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Empties every table, including ones the schema does not name. Test
@@ -372,6 +423,9 @@ async fn execute(
 mod tests {
     use super::testing::{TestDb, columns_of, index_exists, table_names};
     use super::*;
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     fn node_env(value: Option<&'static str>) -> impl Fn(&str) -> Option<String> {
         move |name| {
@@ -706,6 +760,207 @@ mod tests {
         assert!(
             matches!(&decoded, Err(DbError::Decode { sql, .. }) if sql.contains("spent_wallet_nonces")),
             "{decoded:?}"
+        );
+    }
+
+    const RACED_ROWS: i64 = 32;
+    const ROUNDS: i64 = 20;
+    const RACERS_PER_ROW: i64 = 24;
+    const BURSTS: i64 = 5;
+
+    async fn race_probe(test_db: TestDb) -> Arc<TestDb> {
+        test_db
+            .run(
+                "CREATE TABLE race_probe (id INTEGER PRIMARY KEY, claimed INTEGER NOT NULL DEFAULT 0)",
+                (),
+            )
+            .await
+            .unwrap();
+        test_db
+            .batch(
+                (1..=RACED_ROWS)
+                    .map(|id| {
+                        Statement::new(
+                            "INSERT INTO race_probe (id) VALUES (?)",
+                            vec![Value::from(id)],
+                        )
+                    })
+                    .collect(),
+            )
+            .await
+            .unwrap();
+        Arc::new(test_db)
+    }
+
+    /// Threads that keep every core busy until dropped. A shared connection
+    /// only mixes counts up when a thread loses its core in the instant
+    /// between running a statement and reading the count, which an idle
+    /// machine almost never does.
+    struct CpuPressure {
+        stop: Arc<AtomicBool>,
+        spinners: Vec<std::thread::JoinHandle<()>>,
+    }
+
+    impl CpuPressure {
+        fn start() -> Self {
+            let stop = Arc::new(AtomicBool::new(false));
+            let cores = std::thread::available_parallelism().map_or(4, usize::from);
+            let spinners = (0..cores)
+                .map(|_| {
+                    let stop = Arc::clone(&stop);
+                    std::thread::spawn(move || {
+                        while !stop.load(Ordering::Relaxed) {
+                            std::hint::spin_loop();
+                        }
+                    })
+                })
+                .collect();
+            Self { stop, spinners }
+        }
+    }
+
+    impl Drop for CpuPressure {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::Relaxed);
+            for spinner in self.spinners.drain(..) {
+                spinner.join().unwrap();
+            }
+        }
+    }
+
+    /// Every racer's id and the changed-row count it was handed, after all of
+    /// them raced to claim their row at the same moment.
+    async fn race_for_rows(db: &Arc<TestDb>) -> BTreeMap<i64, Vec<u64>> {
+        let racer_count = RACED_ROWS * RACERS_PER_ROW;
+        let start = Arc::new(tokio::sync::Barrier::new(
+            usize::try_from(racer_count).unwrap(),
+        ));
+        let racers: Vec<_> = (0..racer_count)
+            .map(|index| {
+                let db = Arc::clone(db);
+                let start = Arc::clone(&start);
+                let id = index % RACED_ROWS + 1;
+                tokio::spawn(async move {
+                    start.wait().await;
+                    let changed = db
+                        .run(
+                            "UPDATE race_probe SET claimed = 1 WHERE id = ? AND claimed = 0",
+                            [id],
+                        )
+                        .await
+                        .unwrap();
+                    (id, changed)
+                })
+            })
+            .collect();
+        let mut counts = BTreeMap::<i64, Vec<u64>>::new();
+        for racer in racers {
+            let (id, changed) = racer.await.unwrap();
+            counts.entry(id).or_default().push(changed);
+        }
+        counts
+    }
+
+    /// The "did I win?" shape the table modules rely on, all through the one
+    /// handle every request shares: many tasks race a conditional update of
+    /// the same row, and the count each is handed must be its own statement's
+    /// - exactly one winner per row, never a loser's 0 handed to the winner or
+    /// the winner's 1 handed to a loser.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn racing_conditional_updates_on_one_handle_report_exactly_one_winner_per_row() {
+        let db = race_probe(TestDb::fresh_in_memory_backed_directory().await).await;
+        let _pressure = CpuPressure::start();
+
+        for round in 0..ROUNDS {
+            let counts = race_for_rows(&db).await;
+
+            let wrong: Vec<_> = counts
+                .iter()
+                .filter(|(_, counts)| {
+                    counts.iter().sum::<u64>() != 1 || counts.iter().any(|&count| count > 1)
+                })
+                .map(|(id, _)| id)
+                .collect();
+            assert!(
+                wrong.is_empty(),
+                "round {round}: rows without exactly one winner: {wrong:?}"
+            );
+            db.run("UPDATE race_probe SET claimed = 0", ())
+                .await
+                .unwrap();
+        }
+    }
+
+    /// One of three kinds of operation, picked by `index`: a write inside a
+    /// transaction, a plain write, or a read long enough to still be stepping
+    /// through rows while the others commit.
+    async fn mixed_operation(db: &Db, index: i64) -> Result<(), DbError> {
+        let id = index % RACED_ROWS + 1;
+        let bump = "UPDATE race_probe SET claimed = claimed + 1 WHERE id = ?";
+        match index % 3 {
+            0 => {
+                let transaction = db.transaction().await?;
+                transaction.run(bump, [id]).await?;
+                transaction.commit().await
+            }
+            1 => db.run(bump, [id]).await.map(drop),
+            _ => db
+                .all::<Id>("SELECT rowid AS id FROM spent_wallet_nonces", ())
+                .await
+                .map(drop),
+        }
+    }
+
+    /// On a local file, transactions committing while reads and plain writes
+    /// are in flight on the same handle have to be waited out, never surface
+    /// as "database is locked". A connection already reading cannot be made
+    /// to wait for a write lock - SQLite refuses at once rather than risk a
+    /// deadlock - so this holds only when no operation shares a connection
+    /// with another's read.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn reads_and_writes_on_one_local_handle_wait_out_concurrent_commits() {
+        let db = race_probe(TestDb::fresh_in_memory_backed_directory().await).await;
+        db.batch(
+            (0..2_000_i64)
+                .map(|index| {
+                    Statement::new(
+                        "INSERT INTO spent_wallet_nonces (nonce, expires_at) VALUES (?, ?)",
+                        vec![Value::from(format!("filler-{index}")), Value::from(index)],
+                    )
+                })
+                .collect(),
+        )
+        .await
+        .unwrap();
+
+        let mut failures = Vec::new();
+        for _burst in 0..BURSTS {
+            let operations: Vec<_> = (0..96_i64)
+                .map(|index| {
+                    let db = Arc::clone(&db);
+                    tokio::spawn(async move { mixed_operation(&db, index).await })
+                })
+                .collect();
+            for operation in operations {
+                if let Err(error) = operation.await.unwrap() {
+                    failures.push(error.to_string());
+                }
+            }
+        }
+
+        assert!(failures.is_empty(), "{failures:#?}");
+        #[derive(serde::Deserialize)]
+        struct Total {
+            total: i64,
+        }
+        let totals: Vec<Total> = db
+            .all("SELECT SUM(claimed) AS total FROM race_probe", ())
+            .await
+            .unwrap();
+        assert_eq!(
+            totals.first().map(|row| row.total),
+            Some(BURSTS * 64),
+            "every write must have landed"
         );
     }
 

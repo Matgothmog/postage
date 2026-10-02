@@ -12,6 +12,9 @@ use tempfile::TempDir;
 
 use super::Db;
 
+/// tmpfs on Linux.
+const RAM_BACKED_DIRECTORY: &str = "/dev/shm";
+
 #[derive(Debug)]
 pub struct TestDb {
     // Declared before `directory` so the connection closes before the file
@@ -31,7 +34,22 @@ impl TestDb {
 
     /// A database with no tables at all, for building a legacy shape by hand.
     pub async fn empty() -> Self {
-        let directory = tempfile::tempdir().unwrap();
+        Self::empty_in(tempfile::tempdir().unwrap()).await
+    }
+
+    /// [`TestDb::fresh`] on a RAM-backed directory where the machine has one,
+    /// so commits skip the disk's sync and a race test can run thousands of
+    /// them a second. Falls back to the usual temporary directory.
+    pub async fn fresh_in_memory_backed_directory() -> Self {
+        let directory = tempfile::tempdir_in(RAM_BACKED_DIRECTORY)
+            .or_else(|_| tempfile::tempdir())
+            .unwrap();
+        let test_db = Self::empty_in(directory).await;
+        test_db.bootstrap().await.unwrap();
+        test_db
+    }
+
+    async fn empty_in(directory: TempDir) -> Self {
         let db = Db::connect(&file_url(&directory), "").await.unwrap();
         Self { db, directory }
     }
