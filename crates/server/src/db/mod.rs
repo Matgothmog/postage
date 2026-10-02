@@ -6,11 +6,16 @@
 //! shape does not match is an error at the query rather than a wrong value
 //! somewhere downstream.
 
+pub mod challenges;
+pub mod claims;
+pub mod classifications;
+pub mod inboxes;
 pub mod issued_contexts;
 pub mod migrations;
 pub mod nullifiers;
 pub mod passes;
 pub mod schema;
+pub mod sender_wallets;
 pub mod spent_nonces;
 #[cfg(test)]
 pub mod testing;
@@ -601,17 +606,19 @@ mod tests {
     async fn inboxes_queries_naming_wallet_answer_against_a_healed_legacy_database() {
         let test_db = legacy_inboxes_database().await;
 
-        test_db
-            .create_inbox("demo", "owner@example.com", "0xABC")
-            .await;
+        inboxes::create_inbox(&test_db, "demo", "owner@example.com", Some("0xABC"), 1)
+            .await
+            .unwrap();
 
+        let by_handle = inboxes::inbox_by_handle(&test_db, "demo").await.unwrap();
         assert_eq!(
-            test_db.inbox_wallet_by_handle("demo").await.as_deref(),
+            by_handle.and_then(|inbox| inbox.wallet).as_deref(),
             Some("0xabc"),
             "creating an inbox and reading it by handle must round-trip the wallet"
         );
+        let by_wallet = inboxes::inbox_by_wallet(&test_db, "0xabc").await.unwrap();
         assert_eq!(
-            test_db.inbox_handle_by_wallet("0xabc").await.as_deref(),
+            by_wallet.map(|inbox| inbox.handle).as_deref(),
             Some("demo"),
             "reading by wallet must find the row it was just written to"
         );

@@ -179,6 +179,7 @@ pub async fn add_missing_columns(db: &Db) -> Result<MigrationReport, DbError> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::inboxes;
     use super::super::schema::SCHEMA;
     use super::super::testing::{ColumnInfo, TestDb, columns_of};
     use super::*;
@@ -256,19 +257,19 @@ mod tests {
         let test_db = legacy_database(None).await;
         add_missing_columns(&test_db).await.unwrap();
 
-        test_db
-            .create_inbox("demo", "owner@example.com", "0xabc")
-            .await;
+        inboxes::create_inbox(&test_db, "demo", "owner@example.com", Some("0xabc"), 1)
+            .await
+            .unwrap();
 
-        let by_handle = test_db.inbox_wallet_by_handle("demo").await;
+        let by_handle = inboxes::inbox_by_handle(&test_db, "demo").await.unwrap();
         assert_eq!(
-            by_handle.as_deref(),
+            by_handle.and_then(|inbox| inbox.wallet).as_deref(),
             Some("0xabc"),
             "creating an inbox and reading it by handle must round-trip the wallet"
         );
-        let by_wallet = test_db.inbox_handle_by_wallet("0xabc").await;
+        let by_wallet = inboxes::inbox_by_wallet(&test_db, "0xabc").await.unwrap();
         assert_eq!(
-            by_wallet.as_deref(),
+            by_wallet.map(|inbox| inbox.handle).as_deref(),
             Some("demo"),
             "reading by wallet must find the row it was just written to"
         );
