@@ -23,7 +23,7 @@ use postage_core::quote_types::QuoteFields;
 use postage_core::tiers::tier_index_of;
 
 use crate::bridge::BridgeError;
-use crate::bridge::privy::TransactionRequest;
+use crate::bridge::privy::{Privy, TransactionRequest};
 use crate::challenge_api::{self, IdentityMode, OpenChallenge, Resolution};
 use crate::chrome::{Callout, CalloutTone, FIELD, PRIMARY_BUTTON, QUIET_BUTTON, SECONDARY_BUTTON};
 use crate::privy_context::use_privy;
@@ -237,22 +237,8 @@ pub fn ChallengeActions(
     let on_back = Callback::new(move |()| lane.set(Lane::Choosing));
 
     move || match screen.get() {
-        Screen::Charged => view! {
-            <div class="mt-8">
-                <Callout tone=CalloutTone::Bad title="Charged. Still blocked.">
-                    "Paying is the penalty here, not a price."
-                </Callout>
-            </div>
-        }
-        .into_any(),
-        Screen::Sent => view! {
-            <div class="mt-8">
-                <Callout tone=CalloutTone::Good title="Sent.">
-                    "Same words, same sender. Already in their inbox."
-                </Callout>
-            </div>
-        }
-        .into_any(),
+        Screen::Charged => view! { <ChargedNotice /> }.into_any(),
+        Screen::Sent => view! { <SentNotice /> }.into_any(),
         Screen::Deliver => {
             view! { <Deliver token=token.get_value() handle=handle.clone() /> }.into_any()
         }
@@ -282,6 +268,28 @@ pub fn ChallengeActions(
     }
 }
 
+#[component]
+fn ChargedNotice() -> impl IntoView {
+    view! {
+        <div class="mt-8">
+            <Callout tone=CalloutTone::Bad title="Charged. Still blocked.">
+                "Paying is the penalty here, not a price."
+            </Callout>
+        </div>
+    }
+}
+
+#[component]
+fn SentNotice() -> impl IntoView {
+    view! {
+        <div class="mt-8">
+            <Callout tone=CalloutTone::Good title="Sent.">
+                "Same words, same sender. Already in their inbox."
+            </Callout>
+        </div>
+    }
+}
+
 /// The fork: "I'm human" (free, no wallet) or "I'm a bot" (pay).
 #[component]
 fn ChooseLane(
@@ -306,45 +314,26 @@ fn ChooseLane(
     let connector_uri = RwSignal::new(None::<String>);
 
     let token = StoredValue::new(token);
-    // Proving personhood is not a payment, so it should not need an account
-    // to make one: no wallet anywhere on this path.
-    let verify = move |_| {
+    let on_verify = Callback::new(move |()| {
         verifying.set(true);
         outcome.set(None);
         connector_uri.set(None);
         let token = token.get_value();
-        spawn_local(async move {
-            let result = verify_human(&BrowserWorld, mode, &world, &token, |uri| {
-                connector_uri.try_set(Some(uri.to_owned()));
-            })
-            .await;
-            outcome.try_set(Some(match result {
-                Ok(delivered) => Outcome::Cleared { delivered },
-                Err(message) => Outcome::Error(message),
-            }));
-            // Whatever happened, the button is live again and the link is gone.
-            verifying.try_set(false);
-            connector_uri.try_set(None);
-        });
-    };
+        spawn_local(verify_human_for(
+            token,
+            mode,
+            world,
+            verifying,
+            outcome,
+            connector_uri,
+        ));
+    });
 
-    let pay_amount = format_usdc(amount);
     let human_lane = lane.get_untracked() == Lane::Human;
-    let failed = move || matches!(outcome.read().as_ref(), Some(Outcome::Error(_)));
 
     view! {
         <div class="mt-8 space-y-3">
-            <button
-                type="button"
-                on:click=verify
-                disabled=move || verifying.get()
-                class=format!("{PRIMARY_BUTTON} w-full")
-            >
-                {move || if verifying.get() { "Checking…" } else { "I'm human — free" }}
-            </button>
-            <p class="px-1 text-xs leading-relaxed text-faint">
-                "World ID. No wallet, no account."
-            </p>
+            <HumanButton verifying on_verify />
 
             {move || {
                 connector_uri
@@ -352,32 +341,9 @@ fn ChooseLane(
                     .map(|uri| view! { <ConnectorPanel uri /> })
             }}
 
-            {(!dangerous && !human_lane)
-                .then(|| {
-                    let label = format!("I'm a bot — pay {pay_amount}");
-                    view! {
-                        <button
-                            type="button"
-                            on:click=move |_| lane.set(Lane::Paying)
-                            disabled=move || verifying.get()
-                            class=format!("{SECONDARY_BUTTON} w-full")
-                        >
-                            {label}
-                        </button>
-                        <p class="px-1 text-xs leading-relaxed text-faint">
-                            "Goes to them, not us."
-                        </p>
-                    }
-                })}
+            {(!dangerous && !human_lane).then(|| view! { <BotButton amount verifying lane /> })}
 
-            {move || {
-                match outcome.read().as_ref() {
-                    Some(Outcome::Error(message)) => {
-                        Some(view! { <p class="text-sm text-bad">{message.clone()}</p> })
-                    }
-                    _ => None,
-                }
-            }}
+            <VerificationError outcome />
 
             // The way back out of the human lane, symmetric with the "I'm
             // human" button the pay lane offers. Arriving from the mail's
@@ -388,23 +354,96 @@ fn ChooseLane(
             // Quiet while the free path is still worth a try, a real button
             // once a verification has actually failed.
             {(!dangerous && human_lane)
-                .then(|| {
-                    let label = format!("Pay {} instead", format_usdc(amount));
-                    view! {
-                        <button
-                            type="button"
-                            on:click=move |_| lane.set(Lane::Paying)
-                            disabled=move || verifying.get()
-                            class=move || {
-                                let tone = if failed() { SECONDARY_BUTTON } else { QUIET_BUTTON };
-                                format!("{tone} w-full")
-                            }
-                        >
-                            {label}
-                        </button>
-                    }
-                })}
+                .then(|| view! { <PayInsteadButton amount verifying lane outcome /> })}
         </div>
+    }
+}
+
+/// Proving personhood is not a payment, so it should not need an account to
+/// make one: no wallet anywhere on this path.
+async fn verify_human_for(
+    token: String,
+    mode: IdentityMode,
+    world: WorldApp,
+    verifying: RwSignal<bool>,
+    outcome: RwSignal<Option<Outcome>>,
+    connector_uri: RwSignal<Option<String>>,
+) {
+    let result = verify_human(&BrowserWorld, mode, &world, &token, |uri| {
+        connector_uri.try_set(Some(uri.to_owned()));
+    })
+    .await;
+    outcome.try_set(Some(match result {
+        Ok(delivered) => Outcome::Cleared { delivered },
+        Err(message) => Outcome::Error(message),
+    }));
+    // Whatever happened, the button is live again and the link is gone.
+    verifying.try_set(false);
+    connector_uri.try_set(None);
+}
+
+#[component]
+fn HumanButton(verifying: RwSignal<bool>, on_verify: Callback<()>) -> impl IntoView {
+    view! {
+        <button
+            type="button"
+            on:click=move |_| on_verify.run(())
+            disabled=move || verifying.get()
+            class=format!("{PRIMARY_BUTTON} w-full")
+        >
+            {move || if verifying.get() { "Checking…" } else { "I'm human — free" }}
+        </button>
+        <p class="px-1 text-xs leading-relaxed text-faint">"World ID. No wallet, no account."</p>
+    }
+}
+
+#[component]
+fn BotButton(amount: u128, verifying: RwSignal<bool>, lane: RwSignal<Lane>) -> impl IntoView {
+    let label = format!("I'm a bot — pay {}", format_usdc(amount));
+    view! {
+        <button
+            type="button"
+            on:click=move |_| lane.set(Lane::Paying)
+            disabled=move || verifying.get()
+            class=format!("{SECONDARY_BUTTON} w-full")
+        >
+            {label}
+        </button>
+        <p class="px-1 text-xs leading-relaxed text-faint">"Goes to them, not us."</p>
+    }
+}
+
+#[component]
+fn VerificationError(outcome: RwSignal<Option<Outcome>>) -> impl IntoView {
+    move || match outcome.read().as_ref() {
+        Some(Outcome::Error(message)) => {
+            Some(view! { <p class="text-sm text-bad">{message.clone()}</p> })
+        }
+        _ => None,
+    }
+}
+
+#[component]
+fn PayInsteadButton(
+    amount: u128,
+    verifying: RwSignal<bool>,
+    lane: RwSignal<Lane>,
+    outcome: RwSignal<Option<Outcome>>,
+) -> impl IntoView {
+    let label = format!("Pay {} instead", format_usdc(amount));
+    let failed = move || matches!(outcome.read().as_ref(), Some(Outcome::Error(_)));
+    view! {
+        <button
+            type="button"
+            on:click=move |_| lane.set(Lane::Paying)
+            disabled=move || verifying.get()
+            class=move || {
+                let tone = if failed() { SECONDARY_BUTTON } else { QUIET_BUTTON };
+                format!("{tone} w-full")
+            }
+        >
+            {label}
+        </button>
     }
 }
 
@@ -445,30 +484,77 @@ fn PayLane(
     on_settled: Callback<Settled>,
     on_back: Callback<()>,
 ) -> impl IntoView {
-    let privy = use_privy();
-    let busy = RwSignal::new(false);
-    let error = RwSignal::new(None::<String>);
+    let lane = PayLaneState::new(token, quote, amount, settlement, on_settled);
+    lane.pay_once_signed_in();
+
+    // The broadcast view comes ahead of the `ready` gate on purpose: once a
+    // payment exists, its hash is the most important thing on this page and
+    // nothing about Privy's own readiness should be able to replace it with a
+    // spinner.
+    move || {
+        if let Some(hash) = lane.broadcast_hash.get() {
+            return lane.confirming_view(hash).into_any();
+        }
+        if !lane.privy.ready().get() {
+            return view! { <p class="mt-8 text-sm text-faint">"Loading"</p> }.into_any();
+        }
+        lane.pay_view(on_back).into_any()
+    }
+}
+
+/// What the pay lane's handlers and views share. Every field is `Copy`, so the
+/// whole state moves into each closure and task without cloning.
+#[derive(Clone, Copy)]
+struct PayLaneState {
+    privy: Privy,
+    busy: RwSignal<bool>,
+    error: RwSignal<Option<String>>,
     // The hash of a payment that has been broadcast but not yet been seen to
     // settle. Its presence is what replaces the Pay button with a confirmation
     // view: an indexer can always lag past whatever window we poll for, and a
     // sender who is shown "Pay" again after their money has already moved
     // will reasonably click it and pay twice. The hash is kept because it is
     // the one thing they can point at while they wait.
-    let broadcast_hash = RwSignal::new(None::<B256>);
-    // Set by the pay button's own click and consumed by the effect below, so a
-    // login (which ends with a wallet Privy creates on the way) can still end
-    // in a payment without a second click. Not a signal: the intent to pay is
-    // not something any view reflects, only something the next change of
-    // wallet needs to check.
-    let wants_to_pay = StoredValue::new(false);
+    broadcast_hash: RwSignal<Option<B256>>,
+    // Set by the pay button's own click and consumed by the effect in
+    // `pay_once_signed_in`, so a login (which ends with a wallet Privy creates
+    // on the way) can still end in a payment without a second click. Not a
+    // signal: the intent to pay is not something any view reflects, only
+    // something the next change of wallet needs to check.
+    wants_to_pay: StoredValue<bool>,
+    token: StoredValue<String>,
+    quote: StoredValue<QuoteFields>,
+    amount: u128,
+    settlement: Settlement,
+    on_settled: Callback<Settled>,
+}
 
-    let token = StoredValue::new(token);
-    let quote = StoredValue::new(quote);
-
-    let ask_and_settle = move || async move {
-        let token = token.get_value();
-        settle(
+impl PayLaneState {
+    fn new(
+        token: String,
+        quote: QuoteFields,
+        amount: u128,
+        settlement: Settlement,
+        on_settled: Callback<Settled>,
+    ) -> Self {
+        Self {
+            privy: use_privy(),
+            busy: RwSignal::new(false),
+            error: RwSignal::new(None),
+            broadcast_hash: RwSignal::new(None),
+            wants_to_pay: StoredValue::new(false),
+            token: StoredValue::new(token),
+            quote: StoredValue::new(quote),
+            amount,
             settlement,
+            on_settled,
+        }
+    }
+
+    async fn ask_and_settle(self) -> Option<Settled> {
+        let token = self.token.get_value();
+        settle(
+            self.settlement,
             || {
                 let token = token.clone();
                 async move { challenge_api::post_resolve(&token).await }
@@ -476,151 +562,160 @@ fn PayLane(
             sleep,
         )
         .await
-    };
+    }
 
-    let pay = move || {
-        busy.set(true);
-        error.set(None);
+    async fn broadcast(self) -> Result<B256, String> {
+        let tx = TransactionRequest {
+            to: POSTAGE_ESCROW,
+            data: pay_to_send_data(&self.quote.get_value(), self.amount)?,
+            value: Some(U256::from(self.amount)),
+        };
+        self.privy
+            .send_transaction(&tx)
+            .await
+            .map_err(bridge_message)
+    }
+
+    fn pay(self) {
+        self.busy.set(true);
+        self.error.set(None);
         spawn_local(async move {
-            let sent: Result<B256, String> = async {
-                let quote = quote.get_value();
-                let tx = TransactionRequest {
-                    to: POSTAGE_ESCROW,
-                    data: pay_to_send_data(&quote, amount)?,
-                    value: Some(U256::from(amount)),
-                };
-                privy.send_transaction(&tx).await.map_err(bridge_message)
-            }
-            .await;
-            match sent {
-                Err(message) => {
-                    error.try_set(Some(message));
-                }
-                Ok(hash) => {
-                    // The money has moved. Everything past this line is about
-                    // telling the sender what happened to it, and this sender
-                    // is never offered a Pay button again.
-                    broadcast_hash.try_set(Some(hash));
-                    if let Some(settled) = ask_and_settle().await {
-                        on_settled.run(settled);
-                    }
-                }
-            }
-            busy.try_set(false);
+            self.pay_and_settle().await;
+            self.busy.try_set(false);
         });
-    };
+    }
 
-    // The way on from a payment that broadcast but has not been seen to
-    // settle: one more pass of the same polling, on the sender's own timing.
-    // It moves no money; the only control offered once a payment exists must
-    // not be able to make a second one.
-    let recheck = move |_| {
-        busy.set(true);
-        error.set(None);
+    async fn pay_and_settle(self) {
+        match self.broadcast().await {
+            Err(message) => {
+                self.error.try_set(Some(message));
+            }
+            Ok(hash) => {
+                // The money has moved. Everything past this line is about
+                // telling the sender what happened to it, and this sender
+                // is never offered a Pay button again.
+                self.broadcast_hash.try_set(Some(hash));
+                if let Some(settled) = self.ask_and_settle().await {
+                    self.on_settled.run(settled);
+                }
+            }
+        }
+    }
+
+    /// The way on from a payment that broadcast but has not been seen to
+    /// settle: one more pass of the same polling, on the sender's own timing.
+    /// It moves no money; the only control offered once a payment exists must
+    /// not be able to make a second one.
+    fn recheck(self) {
+        self.busy.set(true);
+        self.error.set(None);
         spawn_local(async move {
-            match ask_and_settle().await {
-                Some(settled) => on_settled.run(settled),
+            match self.ask_and_settle().await {
+                Some(settled) => self.on_settled.run(settled),
                 None => {
-                    error.try_set(Some(STILL_NOTHING.to_owned()));
+                    self.error.try_set(Some(STILL_NOTHING.to_owned()));
                 }
             }
-            busy.try_set(false);
+            self.busy.try_set(false);
         });
-    };
+    }
 
-    // Continues a pay click into the payment itself once login has produced a
-    // wallet, so "Pay" is one click rather than "log in" then "pay". It never
-    // fires on its own: the intent is only ever set by the button's click.
-    // Every signal is read before the intent is checked, or a first run with no
-    // intent would subscribe to nothing and never run again.
-    Effect::new(move |_| {
-        let busy_now = busy.get();
-        let paid = broadcast_hash.read().is_some();
-        let authenticated = privy.authenticated().get();
-        let has_wallet = privy.wallet().get().is_some();
-        if !wants_to_pay.get_value() || busy_now || paid || !authenticated || !has_wallet {
-            return;
-        }
-        wants_to_pay.set_value(false);
-        pay();
-    });
-
-    let handle_pay = move |_| {
-        // Already able to pay right now: fire it directly and leave the
-        // intent unset, or the effect above would see `busy` return to false
-        // once this finishes and fire a second, redundant payment.
-        if privy.authenticated().get_untracked() && privy.wallet().get_untracked().is_some() {
-            pay();
-            return;
-        }
-        wants_to_pay.set_value(true);
-        if privy.authenticated().get_untracked() {
-            return;
-        }
-        spawn_local(async move {
-            let Err(failure) = privy.login().await else {
+    /// Continues a pay click into the payment itself once login has produced a
+    /// wallet, so "Pay" is one click rather than "log in" then "pay". It never
+    /// fires on its own: the intent is only ever set by the button's click.
+    /// Every signal is read before the intent is checked, or a first run with no
+    /// intent would subscribe to nothing and never run again.
+    fn pay_once_signed_in(self) {
+        Effect::new(move |_| {
+            let busy_now = self.busy.get();
+            let paid = self.broadcast_hash.read().is_some();
+            let authenticated = self.privy.authenticated().get();
+            let has_wallet = self.privy.wallet().get().is_some();
+            if !self.wants_to_pay.get_value() || busy_now || paid || !authenticated || !has_wallet {
                 return;
-            };
-            // Closing the modal withdraws the click: a later sign-in by some
-            // other route must not turn into a payment nobody asked for.
-            wants_to_pay.try_set_value(false);
-            if !failure.is_user_cancel() {
-                leptos::logging::error!("sign-in failed: {failure}");
             }
+            self.wants_to_pay.set_value(false);
+            self.pay();
         });
-    };
+    }
 
-    let pay_label = move || {
-        if busy.get() {
+    fn handle_pay_click(self) {
+        // Already able to pay right now: fire it directly and leave the
+        // intent unset, or the effect would see `busy` return to false once
+        // this finishes and fire a second, redundant payment.
+        if self.privy.authenticated().get_untracked()
+            && self.privy.wallet().get_untracked().is_some()
+        {
+            self.pay();
+            return;
+        }
+        self.wants_to_pay.set_value(true);
+        if self.privy.authenticated().get_untracked() {
+            return;
+        }
+        spawn_local(self.log_in());
+    }
+
+    async fn log_in(self) {
+        let Err(failure) = self.privy.login().await else {
+            return;
+        };
+        // Closing the modal withdraws the click: a later sign-in by some
+        // other route must not turn into a payment nobody asked for.
+        self.wants_to_pay.try_set_value(false);
+        if !failure.is_user_cancel() {
+            leptos::logging::error!("sign-in failed: {failure}");
+        }
+    }
+
+    fn pay_label(self) -> String {
+        if self.busy.get() {
             "Paying…".to_owned()
-        } else if privy.authenticated().get() && privy.wallet().get().is_none() {
+        } else if self.privy.authenticated().get() && self.privy.wallet().get().is_none() {
             "Setting up your wallet…".to_owned()
         } else {
-            format!("Pay {}", format_usdc(amount))
+            format!("Pay {}", format_usdc(self.amount))
         }
-    };
+    }
 
-    // The broadcast view comes ahead of the `ready` gate on purpose: once a
-    // payment exists, its hash is the most important thing on this page and
-    // nothing about Privy's own readiness should be able to replace it with a
-    // spinner.
-    move || {
-        if let Some(hash) = broadcast_hash.get() {
-            return view! {
-                <div class="mt-8 space-y-3">
-                    <Callout tone=CalloutTone::Good title="Paid. Confirming.">
-                        "It's on the chain. Confirming can take a few minutes, and paying again would charge you twice."
-                    </Callout>
-                    <p class="px-1 font-mono text-xs break-all text-faint" data-testid="tx-hash">
-                        {hash.to_string()}
-                    </p>
-                    <button
-                        type="button"
-                        on:click=recheck
-                        disabled=move || busy.get()
-                        class=format!("{PRIMARY_BUTTON} w-full")
-                    >
-                        {move || if busy.get() { "Checking…" } else { "Check again" }}
-                    </button>
-                    {move || error.get().map(|message| view! { <p class="text-sm text-warn">{message}</p> })}
-                </div>
-            }
-            .into_any();
+    fn confirming_view(self, hash: B256) -> impl IntoView {
+        let Self { busy, error, .. } = self;
+        view! {
+            <div class="mt-8 space-y-3">
+                <Callout tone=CalloutTone::Good title="Paid. Confirming.">
+                    "It's on the chain. Confirming can take a few minutes, and paying again would charge you twice."
+                </Callout>
+                <p class="px-1 font-mono text-xs break-all text-faint" data-testid="tx-hash">
+                    {hash.to_string()}
+                </p>
+                <button
+                    type="button"
+                    on:click=move |_| self.recheck()
+                    disabled=move || busy.get()
+                    class=format!("{PRIMARY_BUTTON} w-full")
+                >
+                    {move || if busy.get() { "Checking…" } else { "Check again" }}
+                </button>
+                {move || error.get().map(|message| view! { <p class="text-sm text-warn">{message}</p> })}
+            </div>
         }
-        if !privy.ready().get() {
-            return view! { <p class="mt-8 text-sm text-faint">"Loading"</p> }.into_any();
-        }
+    }
+
+    fn pay_view(self, on_back: Callback<()>) -> impl IntoView {
+        let Self {
+            privy, busy, error, ..
+        } = self;
         view! {
             <div class="mt-8 space-y-3">
                 <button
                     type="button"
-                    on:click=handle_pay
+                    on:click=move |_| self.handle_pay_click()
                     disabled=move || {
                         busy.get() || (privy.authenticated().get() && privy.wallet().get().is_none())
                     }
                     class=format!("{PRIMARY_BUTTON} w-full")
                 >
-                    {pay_label}
+                    {move || self.pay_label()}
                 </button>
 
                 // Shut while a transaction is in flight: leaving unmounts this
@@ -637,7 +732,6 @@ fn PayLane(
                 {move || error.get().map(|message| view! { <p class="text-sm text-bad">{message}</p> })}
             </div>
         }
-        .into_any()
     }
 }
 
@@ -653,68 +747,98 @@ fn Deliver(token: String, handle: String) -> impl IntoView {
     let error = RwSignal::new(None::<String>);
     let token = StoredValue::new(token);
 
-    let deliver = move |_| {
+    let on_send = Callback::new(move |()| {
         sending.set(true);
         error.set(None);
         let (subject, body) = (subject.get_untracked(), body.get_untracked());
-        spawn_local(async move {
-            match challenge_api::post_deliver(&token.get_value(), &subject, &body).await {
-                Ok(()) => {
-                    sent.try_set(true);
-                }
-                Err(failure) => {
-                    error.try_set(Some(failure.to_string()));
-                }
-            }
-            sending.try_set(false);
-        });
-    };
+        spawn_local(post_message(
+            token.get_value(),
+            subject,
+            body,
+            sending,
+            sent,
+            error,
+        ));
+    });
 
     let placeholder = format!("Paste what you wrote to {}", postage_address(&handle));
 
     move || {
         if sent.get() {
-            return view! {
-                <div class="mt-8">
-                    <Callout tone=CalloutTone::Good title="Sent.">
-                        "Replies come straight to you."
-                    </Callout>
-                </div>
-            }
-            .into_any();
+            return view! { <DeliveredNotice /> }.into_any();
         }
-        view! {
-            <div class="mt-8 space-y-4">
-                <Callout tone=CalloutTone::Good title="Cleared.">
-                    "The hold expired. Paste it again."
-                </Callout>
+        let placeholder = placeholder.clone();
+        view! { <PasteForm subject body sending error placeholder on_send /> }.into_any()
+    }
+}
 
-                <input
-                    type="text"
-                    prop:value=move || subject.get()
-                    on:input=move |event| subject.set(event_target_value(&event))
-                    placeholder="Subject"
-                    class=FIELD
-                />
-                <textarea
-                    prop:value=move || body.get()
-                    on:input=move |event| body.set(event_target_value(&event))
-                    rows="7"
-                    placeholder=placeholder.clone()
-                    class=format!("{FIELD} resize-y")
-                />
-                <button
-                    type="button"
-                    on:click=deliver
-                    disabled=move || sending.get() || body.read().trim().is_empty()
-                    class=format!("{PRIMARY_BUTTON} w-full")
-                >
-                    {move || if sending.get() { "Sending…" } else { "Send" }}
-                </button>
-                {move || error.get().map(|message| view! { <p class="text-sm text-bad">{message}</p> })}
-            </div>
+#[component]
+fn PasteForm(
+    subject: RwSignal<String>,
+    body: RwSignal<String>,
+    sending: RwSignal<bool>,
+    error: RwSignal<Option<String>>,
+    placeholder: String,
+    on_send: Callback<()>,
+) -> impl IntoView {
+    view! {
+        <div class="mt-8 space-y-4">
+            <Callout tone=CalloutTone::Good title="Cleared.">
+                "The hold expired. Paste it again."
+            </Callout>
+
+            <input
+                type="text"
+                prop:value=move || subject.get()
+                on:input=move |event| subject.set(event_target_value(&event))
+                placeholder="Subject"
+                class=FIELD
+            />
+            <textarea
+                prop:value=move || body.get()
+                on:input=move |event| body.set(event_target_value(&event))
+                rows="7"
+                placeholder=placeholder
+                class=format!("{FIELD} resize-y")
+            />
+            <button
+                type="button"
+                on:click=move |_| on_send.run(())
+                disabled=move || sending.get() || body.read().trim().is_empty()
+                class=format!("{PRIMARY_BUTTON} w-full")
+            >
+                {move || if sending.get() { "Sending…" } else { "Send" }}
+            </button>
+            {move || error.get().map(|message| view! { <p class="text-sm text-bad">{message}</p> })}
+        </div>
+    }
+}
+
+async fn post_message(
+    token: String,
+    subject: String,
+    body: String,
+    sending: RwSignal<bool>,
+    sent: RwSignal<bool>,
+    error: RwSignal<Option<String>>,
+) {
+    match challenge_api::post_deliver(&token, &subject, &body).await {
+        Ok(()) => {
+            sent.try_set(true);
         }
-        .into_any()
+        Err(failure) => {
+            error.try_set(Some(failure.to_string()));
+        }
+    }
+    sending.try_set(false);
+}
+
+#[component]
+fn DeliveredNotice() -> impl IntoView {
+    view! {
+        <div class="mt-8">
+            <Callout tone=CalloutTone::Good title="Sent.">"Replies come straight to you."</Callout>
+        </div>
     }
 }
 
