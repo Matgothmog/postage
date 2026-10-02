@@ -16,8 +16,11 @@ use crate::db::{Db, DbError};
 
 /// How long the worker may take to say whether it sent the message. The
 /// TypeScript set none; the request is bounded so a hung worker cannot hold a
-/// sender's request open until the host kills the function.
-pub const RELEASE_TIMEOUT: Duration = Duration::from_secs(10);
+/// sender's request open until the host kills the function. Generous on
+/// purpose: a slow release that did go out but is reported as `SendFailed`
+/// gives the sender a free paid use, and 25s still sits well under the host's
+/// function limit.
+pub const RELEASE_TIMEOUT: Duration = Duration::from_secs(25);
 
 /// Whether the held message went out, and if not, which of three different
 /// bugs to chase.
@@ -66,6 +69,7 @@ pub struct MailWorker {
     client: reqwest::Client,
     url: String,
     secret: String,
+    timeout: Duration,
 }
 
 impl fmt::Debug for MailWorker {
@@ -84,7 +88,15 @@ impl MailWorker {
             client,
             url: format!("{base_url}{RELEASE_PATH}"),
             secret: secret.into(),
+            timeout: RELEASE_TIMEOUT,
         }
+    }
+
+    /// Shortens the release timeout so tests need not wait out twenty-five seconds.
+    #[cfg(test)]
+    fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
     }
 
     /// Reads `MAIL_WORKER_URL` and `MAIL_WEBHOOK_SECRET`.
@@ -144,7 +156,7 @@ impl MailWorker {
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .header(RELEASE_SECRET_HEADER, &self.secret)
             .body(body)
-            .timeout(RELEASE_TIMEOUT)
+            .timeout(self.timeout)
             .send()
             .await
             .is_ok_and(|response| response.status().is_success())
@@ -380,6 +392,30 @@ mod tests {
             .unwrap();
 
         assert_eq!(release, Release::Delivered);
+    }
+
+    #[test]
+    fn the_worker_gets_twenty_five_seconds_by_default() {
+        assert_eq!(RELEASE_TIMEOUT, Duration::from_secs(25));
+        let worker = MailWorker::new(reqwest::Client::default(), "https://w.test", SECRET);
+        assert_eq!(worker.timeout, RELEASE_TIMEOUT);
+    }
+
+    #[tokio::test]
+    async fn a_worker_that_answers_too_slowly_is_a_failed_send() {
+        let db = with_inbox().await;
+        held(&db, "slow").await;
+        let stub = serve_with(|_| Reply::new(200, "{}").after(Duration::from_secs(30))).await;
+        let worker = worker(&stub).with_timeout(Duration::from_millis(200));
+
+        let release = worker
+            .release_held_message(&db, "slow", HANDLE, NOW)
+            .await
+            .unwrap();
+
+        assert_eq!(release, Release::Undelivered(Undelivered::SendFailed));
+        let challenge = challenge_by_token(&db, "slow").await.unwrap().unwrap();
+        assert_eq!(challenge.delivered_at, None);
     }
 
     #[test]

@@ -13,7 +13,10 @@ pub async fn fetch_overview(graph: &Graph) -> Result<Overview, GraphError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http_stub::serve;
+    use std::time::Duration;
+
+    use crate::graph::GraphError;
+    use crate::http_stub::{Reply, serve, serve_with};
 
     const ANSWER: &str = r#"{"data":{
         "vaults":[{"totalFunded":"10","toTreasury":"3","toSponsorship":"5","refilledToRelayer":"2","fundingEvents":4}],
@@ -54,5 +57,15 @@ mod tests {
         let error = fetch_overview(&graph(&stub.base)).await.unwrap_err();
 
         assert_eq!(error.to_string(), "bad query");
+    }
+
+    #[tokio::test]
+    async fn a_subgraph_that_never_answers_is_a_timeout_error_for_the_page_to_handle() {
+        let stub = serve_with(|_| Reply::new(200, "{}").after(Duration::from_secs(30))).await;
+        let slow = graph(&stub.base).with_timeout(Duration::from_millis(200));
+
+        let error = fetch_overview(&slow).await.unwrap_err();
+
+        assert!(matches!(error, GraphError::Transport(_)), "{error}");
     }
 }

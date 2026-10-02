@@ -27,7 +27,9 @@ pub async fn gather_signals(graph: &Graph, wallet: &str) -> SenderSignals {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http_stub::serve;
+    use std::time::Duration;
+
+    use crate::http_stub::{Reply, serve, serve_with};
 
     const ENS_PATH: &str = "/api/key/subgraphs/id/5XqPmWe6gjyrJtFn9cLy237i4cWw2j9HcUJEXsP5qGtH";
 
@@ -137,6 +139,16 @@ mod tests {
         );
 
         let signals = gather_signals(&unconfigured, "0xab").await;
+
+        assert_eq!(signals, signals_from(None, &[]));
+    }
+
+    #[tokio::test]
+    async fn lookups_that_time_out_leave_a_blank_sender() {
+        let stub = serve_with(|_| Reply::new(200, "{}").after(Duration::from_secs(30))).await;
+        let slow = graph(&stub.base).with_timeout(Duration::from_millis(200));
+
+        let signals = gather_signals(&slow, "0xab").await;
 
         assert_eq!(signals, signals_from(None, &[]));
     }

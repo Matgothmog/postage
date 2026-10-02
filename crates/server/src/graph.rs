@@ -6,6 +6,8 @@
 //! deployment without a gateway key still reads its own subgraph, and the
 //! reputation lookup that wants both softens instead of failing.
 
+use std::time::Duration;
+
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -13,6 +15,12 @@ use serde_json::{Value, json};
 use crate::config::{ConfigError, required};
 
 pub const DEFAULT_GATEWAY_BASE: &str = "https://gateway.thegraph.com";
+
+/// How long one subgraph query may take. The TypeScript set none; an indexer
+/// that never answers would otherwise hold the sender's request open until the
+/// host kills the function. A timeout is a `GraphError::Transport`, which the
+/// reputation lookup already softens into a blank sender.
+pub const QUERY_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, thiserror::Error)]
 pub enum GraphError {
@@ -48,6 +56,7 @@ pub struct Graph {
     postage_url: Option<String>,
     api_key: Option<String>,
     gateway_base: String,
+    timeout: Duration,
 }
 
 impl Graph {
@@ -61,6 +70,7 @@ impl Graph {
             postage_url,
             api_key,
             gateway_base: DEFAULT_GATEWAY_BASE.to_owned(),
+            timeout: QUERY_TIMEOUT,
         }
     }
 
@@ -81,6 +91,13 @@ impl Graph {
     /// Points gateway queries somewhere other than The Graph's gateway.
     pub fn with_gateway_base(mut self, base: impl Into<String>) -> Self {
         self.gateway_base = base.into();
+        self
+    }
+
+    /// Shortens the per-query timeout so tests need not wait out ten seconds.
+    #[cfg(test)]
+    pub(crate) fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
         self
     }
 
@@ -113,7 +130,8 @@ impl Graph {
     }
 
     /// POSTs `{ query, variables }` and returns `data`. A non-2xx status, any
-    /// reported GraphQL error, or a missing `data` is a failure.
+    /// reported GraphQL error, a missing `data`, or no answer within the
+    /// timeout is a failure.
     pub async fn query<T: DeserializeOwned>(
         &self,
         url: &str,
@@ -126,6 +144,7 @@ impl Graph {
             .post(url)
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .body(body.to_string())
+            .timeout(self.timeout)
             .send()
             .await
             .map_err(|error| GraphError::Transport(error.to_string()))?;
@@ -154,7 +173,7 @@ impl Graph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http_stub::{closed_port, serve};
+    use crate::http_stub::{Reply, closed_port, serve, serve_with};
 
     #[derive(Debug, PartialEq, Eq, Deserialize)]
     struct Answer {
@@ -325,5 +344,27 @@ mod tests {
         });
         assert_eq!(graph.postage_url.as_deref(), Some("https://example.test/q"));
         assert_eq!(graph.api_key, None);
+    }
+
+    #[test]
+    fn a_query_may_take_ten_seconds_by_default() {
+        assert_eq!(QUERY_TIMEOUT, Duration::from_secs(10));
+        let graph = Graph::from_env(|_| None);
+        assert_eq!(graph.timeout, QUERY_TIMEOUT);
+    }
+
+    #[tokio::test]
+    async fn an_endpoint_that_never_answers_is_a_timeout_within_the_limit() {
+        let stub = serve_with(|_| Reply::new(200, "{}").after(Duration::from_secs(30))).await;
+        let graph = postage_graph(&stub.base).with_timeout(Duration::from_millis(200));
+        let started = std::time::Instant::now();
+
+        let error = graph
+            .query_postage::<Answer>("q", json!({}))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, GraphError::Transport(_)), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 }
