@@ -4,6 +4,7 @@
 
 pub mod brand;
 pub mod challenge_email;
+pub mod classify;
 pub mod contracts;
 pub mod errors;
 pub mod format;

@@ -2926,6 +2926,7 @@ dependencies = [
  "p256",
  "postage-shared",
  "rand_core 0.9.5",
+ "regex",
  "serde",
  "serde_json",
  "sha2",
