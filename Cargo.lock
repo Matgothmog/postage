@@ -1287,6 +1287,8 @@ name = "postage-core"
 version = "0.1.0"
 dependencies = [
  "postage-shared",
+ "serde",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 
