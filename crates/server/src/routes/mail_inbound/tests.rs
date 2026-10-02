@@ -4,10 +4,11 @@
 //! malformed bodies refused before anything is spent.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
 use axum::http::StatusCode;
-use postage_shared::{GatewayAction, GatewayVerdict};
+use postage_shared::{GatewayAction, GatewayVerdict, INBOUND_BODY_LIMIT_BYTES};
 use reqwest::Url;
 use serde_json::{Value, json};
 
@@ -794,4 +795,75 @@ async fn a_malformed_body_without_the_secret_is_refused_for_the_secret() {
     let answer = gateway.send_raw("not json", Some("wrong")).await;
 
     assert_eq!(answer.status, StatusCode::UNAUTHORIZED);
+}
+
+// --- limits: body size and overall deadline --------------------------------
+
+/// A well-formed message whose body is `bytes` long.
+fn message_of_size(bytes: usize) -> Value {
+    let mut message = message();
+    message["body"] = Value::String("x".repeat(bytes));
+    message
+}
+
+#[tokio::test]
+async fn a_three_megabyte_message_is_accepted_not_refused_as_too_large() {
+    let gateway = Gateway::new(None).await;
+
+    let answer = gateway.post(&message_of_size(3_000_000)).await;
+
+    assert_eq!(answer.status, StatusCode::OK);
+    assert_eq!(answer.body["action"], "hold");
+}
+
+#[tokio::test]
+async fn a_message_over_the_platform_body_limit_is_a_413() {
+    let gateway = Gateway::new(None).await;
+
+    let answer = gateway
+        .post(&message_of_size(INBOUND_BODY_LIMIT_BYTES + 1))
+        .await;
+
+    assert_eq!(answer.status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(count(&gateway.db, "challenges").await, 0);
+}
+
+#[tokio::test]
+async fn a_message_that_outlasts_the_deadline_is_the_fault_answer_and_leaves_no_challenge() {
+    let gateway = Gateway::new(None).await;
+    let slow_chain = serve_with(|sent| {
+        let id = sent.body["id"].clone();
+        let body =
+            json!({ "jsonrpc": "2.0", "id": id, "result": super::tests_support::floor_word() });
+        Reply::new(200, body.to_string()).after(Duration::from_secs(30))
+    })
+    .await;
+    let state = AppState::builder(gateway.env.clone())
+        .clock(clock_at(NOW))
+        .db(gateway.db.clone())
+        .chain(Chain::new(Url::parse(&slow_chain.base).unwrap()))
+        .classifier(classifier(&gateway.model))
+        .build();
+    let app = Router::new().route(
+        PATH,
+        axum::routing::post(
+            move |headers: axum::http::HeaderMap, request: axum::extract::Request| {
+                super::post_within(Duration::from_millis(300), state.clone(), headers, request)
+            },
+        ),
+    );
+
+    let answer = send(
+        app,
+        post_with(
+            PATH,
+            &message().to_string(),
+            &[("x-postage-secret", "secret")],
+        ),
+    )
+    .await;
+
+    assert_eq!(answer.status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(answer.body["fault"], "unexpected");
+    assert_eq!(count(&gateway.db, "challenges").await, 0);
 }

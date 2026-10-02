@@ -28,8 +28,10 @@ pub(crate) mod tests_support;
 
 use std::error::Error;
 
-use axum::body::Bytes;
-use axum::extract::State;
+use std::time::Duration;
+
+use axum::body::{Body, Bytes};
+use axum::extract::{Request, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use postage_core::challenge_email::{ChallengeMailFacts, challenge_mail};
@@ -37,7 +39,10 @@ use postage_core::classify::{MailFacts, Verdict, classify_from_headers, extract_
 use postage_core::handle::{handle_of, is_ours};
 use postage_core::quote_types::QuoteFields;
 use postage_core::secret::offered_secret_matches;
-use postage_shared::{GatewayAction, GatewayNotice, GatewayVerdict, Tier};
+use postage_shared::{
+    GatewayAction, GatewayNotice, GatewayVerdict, INBOUND_BODY_LIMIT_BYTES, INBOUND_DEADLINE_MS,
+    Tier,
+};
 use serde::{Serialize, Serializer};
 use serde_json::Value;
 
@@ -50,7 +55,8 @@ use crate::db::Db;
 use crate::db::classifications::{BudgetState, claim_classification, purge_old_classifications};
 use crate::db::inboxes::inbox_by_handle;
 use crate::faults::{
-    BoxError, FaultStage, configured, configured_without_naming, during, fault_response,
+    BoxError, FaultStage, GatewayFault, configured, configured_without_naming, during,
+    fault_response,
 };
 
 const SECRET_HEADER: &str = "x-postage-secret";
@@ -86,12 +92,43 @@ struct InboundMessage {
     dmarc: Option<String>,
 }
 
+/// How long one message may be worked on before the gateway answers with its
+/// fault response, shorter than the platform's own cut-off so the answer is
+/// ours.
+const DEADLINE: Duration = Duration::from_millis(INBOUND_DEADLINE_MS as u64);
+
 pub(crate) async fn post(
     State(state): State<AppState>,
     headers: HeaderMap,
-    body: Bytes,
+    request: Request<Body>,
 ) -> Response {
-    match inbound(&state, &headers, &body).await {
+    post_within(DEADLINE, state, headers, request).await
+}
+
+/// [`post`] with the deadline given, so a test need not wait out a minute and
+/// a half.
+///
+/// The body is read here rather than by the `Bytes` extractor, whose 2 MB
+/// default refused mail the platform would have let through. A message the
+/// worker sent that is over the platform's limit is a 413, as it would be
+/// from the platform.
+async fn post_within(
+    deadline: Duration,
+    state: AppState,
+    headers: HeaderMap,
+    request: Request<Body>,
+) -> Response {
+    let Ok(body) = axum::body::to_bytes(request.into_body(), INBOUND_BODY_LIMIT_BYTES).await else {
+        return refusal(StatusCode::PAYLOAD_TOO_LARGE, "Payload too large");
+    };
+    let outcome = match tokio::time::timeout(deadline, inbound(&state, &headers, &body)).await {
+        Ok(outcome) => outcome,
+        Err(_elapsed) => Err(Stop::Fault(Box::new(GatewayFault::new(
+            FaultStage::Unexpected,
+            "The gateway took too long to answer",
+        )))),
+    };
+    match outcome {
         Ok(response) => response,
         Err(Stop::Answer(response)) => *response,
         Err(Stop::Fault(cause)) => fault_response(state.env(), cause),

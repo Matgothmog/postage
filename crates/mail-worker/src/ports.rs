@@ -7,7 +7,7 @@
 //! against in-memory fakes; `cloudflare` implements them over workers-rs and
 //! exists only on wasm32.
 
-use postage_shared::GatewayNotice;
+use postage_shared::{GatewayNotice, INBOUND_WORKER_TIMEOUT_MS};
 
 /// What went wrong at a boundary, as text. Callers log it and choose their own
 /// wording for whoever is told, so nothing in here is ever returned to a sender
@@ -91,12 +91,25 @@ pub trait InboundMessage {
 }
 
 /// How long the inbound-API call may take before the message is refused for a
-/// retry. The gateway classifies synchronously, at up to 20s a try with one
-/// retry, so this sits above that pair rather than cutting a slow but healthy
-/// classification short.
-pub const GATEWAY_TIMEOUT_MS: u32 = 45_000;
+/// retry. Longer than the gateway's own deadline (`INBOUND_DEADLINE_MS` in `postage-shared`),
+/// so a slow classification or chain read ends in the gateway's fault answer
+/// instead of an abort that leaves it running and writing a challenge.
+pub const GATEWAY_TIMEOUT_MS: u32 = INBOUND_WORKER_TIMEOUT_MS;
 
 /// How long the Mailgun call may take. Below the 25s the gateway allows its own
 /// `/release` call, so the worker answers 502 itself rather than leaving the
 /// gateway to give up on a request that is still running.
 pub const MAILGUN_TIMEOUT_MS: u32 = 20_000;
+
+// Checked at compile time: the worker must outwait the gateway's own deadline.
+const _: () = assert!(GATEWAY_TIMEOUT_MS > postage_shared::INBOUND_DEADLINE_MS);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_worker_uses_the_shared_inbound_timeout() {
+        assert_eq!(GATEWAY_TIMEOUT_MS, INBOUND_WORKER_TIMEOUT_MS);
+    }
+}
