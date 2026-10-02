@@ -214,8 +214,9 @@ sh scripts/build-web.sh
 to `sandbox` to target a Sandbox World App build (`staging` is also accepted);
 any other value fails the build, and so does anything but `production` in a
 Vercel production build.
-Without `NEXT_PUBLIC_PRIVY_APP_ID` the app renders a configuration notice and
-nothing else. `trunk serve` in `crates/web` serves the app on port 3210, but
+In a debug build, `trunk serve` included, the app renders only a configuration
+notice without `NEXT_PUBLIC_PRIVY_APP_ID`; a release build refuses to compile
+without it. `trunk serve` in `crates/web` serves the app on port 3210, but
 without an API behind it.
 
 The repository has no standalone API dev server. To see the whole app running
@@ -238,7 +239,7 @@ Vercel. Grouped by what each gates:
   `file:.data/postage.db`, a local SQLite file; use a `libsql://…` URL with
   `DATABASE_AUTH_TOKEN` for Turso.
 - **Only matter in live identity mode, which is the default.** `IDENTITY_MODE`
-  unset or blank means live. Live mode needs `WORLD_RP_ID`,
+  unset, blank or `live` means live. Live mode needs `WORLD_RP_ID`,
   `WORLD_RP_SIGNING_KEY` and `WORLD_ACTION`, and `/api/world/context` and
   `/api/world/verify` refuse without them; the web build needs
   `NEXT_PUBLIC_WORLD_APP_ID` as well. Set
@@ -258,8 +259,11 @@ Vercel. Grouped by what each gates:
   challenge links point at). `ARC_RPC_URL` is optional even for onchain
   features: unset, the API uses Arc's public RPC.
 
-A missing setting fails only the route that needs it, with a 500 whose server
-log line names the variable; the rest of the API keeps working.
+A missing setting does not take the rest of the API down. Most fail only the
+route that needs them, with a 500 whose server log line names the variable. A
+few degrade instead: without `ANTHROPIC_API_KEY` mail is classified on its
+headers alone, without `NEXT_PUBLIC_PRIVY_APP_ID` the server accepts no
+identity token, and `/api/network` answers 502 naming `GRAPH_QUERY_URL`.
 
 ### The mail worker
 

@@ -41,7 +41,7 @@ anyone who is actually a person skip it.
 3. Everything else from an unknown sender is **held** — the raw bytes go into
    Workers KV with the hold's deadline attached, and nothing about what the
    message says is written to the database (`ARCHITECTURE.md:326-350`,
-   `:350-356`).
+   `:352-358`).
 4. The sender gets a **reply to the message they just sent**, threaded to it by
    `In-Reply-To`, inside the same SMTP session that carried it. It asks one
    question with a link for each answer: did a person write this, or a machine?

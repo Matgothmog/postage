@@ -162,7 +162,7 @@ real take.
    the final scan step — get the framing and cadence right without actually
    submitting a Selfie Check. Adjust pacing if the dry run runs long, but do
    not compress it by talking faster; cut a shot instead if you must.
-   Before you finish the dry run, write down the current "People verified"
+   Before you finish the dry run, write down the current "Verified free"
    and sender-rows numbers from `/network` — that's the baseline Shot 11
    compares against after the real machine-path payment and Selfie Check in
    the take.
@@ -261,13 +261,13 @@ step shown.
 
 **Shot 11 — 30s — Environment: Production, `/network`**
 On screen: navigate to `postage-seven.vercel.app/network`; cursor highlights
-in turn: a settled payment row, the "People verified" count, and the sender
+in turn: a settled payment row, the "Verified free" count, and the sender
 rows count.
 Narration: *"Every payment and every verification is public — this page
 reads it straight off the chain, through The Graph."*
 Counts if: a settled payment row is visible in the recent-payments list (it
 does not have to be from this session — see Fallbacks if indexing is
-lagging); the "People verified" count reads at least one higher than the
+lagging); the "Verified free" count reads at least one higher than the
 baseline number you wrote down at the end of the pre-flight dry run
 (step 8); and the sender-rows count also reads at least one higher than
 that same baseline. Do not require the $0.024/$0.006 split to be
@@ -336,7 +336,7 @@ means reshooting one clip, not restarting the session.
   shows real indexed history from before this session, so the shot is true
   either way. Keep the narration generic ("a settled payment," not "the
   payment we just made") so nothing on screen contradicts what's said. The
-  same lag can hit the "People verified" and sender-rows counts in Shot 11 —
+  same lag can hit the "Verified free" and sender-rows counts in Shot 11 —
   if either still reads at the pre-flight baseline instead of one higher,
   don't wait for it either: film whatever the page shows right now and let
   the narration stay on "every payment and every verification is public"
