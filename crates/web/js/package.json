@@ -1,0 +1,19 @@
+{
+  "name": "postage-web-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Vendor glue: bundles the Privy and World IDKit browser SDKs for the Rust web app",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "@privy-io/react-auth": "3.40.0",
+    "@worldcoin/idkit-core": "4.2.4",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

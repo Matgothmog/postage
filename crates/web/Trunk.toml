@@ -2,5 +2,16 @@
 target = "index.html"
 dist = "dist"
 
+[watch]
+# The pre_build hook rewrites js/dist; watching it would rebuild forever.
+ignore = ["js/node_modules", "js/dist"]
+
 [serve]
 port = 3210
+
+# Bundles the Privy/IDKit bridge (js/) into js/dist, which index.html copies
+# to dist/bridge/. Needs `npm ci --prefix js` once per checkout.
+[[hooks]]
+stage = "pre_build"
+command = "npm"
+command_arguments = ["run", "build", "--prefix", "js"]

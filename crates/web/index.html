@@ -4,7 +4,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Postage</title>
-    <link data-trunk rel="rust" data-wasm-opt="0" />
+    <link data-trunk rel="copy-dir" href="js/dist" data-target-path="bridge" />
+    <!-- Must stay ahead of the wasm loader: module scripts run in document
+         order, so the bridge global exists before the app starts. -->
+    <script type="module" src="/bridge/bridge.js"></script>
+    <link data-trunk rel="rust" data-bin="postage-web" data-wasm-opt="0" />
   </head>
   <body></body>
 </html>

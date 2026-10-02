@@ -29,3 +29,4 @@ worker/.wrangler/
 # rust
 /target
 crates/web/dist
+crates/web/js/dist

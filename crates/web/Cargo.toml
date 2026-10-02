@@ -7,10 +7,20 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-postage-shared = { workspace = true }
+alloy-primitives = { version = "1", features = ["serde"] }
 console_error_panic_hook = { workspace = true }
+js-sys = "0.3"
 leptos = { workspace = true }
+postage-core = { workspace = true }
+postage-shared = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
 wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = "0.4"
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
 
 [lints]
 workspace = true
