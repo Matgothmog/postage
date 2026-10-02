@@ -18,7 +18,8 @@ use crate::claims::settle_claim;
 use crate::config::message_id_secret;
 use crate::db::Db;
 use crate::db::claims::{
-    InboxClaim, attach_destination, claim_by_handle, consume_attempt, mark_code_verified,
+    AttemptOutcome, InboxClaim, attach_destination_to_claim, claim_by_handle,
+    consume_attempt_on_claim, mark_code_verified_on_claim,
 };
 
 /// Exactly the fields `FinishClaim.tsx`'s poll reads, in the order the
@@ -131,7 +132,11 @@ pub(crate) async fn post(
         ));
     }
     check_code(&state, db, &claim, code, now).await?;
-    mark_code_verified(db, &claim.handle, now).await?;
+    // Credited to the claim the code was checked against. If it has been
+    // started over since, the code proved nothing about the claim now there.
+    if !mark_code_verified_on_claim(db, &claim, now).await? {
+        return Err(claim_expired());
+    }
 
     // Only now does Cloudflare hear about the address, and the claimer does
     // nothing to make that happen. Failing here is handled by the poller,
@@ -141,9 +146,10 @@ pub(crate) async fn post(
         .ensure_destination(&claim.destination)
         .await
     {
-        let _ = attach_destination(
+        let _ = attach_destination_to_claim(
             db,
             &claim.handle,
+            &claim.code_hash,
             &destination.id,
             destination.verified_at,
             now,
@@ -213,6 +219,15 @@ async fn holds_claim_wallet(
         .await)
 }
 
+/// The refusal for a claim whose code is no longer accepted: expired, or
+/// started over since this request read it.
+fn claim_expired() -> Exit {
+    refuse(
+        StatusCode::GONE,
+        "That code has expired. Start again to get a new one",
+    )
+}
+
 /// Spends one attempt on `code`, refusing an expired claim, an exhausted
 /// one, and a wrong code.
 async fn check_code(
@@ -223,16 +238,17 @@ async fn check_code(
     now: i64,
 ) -> Result<(), Exit> {
     if claim.expires_at <= now {
-        return Err(refuse(
-            StatusCode::GONE,
-            "That code has expired. Start again to get a new one",
-        ));
+        return Err(claim_expired());
     }
-    if !consume_attempt(db, &claim.handle, i64::from(MAX_ATTEMPTS)).await? {
-        return Err(refuse(
-            StatusCode::TOO_MANY_REQUESTS,
-            "Too many wrong codes. Start again to get a new one",
-        ));
+    match consume_attempt_on_claim(db, claim, i64::from(MAX_ATTEMPTS), now).await? {
+        AttemptOutcome::Taken => {}
+        AttemptOutcome::ClaimMoved => return Err(claim_expired()),
+        AttemptOutcome::Exhausted => {
+            return Err(refuse(
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many wrong codes. Start again to get a new one",
+            ));
+        }
     }
 
     let key = VerificationKey::derive(&message_id_secret(state.env().lookup())?)?;
@@ -268,7 +284,7 @@ mod tests {
     use crate::config::Env;
     use crate::db::claims::{NewClaim, start_claim};
     use crate::db::testing::TestDb;
-    use crate::http_stub::{Stub, serve};
+    use crate::http_stub::{Reply, Stub, serve, serve_with};
     use crate::routes::router;
     use crate::routes::testing::{Answer, NOW, clock_at, get as get_request, post_with, send};
 
@@ -558,6 +574,42 @@ mod tests {
         assert_eq!(fixture.attempts().await, 0, "no attempt spent");
         let claim = claim_by_handle(&fixture.db, HANDLE).await.unwrap().unwrap();
         assert_eq!(claim.code_verified_at, None);
+    }
+
+    /// The claim is started over while Cloudflare is being asked to register
+    /// the old address. That address belongs to the claim that was checked, not
+    /// to the one that replaced it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_address_registered_for_one_claim_is_not_attached_to_its_replacement() {
+        let mut fixture = fixture().await;
+        let db = fixture.db.clone();
+        let address = r#"{"success":true,"errors":[],"result":{"id":"addr_1","email":"victim@example.com","verified":null}}"#;
+        fixture.cloudflare = serve_with(move |_| {
+            let restarted = NewClaim {
+                handle: HANDLE.to_owned(),
+                destination: "other@example.com".to_owned(),
+                wallet: wallet(),
+                code_hash: "restarted".to_owned(),
+                expires_at: NOW + 1800,
+                cf_address_id: None,
+                cf_verified_at: None,
+            };
+            let db = db.clone();
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current()
+                    .block_on(start_claim(&db, &restarted, NOW + 1))
+                    .unwrap();
+            });
+            Reply::new(200, address)
+        })
+        .await;
+
+        let answer = confirm_as_wallet(&fixture, CODE).await;
+
+        assert_eq!(answer.status, StatusCode::OK, "{}", answer.text);
+        let claim = claim_by_handle(&fixture.db, HANDLE).await.unwrap().unwrap();
+        assert_eq!(claim.code_hash, "restarted");
+        assert_eq!(claim.cf_address_id, None);
     }
 
     #[test]

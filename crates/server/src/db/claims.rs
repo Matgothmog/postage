@@ -322,6 +322,59 @@ pub async fn consume_attempt(db: &Db, handle: &str, max: i64) -> Result<bool, Db
     Ok(consumed > 0)
 }
 
+/// What became of an attempt taken against one particular claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttemptOutcome {
+    Taken,
+    /// The claim is still the one asked about and has no guesses left.
+    Exhausted,
+    /// The claim was started over, taken by another wallet, or has expired
+    /// since it was read, so a guess against it would be credited elsewhere.
+    ClaimMoved,
+}
+
+/// [`consume_attempt`] for the claim a request has already read: the guess is
+/// counted only while that exact claim, the same code and wallet and not yet
+/// expired, is still what the handle holds. Otherwise a claim started over
+/// between the read and the write would be charged a guess it never saw, and
+/// the code would be judged against a claim that no longer exists.
+pub async fn consume_attempt_on_claim(
+    db: &Db,
+    claim: &InboxClaim,
+    max: i64,
+    now: i64,
+) -> Result<AttemptOutcome, DbError> {
+    let consumed = db
+        .run(
+            "UPDATE inbox_claims SET attempts = attempts + 1
+     WHERE handle = ? AND code_hash = ? AND wallet = ? AND expires_at > ? AND attempts < ?",
+            params![
+                claim.handle.to_lowercase(),
+                claim.code_hash.as_str(),
+                claim.wallet.to_lowercase(),
+                now,
+                max
+            ],
+        )
+        .await?;
+    if consumed > 0 {
+        return Ok(AttemptOutcome::Taken);
+    }
+    // Only names the refusal; the guess was already refused above.
+    let still_this_claim = claim_by_handle(db, &claim.handle)
+        .await?
+        .is_some_and(|held| {
+            held.code_hash == claim.code_hash
+                && held.wallet == claim.wallet
+                && held.expires_at > now
+        });
+    Ok(if still_this_claim {
+        AttemptOutcome::Exhausted
+    } else {
+        AttemptOutcome::ClaimMoved
+    })
+}
+
 pub async fn mark_code_verified(db: &Db, handle: &str, now: i64) -> Result<(), DbError> {
     db.run(
         "UPDATE inbox_claims SET code_verified_at = ? WHERE handle = ? AND code_verified_at IS NULL",
@@ -329,6 +382,31 @@ pub async fn mark_code_verified(db: &Db, handle: &str, now: i64) -> Result<(), D
     )
     .await?;
     Ok(())
+}
+
+/// [`mark_code_verified`] for the claim whose code was just checked, and
+/// `false` when that claim is no longer what the handle holds. A claim that
+/// expired and was restarted by another wallet must not inherit a proof it
+/// never made. Already-verified counts as success, and keeps its first time.
+pub async fn mark_code_verified_on_claim(
+    db: &Db,
+    claim: &InboxClaim,
+    now: i64,
+) -> Result<bool, DbError> {
+    let marked = db
+        .run(
+            "UPDATE inbox_claims SET code_verified_at = COALESCE(code_verified_at, ?)
+     WHERE handle = ? AND code_hash = ? AND wallet = ? AND expires_at > ?",
+            params![
+                now,
+                claim.handle.to_lowercase(),
+                claim.code_hash.as_str(),
+                claim.wallet.to_lowercase(),
+                now
+            ],
+        )
+        .await?;
+    Ok(marked > 0)
 }
 
 /// Registering the address with Cloudflare answers the same question a check
@@ -1115,5 +1193,158 @@ mod tests {
         let attached = stored(&db, "demo").await;
         assert_eq!(attached.cf_address_id.as_deref(), Some("addr-1"));
         assert_eq!(attached.cf_checks, 1);
+    }
+
+    /// The claim the first wallet read, then the handle taken over by another
+    /// wallet once it had expired.
+    async fn claim_taken_over_after_expiry(db: &Db) -> (InboxClaim, InboxClaim) {
+        claim(db, "demo").await;
+        let read = stored(db, "demo").await;
+        let mut takeover = new_claim("demo", "thief@example.com", &other_wallet());
+        takeover.code_hash = "thieves-hash".to_owned();
+        assert!(
+            start_claim_if_free(db, &takeover, None, read.expires_at)
+                .await
+                .unwrap()
+        );
+        (read, stored(db, "demo").await)
+    }
+
+    #[tokio::test]
+    async fn a_verified_mark_for_a_replaced_claim_is_refused_and_leaves_the_new_one_unproven() {
+        let db = TestDb::fresh().await;
+        let (read, _) = claim_taken_over_after_expiry(&db).await;
+
+        let marked = mark_code_verified_on_claim(&db, &read, read.expires_at - 1)
+            .await
+            .unwrap();
+
+        assert!(!marked);
+        assert_eq!(stored(&db, "demo").await.code_verified_at, None);
+    }
+
+    #[tokio::test]
+    async fn a_verified_mark_for_the_current_claim_sticks_with_its_first_time() {
+        let db = TestDb::fresh().await;
+        claim(&db, "demo").await;
+        let read = stored(&db, "demo").await;
+
+        assert!(
+            mark_code_verified_on_claim(&db, &read, NOW + 1)
+                .await
+                .unwrap()
+        );
+        assert!(
+            mark_code_verified_on_claim(&db, &read, NOW + 2)
+                .await
+                .unwrap()
+        );
+
+        assert_eq!(stored(&db, "demo").await.code_verified_at, Some(NOW + 1));
+    }
+
+    #[tokio::test]
+    async fn a_verified_mark_is_refused_for_a_claim_that_has_expired() {
+        let db = TestDb::fresh().await;
+        claim(&db, "demo").await;
+        let read = stored(&db, "demo").await;
+
+        let marked = mark_code_verified_on_claim(&db, &read, read.expires_at)
+            .await
+            .unwrap();
+
+        assert!(!marked);
+        assert_eq!(stored(&db, "demo").await.code_verified_at, None);
+    }
+
+    #[tokio::test]
+    async fn an_attempt_against_a_replaced_claim_is_not_charged_to_its_replacement() {
+        let db = TestDb::fresh().await;
+        let (read, _) = claim_taken_over_after_expiry(&db).await;
+
+        let outcome = consume_attempt_on_claim(&db, &read, 5, read.expires_at - 1)
+            .await
+            .unwrap();
+
+        assert_eq!(outcome, AttemptOutcome::ClaimMoved);
+        assert_eq!(stored(&db, "demo").await.attempts, 0);
+    }
+
+    #[tokio::test]
+    async fn attempts_on_the_current_claim_run_out_as_exhausted_not_moved() {
+        let db = TestDb::fresh().await;
+        claim(&db, "demo").await;
+        let read = stored(&db, "demo").await;
+
+        for _ in 0..2 {
+            let taken = consume_attempt_on_claim(&db, &read, 2, NOW).await.unwrap();
+            assert_eq!(taken, AttemptOutcome::Taken);
+        }
+        let spent = consume_attempt_on_claim(&db, &read, 2, NOW).await.unwrap();
+
+        assert_eq!(spent, AttemptOutcome::Exhausted);
+    }
+
+    #[tokio::test]
+    async fn an_attempt_on_an_expired_or_missing_claim_is_a_moved_claim() {
+        let db = TestDb::fresh().await;
+        claim(&db, "demo").await;
+        let read = stored(&db, "demo").await;
+
+        let expired = consume_attempt_on_claim(&db, &read, 5, read.expires_at)
+            .await
+            .unwrap();
+        clear_claim(&db, "demo").await.unwrap();
+        let missing = consume_attempt_on_claim(&db, &read, 5, NOW).await.unwrap();
+
+        assert_eq!(expired, AttemptOutcome::ClaimMoved);
+        assert_eq!(missing, AttemptOutcome::ClaimMoved);
+    }
+
+    /// A guess racing a takeover is either counted against the claim it read
+    /// before the takeover, or refused; it never lands on the replacement.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn racing_a_takeover_never_charges_or_verifies_the_replacement() {
+        for round in 0..20 {
+            let first = Arc::new(TestDb::fresh().await);
+            let second = Arc::new(first.second_handle().await);
+            claim(&first, "demo").await;
+            let read = stored(&first, "demo").await;
+            let at = read.expires_at - 1;
+            let mut takeover = new_claim("demo", "thief@example.com", &other_wallet());
+            takeover.code_hash = format!("thieves-hash-{round}");
+
+            let guesser = {
+                let (db, read) = (Arc::clone(&first), read.clone());
+                tokio::spawn(async move {
+                    let outcome = consume_attempt_on_claim(&db, &read, 5, at).await.unwrap();
+                    let marked = mark_code_verified_on_claim(&db, &read, at).await.unwrap();
+                    (outcome, marked)
+                })
+            };
+            let taker = {
+                let db = Arc::clone(&second);
+                tokio::spawn(async move {
+                    // Released at the moment the read claim expires.
+                    start_claim_if_free(&db, &takeover, None, read.expires_at)
+                        .await
+                        .unwrap()
+                })
+            };
+            let (outcome, marked) = guesser.await.unwrap();
+            let took_over = taker.await.unwrap();
+
+            let held = stored(&first, "demo").await;
+            if held.wallet == other_wallet() {
+                assert!(took_over);
+                assert_eq!(held.attempts, 0, "round {round}");
+                assert_eq!(held.code_verified_at, None, "round {round}");
+                assert!(outcome == AttemptOutcome::Taken || outcome == AttemptOutcome::ClaimMoved);
+                assert!(!marked || outcome == AttemptOutcome::Taken);
+            } else {
+                assert_eq!(outcome, AttemptOutcome::Taken);
+                assert!(marked);
+            }
+        }
     }
 }
