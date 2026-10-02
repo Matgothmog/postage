@@ -1,0 +1,77 @@
+//! Driving the router the way a client does, for the route tests: build a
+//! request, send it through `oneshot`, read back the status and JSON.
+
+use std::sync::Arc;
+
+use axum::Router;
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
+use serde_json::Value;
+use tower::ServiceExt;
+
+use crate::db::Db;
+use crate::db::challenges::{NewChallenge, create_challenge};
+use crate::privy::Clock;
+
+/// The second every route test stands at.
+pub(crate) const NOW: i64 = 1_788_868_800;
+
+pub(crate) fn clock_at(now: i64) -> Clock {
+    Arc::new(move || now)
+}
+
+/// What came back: the status, the body as text, and the body as JSON
+/// (`Null` when it was empty or not JSON).
+#[derive(Debug)]
+pub(crate) struct Answer {
+    pub status: StatusCode,
+    pub text: String,
+    pub body: Value,
+}
+
+pub(crate) async fn send(app: Router, request: Request<Body>) -> Answer {
+    let response = app.oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let text = String::from_utf8(bytes.to_vec()).unwrap();
+    let body = serde_json::from_str(&text).unwrap_or(Value::Null);
+    Answer { status, text, body }
+}
+
+/// A POST of `body` exactly as written, labelled as JSON.
+pub(crate) fn post(path: &str, body: &str) -> Request<Body> {
+    post_with(path, body, &[])
+}
+
+pub(crate) fn post_with(path: &str, body: &str, headers: &[(&str, &str)]) -> Request<Body> {
+    let mut request = Request::post(path).header("content-type", "application/json");
+    for (name, value) in headers {
+        request = request.header(*name, *value);
+    }
+    request.body(Body::from(body.to_owned())).unwrap()
+}
+
+pub(crate) fn get(path: &str) -> Request<Body> {
+    Request::get(path).body(Body::empty()).unwrap()
+}
+
+/// The challenge row every route test seeds, held for fifteen minutes.
+pub(crate) fn challenge(token: &str, tier: &str) -> NewChallenge {
+    NewChallenge {
+        token: token.to_owned(),
+        handle: "demo".to_owned(),
+        sender: "sender@x.com".to_owned(),
+        message_id: format!("0x{}", "ab".repeat(32)),
+        tier: tier.to_owned(),
+        amount: "1".to_owned(),
+        held_until: Some(NOW + 900),
+        quote_json: "{}".to_owned(),
+        created_at: NOW,
+    }
+}
+
+pub(crate) async fn seed(db: &Db, challenge: &NewChallenge) {
+    create_challenge(db, challenge).await.unwrap();
+}

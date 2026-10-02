@@ -19,6 +19,7 @@ alloy-sol-types = "1"
 axum = { workspace = true }
 futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
 libsql = { version = "0.9.30", default-features = false, features = ["core", "remote", "tls", "serde"] }
+rand_core = { version = "0.9.5", features = ["os_rng"] }
 reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -30,8 +31,8 @@ alloy-consensus = { version = "~1.7", features = ["k256"] }
 alloy-signer = "~1.7"
 base64 = "0.22.1"
 p256 = { version = "0.13.2", default-features = false, features = ["ecdsa"] }
-rand_core = { version = "0.9.5", features = ["os_rng"] }
 tempfile = "3.27.0"
+tower = { workspace = true }
 
 [lints]
 workspace = true

@@ -5,6 +5,10 @@
 //! environment underneath other tests running in parallel. Production passes
 //! [`process_env`].
 
+use std::collections::BTreeMap;
+use std::fmt;
+use std::sync::Arc;
+
 use alloy_signer_local::PrivateKeySigner;
 use postage_core::quote::{QuoteSigner, private_key_bytes};
 use postage_core::secret::{MessageIdSecret, SecretError};
@@ -29,6 +33,83 @@ pub enum ConfigError {
 /// it surfaces as an unrecognised value rather than passing as unset.
 pub fn process_env(name: &str) -> Option<String> {
     std::env::var_os(name).map(|value| value.to_string_lossy().into_owned())
+}
+
+/// The environment a request is served under: the process's own, or a fixed
+/// set of variables a test hands in.
+///
+/// Every reader above takes a lookup closure, and [`Env::lookup`] is that
+/// closure. [`Env::vars`] exists for the one reader that needs every variable
+/// rather than a named one: redacting secrets out of a log line, which has to
+/// know every value worth hiding.
+#[derive(Clone)]
+pub enum Env {
+    Process,
+    Fixed(Arc<BTreeMap<String, String>>),
+}
+
+impl Env {
+    /// A fixed environment with nothing set.
+    pub fn empty() -> Self {
+        Self::Fixed(Arc::default())
+    }
+
+    /// A fixed environment holding exactly `vars`.
+    pub fn fixed<I, K, V>(vars: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: Into<String>,
+    {
+        Self::Fixed(Arc::new(
+            vars.into_iter()
+                .map(|(name, value)| (name.into(), value.into()))
+                .collect(),
+        ))
+    }
+
+    pub fn get(&self, name: &str) -> Option<String> {
+        match self {
+            Self::Process => process_env(name),
+            Self::Fixed(vars) => vars.get(name).cloned(),
+        }
+    }
+
+    /// The closure every `from_env` reader takes.
+    pub fn lookup(&self) -> impl Fn(&str) -> Option<String> + '_ {
+        move |name| self.get(name)
+    }
+
+    /// Every variable and its value, read lossily like [`process_env`].
+    pub fn vars(&self) -> Vec<(String, String)> {
+        match self {
+            Self::Process => std::env::vars_os()
+                .map(|(name, value)| {
+                    (
+                        name.to_string_lossy().into_owned(),
+                        value.to_string_lossy().into_owned(),
+                    )
+                })
+                .collect(),
+            Self::Fixed(vars) => vars
+                .iter()
+                .map(|(name, value)| (name.clone(), value.clone()))
+                .collect(),
+        }
+    }
+}
+
+/// Names only: the values are the secrets this type exists to carry.
+impl fmt::Debug for Env {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Process => formatter.write_str("Env::Process"),
+            Self::Fixed(vars) => formatter
+                .debug_tuple("Env::Fixed")
+                .field(&vars.keys().collect::<Vec<_>>())
+                .finish(),
+        }
+    }
 }
 
 /// Fails loudly at the call site rather than letting a missing value reach an
@@ -274,6 +355,22 @@ mod tests {
                 "{key}"
             );
         }
+    }
+
+    #[test]
+    fn a_fixed_env_answers_only_for_what_it_was_given() {
+        let env = Env::fixed([("A", "1")]);
+        assert_eq!(env.get("A"), Some("1".to_owned()));
+        assert_eq!(env.get("B"), None);
+        assert_eq!(required(env.lookup(), "A"), Ok("1".to_owned()));
+        assert_eq!(env.vars(), [("A".to_owned(), "1".to_owned())]);
+    }
+
+    #[test]
+    fn an_env_is_debugged_by_name_without_its_values() {
+        let shown = format!("{:?}", Env::fixed([("API_KEY", "sk-very-secret")]));
+        assert!(shown.contains("API_KEY"), "{shown}");
+        assert!(!shown.contains("sk-very-secret"), "{shown}");
     }
 
     #[test]

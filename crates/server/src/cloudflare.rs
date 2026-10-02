@@ -58,6 +58,9 @@ pub struct Cloudflare {
     account_id: String,
     api_token: String,
     base: String,
+    /// Set when the account's settings were missing when it was built; every
+    /// call then fails with it, as the TypeScript's `required()` did per call.
+    missing: Option<ConfigError>,
 }
 
 impl fmt::Debug for Cloudflare {
@@ -134,6 +137,7 @@ impl Cloudflare {
             account_id,
             api_token,
             base: DEFAULT_API_BASE.to_owned(),
+            missing: None,
         }
     }
 
@@ -147,6 +151,19 @@ impl Cloudflare {
             required(&env, "CLOUDFLARE_ACCOUNT_ID")?,
             required(&env, "CLOUDFLARE_API_TOKEN")?,
         ))
+    }
+
+    /// [`Cloudflare::from_env`], except that missing settings leave a client
+    /// whose every call fails with them rather than no client at all, so a
+    /// path that never needs Cloudflare is not refused for its absence.
+    pub fn from_env_or_unconfigured<F>(env: F) -> Self
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        Self::from_env(env).unwrap_or_else(|missing| Self {
+            missing: Some(missing),
+            ..Self::new(reqwest::Client::default(), String::new(), String::new())
+        })
     }
 
     /// Points the client somewhere other than Cloudflare's API.
@@ -253,6 +270,9 @@ impl Cloudflare {
         path: &str,
         body: Option<Value>,
     ) -> Result<Envelope, CloudflareError> {
+        if let Some(missing) = &self.missing {
+            return Err(CloudflareError::Config(missing.clone()));
+        }
         let url = format!("{}/accounts/{}{path}", self.base, self.account_id);
         let mut request = self
             .client
@@ -794,6 +814,21 @@ mod tests {
             )
             .contains("api_token")
         );
+    }
+
+    /// Missing settings fail the call that needed them, with their name, and
+    /// nothing goes out.
+    #[tokio::test]
+    async fn an_unconfigured_client_fails_each_call_with_the_missing_setting() {
+        let cloudflare = Cloudflare::from_env_or_unconfigured(|_| None);
+
+        let error = cloudflare.destination_status("addr").await.unwrap_err();
+
+        assert_eq!(
+            error,
+            CloudflareError::Config(ConfigError::Missing("CLOUDFLARE_ACCOUNT_ID"))
+        );
+        assert_eq!(error.to_string(), "CLOUDFLARE_ACCOUNT_ID is not set");
     }
 
     /// Each case's expected value is Node's `Date.parse` of the same text.

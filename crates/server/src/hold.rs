@@ -70,6 +70,10 @@ pub struct MailWorker {
     url: String,
     secret: String,
     timeout: Duration,
+    /// Set when the worker's settings were missing when it was built: every
+    /// release then fails as the TypeScript's did, by `required()` throwing
+    /// inside the send and the gate carrying on without the message.
+    missing: Option<ConfigError>,
 }
 
 impl fmt::Debug for MailWorker {
@@ -89,6 +93,7 @@ impl MailWorker {
             url: format!("{base_url}{RELEASE_PATH}"),
             secret: secret.into(),
             timeout: RELEASE_TIMEOUT,
+            missing: None,
         }
     }
 
@@ -107,6 +112,20 @@ impl MailWorker {
         let url = required(&env, "MAIL_WORKER_URL")?;
         let secret = required(&env, "MAIL_WEBHOOK_SECRET")?;
         Ok(Self::new(reqwest::Client::default(), &url, secret))
+    }
+
+    /// [`MailWorker::from_env`], except that missing settings leave a worker
+    /// whose every send fails rather than no worker at all. The TypeScript read
+    /// them inside the send, so an unconfigured worker cost a delivery, not
+    /// the request that opened the gate.
+    pub fn from_env_or_unconfigured<F>(env: F) -> Self
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        Self::from_env(env).unwrap_or_else(|missing| Self {
+            missing: Some(missing),
+            ..Self::new(reqwest::Client::default(), "", "")
+        })
     }
 
     /// Sends the message held under `token` to `handle`'s inbox.
@@ -144,6 +163,9 @@ impl MailWorker {
     /// Whether the worker answered 2xx. The body is not read: the TypeScript
     /// took any success status as sent.
     async fn send(&self, token: &str, destination: &str) -> bool {
+        if self.missing.is_some() {
+            return false;
+        }
         let request = ReleaseRequest {
             token: token.to_owned(),
             to: destination.to_owned(),
@@ -437,6 +459,22 @@ mod tests {
             MailWorker::from_env(|_| None).unwrap_err(),
             ConfigError::Missing("MAIL_WORKER_URL")
         );
+    }
+
+    /// The TypeScript read both settings inside the send, so a deployment
+    /// without them still opened the gate and only lost the release.
+    #[tokio::test]
+    async fn an_unconfigured_worker_fails_the_send_but_not_the_release() {
+        let db = with_inbox().await;
+        held(&db, "unconfigured").await;
+        let worker = MailWorker::from_env_or_unconfigured(|_| None);
+
+        let release = worker
+            .release_held_message(&db, "unconfigured", HANDLE, NOW)
+            .await
+            .unwrap();
+
+        assert_eq!(release, Release::Undelivered(Undelivered::SendFailed));
     }
 
     #[test]
