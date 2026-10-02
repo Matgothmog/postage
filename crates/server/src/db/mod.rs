@@ -6,8 +6,12 @@
 //! shape does not match is an error at the query rather than a wrong value
 //! somewhere downstream.
 
+pub mod issued_contexts;
 pub mod migrations;
+pub mod nullifiers;
+pub mod passes;
 pub mod schema;
+pub mod spent_nonces;
 #[cfg(test)]
 pub mod testing;
 
