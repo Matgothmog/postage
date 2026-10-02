@@ -238,9 +238,10 @@ Vercel. Grouped by what each gates:
   `file:.data/postage.db`, a local SQLite file; use a `libsql://…` URL with
   `DATABASE_AUTH_TOKEN` for Turso.
 - **Only matter in live identity mode, which is the default.** `IDENTITY_MODE`
-  unset or blank means live. Live mode needs `NEXT_PUBLIC_WORLD_APP_ID`
-  (at build time), `WORLD_RP_ID`, `WORLD_RP_SIGNING_KEY`, and `WORLD_ACTION`;
-  `/api/world/context` and `/api/world/verify` refuse without them. Set
+  unset or blank means live. Live mode needs `WORLD_RP_ID`,
+  `WORLD_RP_SIGNING_KEY` and `WORLD_ACTION`, and `/api/world/context` and
+  `/api/world/verify` refuse without them; the web build needs
+  `NEXT_PUBLIC_WORLD_APP_ID` as well. Set
   `IDENTITY_MODE=mock` to skip all of it and clear the check on a sender-keyed
   stand-in, which the API refuses when `VERCEL_ENV` is `production` unless
   `POSTAGE_ALLOW_MOCK_IN_PRODUCTION=1` is also set. Any other value is a
@@ -257,10 +258,12 @@ Vercel. Grouped by what each gates:
   challenge links point at). `ARC_RPC_URL` is optional even for onchain
   features: unset, the API uses Arc's public RPC.
 
-A missing setting fails the route that needs it with an error naming the
-variable; the rest of the API keeps working.
+A missing setting fails only the route that needs it, with a 500 whose server
+log line names the variable; the rest of the API keeps working.
 
 ### The mail worker
+
+Needs `worker-build` (`cargo install worker-build`) and, to deploy, `wrangler`.
 
 ```bash
 cd crates/mail-worker
@@ -334,7 +337,7 @@ image to compile it. Set the project's environment variables, including the
 three `NEXT_PUBLIC_*` ones the web build reads, then deploy a preview first:
 
 ```bash
-vercel pull
+vercel pull --environment=preview
 vercel build
 vercel deploy --prebuilt
 ```
@@ -355,10 +358,12 @@ Before pointing real traffic at a new deployment:
 
 1. Deploy `postage-mail-rs` (it has its own worker name, so the TypeScript
    `postage-mail` keeps serving), route one test address to it in Cloudflare
-   Email Routing, send one real email to it, and confirm that the
-   `Authentication-Results` header Cloudflare stamps carries the authserv-id
-   `mx.cloudflare.net`. The worker trusts only headers with that id, and if
-   Cloudflare does not stamp one, a sender could forge it.
+   Email Routing, send one real email to it, and confirm that Cloudflare
+   stamps its own `Authentication-Results`, with the authserv-id
+   `mx.cloudflare.net`, above any the sender wrote. The worker trusts only
+   headers with that id and reads the topmost; if Cloudflare stamps only the
+   ARC header, a sender's own `Authentication-Results` carrying that id would
+   be read first.
 2. On the first preview deployment, check that `GET /api/health` and a real API
    route both reach the Axum router with the path they were sent.
 3. Sign in with Privy, pay a quote, and run a Selfie Check with real ids,
@@ -408,7 +413,9 @@ changed:
   challenged. The worker reads results only from a header whose authserv-id is
   `mx.cloudflare.net` (the topmost `Authentication-Results`, or failing that an
   `ARC-Authentication-Results` with `i=1`) and sends the `From:` address to the
-  gateway as `header_from`.
+  gateway as `header_from`. That is safe only if Cloudflare stamps its own
+  `Authentication-Results` above any the sender wrote, which is still to be
+  confirmed against live mail (check 1 under "Deploying the Rust stack").
 - **Pasted messages** from a sender who could not be verified go out without a
   `Reply-To` and with a footer saying the sender address could not be verified.
 - **Payments.** A payment on an expired pass that still has uses left adds a

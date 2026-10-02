@@ -403,10 +403,10 @@ IDKit knows about renders client-side only. Three separate bugs stood between
 that silence and a working flow. We want to be precise about which of them
 were actually World's to fix, because two of them were entirely ours.
 
-The first was ours, and belonged to the Next.js 16 build the app had at the time.
-Next.js 16 blocks a dev server's hot-reload socket for any
-origin not explicitly allowed, and loading the page from a LAN address instead
-of `localhost` tripped it silently — the verify button existed in the DOM, but
+The first was ours, and belonged to the Next.js 16 build the app had at the
+time. Next.js 16 blocks a dev server's hot-reload socket for any origin not
+explicitly allowed, and loading the page from a LAN address instead of
+`localhost` tripped it silently — the verify button existed in the DOM, but
 React had never attached to it, so there was no click handler to fire, no
 fetch, and no error to show. The only trace anywhere was one line in the dev
 server's own log (`Blocked cross-origin request to Next.js dev resource

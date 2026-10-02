@@ -4,7 +4,8 @@ Postage is a filter in front of an inbox you already own, and a way to charge fo
 the mail it holds back. The filter exists to decide who gets charged; the charge
 is the point.
 
-This describes what runs today, including the parts that are not finished.
+This describes the system as this repository builds it, including the parts
+that are not finished.
 
 The application in this repository is Rust compiled two ways: natively for the
 API, and to WebAssembly for the browser app and the mail worker. The deployment
@@ -110,10 +111,11 @@ make that comparison, and it reads results only from a header whose authserv-id
 is `mx.cloudflare.net` (the topmost `Authentication-Results`, or failing that an
 `ARC-Authentication-Results` with `i=1`) and ignores any other
 (`crates/mail-worker/src/auth_results.rs`). That rests on Cloudflare stamping
-such a header on every message, which is still to be confirmed against live
-mail; if it does not, a sender could write one with that id. Some mail from
-mailing lists and forwarders, which breaks one of these checks, is challenged
-where it used to pass.
+its own `Authentication-Results` on every message, above any the sender wrote,
+which is still to be confirmed against live mail; if it stamps only the ARC
+header, a sender's own `Authentication-Results` carrying that id would be read
+first. Some mail from mailing lists and forwarders, which breaks one of these
+checks, is challenged where it used to pass.
 
 ## The price cannot be invented
 

@@ -95,17 +95,17 @@ real take.
    (`config.rs:41-44`) only rejects a value other than `production`, `staging`
    or `sandbox`, so neither tells you a preview picked up `sandbox`; and
    `NEXT_PUBLIC_WORLD_ENVIRONMENT` itself is only used once you reach the
-   Selfie Check call (`crates/web/src/world_id.rs:49`) — a normal page load
-   never touches it. To actually confirm this preview is in sandbox mode
-   before the take: open the challenge page on the preview URL, trigger the
-   World ID verify prompt, and — without tapping or scanning it — inspect
-   where the "Continue in World App" connector link points (on iOS Safari,
-   long-press the link to preview its destination; on desktop, right-click →
-   copy link address). It must resolve to a `sandbox.world.org` host; if it
-   resolves to plain `world.org` instead, the env var did not take effect —
-   fix it and re-check before recording. Inspecting the link this way
-   doesn't submit anything, so it costs neither sandbox account any of its
-   verification budget and is safe to repeat.
+   Selfie Check call (`crates/web/src/world_id.rs:223`, in
+   `run_selfie_check`) — a normal page load never touches it. To actually
+   confirm this preview is in sandbox mode before the take: open the
+   challenge page on the preview URL, trigger the World ID verify prompt, and —
+   without tapping or scanning it — inspect where the "Continue in World App"
+   connector link points (on iOS Safari, long-press the link to preview its
+   destination; on desktop, right-click → copy link address). It must resolve to
+   a `sandbox.world.org` host; if it resolves to plain `world.org` instead, the
+   env var did not take effect — fix it and re-check before recording.
+   Inspecting the link this way doesn't submit anything, so it costs neither
+   sandbox account any of its verification budget and is safe to repeat.
 2. **Stage two World ID sandbox accounts on the iPhone.** Install World App,
    sign in to the account you intend to film with, and confirm it has not
    yet completed a Selfie Check against this project's sandbox action (its
