@@ -1,0 +1,19 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "true",
+  "buildCommand": "sh scripts/build-web.sh",
+  "outputDirectory": "crates/web/dist",
+  "functions": {
+    "api/index.rs": {
+      "maxDuration": 120
+    }
+  },
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/index" },
+    {
+      "source": "/((?!api/|bridge/|fonts/|.*\\.(?:js|wasm|css|ico|woff2|map|txt)$).*)",
+      "destination": "/index.html"
+    }
+  ]
+}
