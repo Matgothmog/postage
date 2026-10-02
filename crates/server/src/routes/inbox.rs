@@ -316,7 +316,7 @@ fn validate(handle: &str, destination: &str) -> Option<&'static str> {
     if !looks_like_email(destination) {
         return Some("A valid destination address is required");
     }
-    if is_our_own(destination) {
+    if is_ours(destination) {
         return Some("Forward to an inbox you already read, not back to Postage");
     }
     None
@@ -335,14 +335,6 @@ fn looks_like_email(address: &str) -> bool {
         && domain
             .char_indices()
             .any(|(index, character)| character == '.' && index > 0 && index + 1 < domain.len())
-}
-
-/// Whether the destination is one of ours, also when it names our domain as a
-/// fully qualified name with trailing dots. The TypeScript compared the text
-/// as written, so `you@usepostage.com.` passed as somebody else's address
-/// while resolving to ours, which is the loop this check exists to refuse.
-fn is_our_own(address: &str) -> bool {
-    is_ours(address.trim_end_matches('.'))
 }
 
 /// A handle is free if nobody owns it and nobody else is part way through

@@ -172,7 +172,7 @@ pub fn clear_pending_claim(store: Option<&dyn ClaimStore>) {
 
 /// `encodeURIComponent`: everything except letters, digits and `-_.!~*'()`
 /// is percent-encoded as UTF-8 bytes.
-fn encode_uri_component(text: &str) -> String {
+pub(crate) fn encode_uri_component(text: &str) -> String {
     let mut encoded = String::with_capacity(text.len());
     for byte in text.bytes() {
         if byte.is_ascii_alphanumeric() || b"-_.!~*'()".contains(&byte) {

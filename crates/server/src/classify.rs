@@ -57,7 +57,7 @@ pub enum ClassifyError {
 }
 
 /// Classifies mail with the model, degrading to the header heuristic.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Classifier {
     client: reqwest::Client,
     /// A missing key is not fatal at construction: like the TypeScript
@@ -68,6 +68,16 @@ pub struct Classifier {
     timeout: Duration,
     max_retries: u32,
     retry_start: Duration,
+}
+
+impl std::fmt::Debug for Classifier {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Classifier")
+            .field("timeout", &self.timeout)
+            .field("max_retries", &self.max_retries)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Classifier {
@@ -279,6 +289,15 @@ fn parse_reply(reply: &[u8]) -> Result<ModelVerdict, ClassifyError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn debug_output_leaves_out_the_api_key_and_base_url() {
+        let classifier =
+            Classifier::new(Ok("sk-secret-key".to_owned()), "https://user:pw@proxy.test");
+        let shown = format!("{classifier:?}");
+        assert!(!shown.contains("sk-secret-key"));
+        assert!(!shown.contains("proxy.test"));
+    }
+
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 

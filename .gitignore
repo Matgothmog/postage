@@ -22,3 +22,9 @@ contracts/lib/
 /target
 crates/web/dist
 crates/web/js/dist
+
+# worker secrets and build output
+.dev.vars*
+crates/mail-worker/.dev.vars
+crates/mail-worker/.wrangler/
+crates/mail-worker/build/

@@ -50,13 +50,22 @@ struct GraphQlError {
     message: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Graph {
     client: reqwest::Client,
     postage_url: Option<String>,
     api_key: Option<String>,
     gateway_base: String,
     timeout: Duration,
+}
+
+impl std::fmt::Debug for Graph {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Graph")
+            .field("timeout", &self.timeout)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Graph {
@@ -172,6 +181,18 @@ impl Graph {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn debug_output_leaves_out_the_api_key_and_urls() {
+        let graph = Graph::new(
+            reqwest::Client::default(),
+            Some("https://postage.test/secret-path".to_owned()),
+            Some("graph-secret-key".to_owned()),
+        );
+        let shown = format!("{graph:?}");
+        assert!(!shown.contains("graph-secret-key"));
+        assert!(!shown.contains("postage.test"));
+    }
+
     use super::*;
     use crate::http_stub::{Reply, closed_port, serve, serve_with};
 

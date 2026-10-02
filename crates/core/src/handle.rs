@@ -14,8 +14,18 @@ pub fn handle_of(address: &str) -> String {
 /// Whether this address is one of ours. A destination that is means mail
 /// forwarded to it comes straight back, and every lap spends a classify call, a
 /// chain read and a challenge row.
+///
+/// Subdomains count too, and so does the fully qualified form with trailing
+/// dots (`you@usepostage.com.`), which resolves to the same host.
 pub fn is_ours(address: &str) -> bool {
-    address.to_lowercase().ends_with(&format!("@{MAIL_DOMAIN}"))
+    let address = address.trim_end_matches('.').to_lowercase();
+    let Some((_, domain)) = address.rsplit_once('@') else {
+        return false;
+    };
+    domain == MAIL_DOMAIN
+        || domain
+            .strip_suffix(MAIL_DOMAIN)
+            .is_some_and(|prefix| prefix.ends_with('.') && prefix.len() > 1)
 }
 
 pub const HANDLE_MIN_LENGTH: usize = 2;
@@ -114,6 +124,27 @@ mod tests {
     #[test]
     fn recognising_our_domain_is_case_insensitive() {
         assert!(is_ours(&format!("someone@{}", MAIL_DOMAIN.to_uppercase())));
+    }
+
+    #[test]
+    fn subdomains_of_ours_are_ours() {
+        assert!(is_ours("a@sub.usepostage.com"));
+        assert!(is_ours("a@a.b.usepostage.com"));
+    }
+
+    #[test]
+    fn trailing_dots_and_mixed_case_do_not_hide_our_domain() {
+        assert!(is_ours("a@usepostage.com."));
+        assert!(is_ours("a@usepostage.com.."));
+        assert!(is_ours("a@Sub.UsePostage.COM."));
+    }
+
+    #[test]
+    fn lookalike_domains_are_not_ours() {
+        assert!(!is_ours("a@usepostage.com.evil.com"));
+        assert!(!is_ours("a@xusepostage.com"));
+        assert!(!is_ours("a@.usepostage.com"));
+        assert!(!is_ours("a@usepostage.co"));
     }
 
     #[test]

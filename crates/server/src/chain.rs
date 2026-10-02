@@ -131,12 +131,23 @@ impl Settlement {
 }
 
 /// The JSON-RPC endpoint every server-side read and write goes through.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Chain {
     url: Url,
     client: RpcClient,
     provider: RootProvider,
     retry_delay: Duration,
+}
+
+/// The RPC URL often carries the provider key in its path or query, so it
+/// stays out of logs.
+impl std::fmt::Debug for Chain {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Chain")
+            .field("retry_delay", &self.retry_delay)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Chain {
@@ -328,6 +339,14 @@ where
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn debug_output_leaves_out_the_rpc_url() {
+        let url = Url::parse("https://rpc.test/v2/provider-secret-key").unwrap();
+        let shown = format!("{:?}", Chain::new(url));
+        assert!(!shown.contains("provider-secret-key"));
+        assert!(!shown.contains("rpc.test"));
+    }
+
     use std::sync::{Arc, Mutex};
 
     use alloy_consensus::TxEnvelope;

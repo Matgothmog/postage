@@ -117,13 +117,16 @@ pub fn view_outcome(answer: Result<HttpResponse, HttpError>) -> Result<Challenge
 
 /// `GET /api/challenge/{token}`.
 pub async fn get_challenge(token: &str) -> Result<ChallengeView, ViewError> {
-    let path = format!(
+    view_outcome(http::send(&HttpRequest::get(challenge_path(token)), None).await)
+}
+
+/// The token comes from the address bar, so it is encoded as one path segment:
+/// a `/`, `?`, `#` or `%` in it must not reshape the request.
+fn challenge_path(token: &str) -> String {
+    format!(
         "/api/challenge/{}",
-        js_sys::encode_uri_component(token)
-            .as_string()
-            .unwrap_or_default()
-    );
-    view_outcome(http::send(&HttpRequest::get(path), None).await)
+        crate::pending_claim::encode_uri_component(token)
+    )
 }
 
 /// What `POST /api/challenge/resolve` says about a payment.
@@ -198,6 +201,15 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn a_token_is_one_encoded_path_segment() {
+        assert_eq!(challenge_path("abc-123"), "/api/challenge/abc-123");
+        assert_eq!(
+            challenge_path("a/b?c#d%e"),
+            "/api/challenge/a%2Fb%3Fc%23d%25e"
+        );
+    }
 
     fn answer(status: u16, body: serde_json::Value) -> Result<HttpResponse, HttpError> {
         Ok(HttpResponse {
