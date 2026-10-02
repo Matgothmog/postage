@@ -1,6 +1,9 @@
 //! Axum router served by the Vercel function in `api/index.rs`.
 
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+
 pub mod config;
+pub mod privy;
 
 use axum::{Json, Router, routing::get};
 use serde_json::{Value, json};

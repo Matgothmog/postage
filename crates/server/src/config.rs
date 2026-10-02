@@ -44,6 +44,16 @@ where
     Ok(MessageIdSecret::new(required(env, "MESSAGE_ID_SECRET")?)?)
 }
 
+/// The Privy app identity tokens must be issued for, and whose JWKS signs them.
+/// The name keeps its `NEXT_PUBLIC_` prefix because the same value configures
+/// the browser SDK.
+pub fn privy_app_id<F>(env: F) -> Result<String, ConfigError>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    required(env, "NEXT_PUBLIC_PRIVY_APP_ID")
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IdentityMode {
     Live,
@@ -171,6 +181,16 @@ mod tests {
             Err(ConfigError::Missing("A"))
         );
         assert_eq!(ConfigError::Missing("A").to_string(), "A is not set");
+    }
+
+    #[test]
+    fn privy_app_id_is_required() {
+        assert_eq!(
+            privy_app_id(|_| None),
+            Err(ConfigError::Missing("NEXT_PUBLIC_PRIVY_APP_ID"))
+        );
+        let env = |name: &str| (name == "NEXT_PUBLIC_PRIVY_APP_ID").then(|| "app".to_owned());
+        assert_eq!(privy_app_id(env), Ok("app".to_owned()));
     }
 
     #[test]

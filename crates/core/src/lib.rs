@@ -9,6 +9,7 @@ pub mod format;
 pub mod handle;
 pub mod network;
 pub mod pricing;
+pub mod privy;
 pub mod quote_types;
 pub mod rp_context;
 pub mod secret;
