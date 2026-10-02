@@ -237,7 +237,25 @@ pub async fn add_paid_use(db: &Db, handle: &str, sender: &str, now: i64) -> Resu
         return Ok(());
     }
 
-    grant_pass(db, handle, sender, "paid", Some(1), now).await
+    // Nothing live is left to top up: no row, or a lapsed one with no count.
+    // Inserting and adding in one statement matters because concurrent first
+    // payments all reach this point; a plain grant would let each overwrite
+    // the last one's single use and lose their money.
+    db.run(
+        "INSERT INTO passes (handle, sender, reason, expires_at, uses_left, created_at)
+     VALUES (?, ?, 'paid', ?, 1, ?)
+     ON CONFLICT (handle, sender) DO UPDATE SET
+       reason = 'paid',
+       expires_at = MAX(passes.expires_at, excluded.expires_at),
+       uses_left = CASE
+         WHEN passes.uses_left IS NOT NULL AND passes.uses_left > 0 THEN passes.uses_left + 1
+         ELSE 1
+       END,
+       created_at = excluded.created_at",
+        params![handle_key, sender_key, now + PASS_WINDOW_SECONDS, now],
+    )
+    .await?;
+    Ok(())
 }
 
 /// Whether a usable pass exists, without spending it.
@@ -621,5 +639,48 @@ mod tests {
         }
 
         assert_eq!(uses_left_of(&first, HANDLE, SENDER).await, Some(5));
+    }
+
+    /// With no pass row at all, every payment misses the UPDATEs and races to
+    /// create the row; the losers must add to the winner's row, not overwrite
+    /// it. One group of racers rarely overlaps inside that window, so many
+    /// senders race at once and each must end with one use per payment.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_first_payments_with_no_pass_each_add_a_use() {
+        const SENDERS: usize = 40;
+        const PAYMENTS_PER_SENDER: usize = 4;
+        let fixture = TestDb::fresh().await;
+        // One connection per payment: the changed-row count is read off the
+        // connection, so sharing one between racing tasks would corrupt it.
+        let mut handles = Vec::new();
+        for _ in 0..SENDERS * PAYMENTS_PER_SENDER {
+            handles.push(fixture.second_handle().await);
+        }
+        let barrier = Arc::new(tokio::sync::Barrier::new(SENDERS * PAYMENTS_PER_SENDER));
+
+        let racers: Vec<_> = handles
+            .into_iter()
+            .enumerate()
+            .map(|(index, db)| {
+                let barrier = Arc::clone(&barrier);
+                let sender = format!("racer{}@x.com", index / PAYMENTS_PER_SENDER);
+                tokio::spawn(async move {
+                    barrier.wait().await;
+                    add_paid_use(&db, HANDLE, &sender, NOW).await
+                })
+            })
+            .collect();
+        for racer in racers {
+            racer.await.unwrap().unwrap();
+        }
+
+        for sender_index in 0..SENDERS {
+            let sender = format!("racer{sender_index}@x.com");
+            assert_eq!(
+                uses_left_of(&fixture, HANDLE, &sender).await,
+                Some(PAYMENTS_PER_SENDER as i64),
+                "a payment was lost for {sender}"
+            );
+        }
     }
 }
