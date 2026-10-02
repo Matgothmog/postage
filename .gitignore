@@ -18,6 +18,10 @@ contracts/lib/
 # claude development logs
 .claude/
 
+# vercel link and local env files
+.vercel
+.env*
+
 # rust
 /target
 crates/web/dist
