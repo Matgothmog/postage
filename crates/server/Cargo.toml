@@ -13,9 +13,11 @@ postage-shared = { workspace = true }
 alloy-network = "~1.7"
 alloy-primitives = "1"
 alloy-provider = { version = "~1.7", default-features = false, features = ["reqwest", "reqwest-rustls-tls"] }
+alloy-rpc-client = { version = "~1.7", default-features = false }
 alloy-rpc-types-eth = "~1.7"
 alloy-signer-local = "~1.7"
 alloy-sol-types = "1"
+alloy-transport-http = { version = "~1.7", default-features = false, features = ["reqwest", "reqwest-rustls-tls"] }
 axum = { workspace = true }
 futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
 libsql = { version = "0.9.30", default-features = false, features = ["core", "remote", "tls", "serde"] }

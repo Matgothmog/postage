@@ -19,9 +19,11 @@ use alloy_network::{EthereumWallet, TransactionBuilder};
 use alloy_primitives::{Address, B256, Bytes, TxHash, U256, aliases::U40};
 use alloy_provider::transport::{RpcError, TransportError};
 use alloy_provider::{Provider, ProviderBuilder, RootProvider};
+use alloy_rpc_client::RpcClient;
 use alloy_rpc_types_eth::{BlockId, TransactionRequest};
 use alloy_signer_local::PrivateKeySigner;
 use alloy_sol_types::SolCall;
+use alloy_transport_http::Http;
 use postage_core::contracts::{
     ARC_TESTNET, HUMAN_REGISTRY, HumanRegistry, POSTAGE_ESCROW, PostageEscrow,
 };
@@ -37,6 +39,18 @@ pub const ATTESTATION_RECEIPT_TIMEOUT: Duration = Duration::from_secs(20);
 /// How often a receipt wait asks again. viem polls `arcTestnet` at its 4s
 /// ceiling because the chain declares no block time.
 pub const RECEIPT_POLL_INTERVAL: Duration = Duration::from_secs(4);
+
+/// How long any one JSON-RPC request may take, as viem's `http()` transport
+/// bounds it. Without a bound a node that accepts the connection and never
+/// answers holds the route's whole request open.
+pub const RPC_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How many times a failed read is asked again, as viem's default `retryCount`.
+pub const READ_RETRIES: u32 = 3;
+
+/// The wait before the first repeat of a read; it doubles each time, as
+/// viem's default `retryDelay` does.
+pub const READ_RETRY_DELAY: Duration = Duration::from_millis(150);
 
 /// JSON-RPC error codes that say the node is struggling rather than that the
 /// request was wrong: limit exceeded, internal error, resource unavailable,
@@ -120,14 +134,32 @@ impl Settlement {
 #[derive(Debug, Clone)]
 pub struct Chain {
     url: Url,
+    client: RpcClient,
     provider: RootProvider,
+    retry_delay: Duration,
 }
 
 impl Chain {
     pub fn new(url: Url) -> Self {
+        Self::with_limits(url, RPC_TIMEOUT, READ_RETRY_DELAY)
+    }
+
+    /// A chain whose every request is cut off after `request_timeout` and
+    /// whose failed reads wait `retry_delay` before the first repeat.
+    fn with_limits(url: Url, request_timeout: Duration, retry_delay: Duration) -> Self {
+        // A builder that cannot be built has no TLS backend, which
+        // `Client::default()` panics on too; the fallback is never a client
+        // without the bound.
+        let http = reqwest::Client::builder()
+            .timeout(request_timeout)
+            .build()
+            .unwrap_or_default();
+        let client = RpcClient::new(Http::with_client(http, url.clone()), false);
         Self {
-            provider: RootProvider::new_http(url.clone()),
+            provider: RootProvider::new(client.clone()),
+            client,
             url,
+            retry_delay,
         }
     }
 
@@ -201,10 +233,14 @@ impl Chain {
         let provider = ProviderBuilder::new()
             .with_chain_id(ARC_TESTNET.id)
             .wallet(EthereumWallet::from(relayer.clone()))
-            .connect_http(self.url.clone());
+            .connect_client(self.client.clone());
         let request = TransactionRequest::default()
             .with_to(HUMAN_REGISTRY)
             .with_input(call.abi_encode());
+        // Bounded per request but never repeated: after a timeout the node may
+        // already hold the signed transaction, and sending it again is how a
+        // relayer attests twice. The nonce, gas and fee reads ahead of the send
+        // share this path and share that rule.
         let pending = provider.send_transaction(request).await?;
         Ok(*pending.tx_hash())
     }
@@ -246,12 +282,30 @@ impl Chain {
     }
 
     /// `eth_call` at the latest block, as viem's `readContract` asks; alloy
-    /// would otherwise ask about the pending one.
+    /// would otherwise ask about the pending one. A read changes nothing, so a
+    /// transient failure is asked again up to [`READ_RETRIES`] times.
     async fn read<C: SolCall>(&self, to: Address, call: C) -> Result<C::Return, ChainError> {
         let request = TransactionRequest::default()
             .with_to(to)
             .with_input(call.abi_encode());
-        let output = self.provider.call(request).block(BlockId::latest()).await?;
+        let mut delay = self.retry_delay;
+        let mut retries_left = READ_RETRIES;
+        let output = loop {
+            let attempt = self
+                .provider
+                .call(request.clone())
+                .block(BlockId::latest())
+                .await
+                .map_err(ChainError::from);
+            match attempt {
+                Err(error) if error.is_transient() && retries_left > 0 => {
+                    retries_left -= 1;
+                    tokio::time::sleep(delay).await;
+                    delay = delay.saturating_mul(2);
+                }
+                other => break other?,
+            }
+        };
         C::abi_decode_returns(&output).map_err(|error| ChainError::Decode {
             function: C::SIGNATURE,
             reason: error.to_string(),
@@ -535,6 +589,141 @@ mod tests {
 
         assert!(matches!(error, ChainError::Unreachable(_)), "{error}");
         assert!(error.is_transient());
+    }
+
+    /// A loopback node that accepts every request and never answers, counting
+    /// how many it was asked.
+    async fn silent_node() -> (Url, Arc<Mutex<u32>>) {
+        let asked = Arc::new(Mutex::new(0_u32));
+        let counter = asked.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let app = axum::Router::new().route(
+            "/",
+            axum::routing::post(move || {
+                let counter = counter.clone();
+                async move {
+                    *counter.lock().unwrap() += 1;
+                    std::future::pending::<()>().await;
+                }
+            }),
+        );
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        (url, asked)
+    }
+
+    const SHORT: Duration = Duration::from_millis(100);
+    const NO_WAIT: Duration = Duration::from_millis(1);
+
+    #[test]
+    fn the_request_bound_and_read_retries_match_viem() {
+        assert_eq!(RPC_TIMEOUT, Duration::from_secs(10));
+        assert_eq!(READ_RETRIES, 3);
+        assert_eq!(READ_RETRY_DELAY, Duration::from_millis(150));
+    }
+
+    #[tokio::test]
+    async fn a_read_from_a_node_that_never_answers_gives_up_after_the_bound_and_its_retries() {
+        let (url, asked) = silent_node().await;
+
+        let started = std::time::Instant::now();
+        let error = Chain::with_limits(url, SHORT, NO_WAIT)
+            .human_until(INBOX)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, ChainError::Unreachable(_)), "{error}");
+        assert!(error.is_transient());
+        assert_eq!(*asked.lock().unwrap(), 1 + READ_RETRIES);
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[tokio::test]
+    async fn a_read_that_fails_transiently_is_asked_again_and_can_succeed() {
+        let calls = Arc::new(Mutex::new(0_u32));
+        let counted = calls.clone();
+        let stub = node(move |_, _| {
+            let mut calls = counted.lock().unwrap();
+            *calls += 1;
+            if *calls <= 2 {
+                return Err((-32005, "limit exceeded".to_owned()));
+            }
+            Ok(json!(format!("0x{}", word(42))))
+        })
+        .await;
+
+        let until = Chain::with_limits(stub.url.clone(), SHORT, NO_WAIT)
+            .human_until(INBOX)
+            .await
+            .unwrap();
+
+        assert_eq!(until, 42);
+        assert_eq!(stub.calls("eth_call").len(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_read_gives_up_after_the_retry_count() {
+        let stub = call_returning(Err((-32005, "limit exceeded".to_owned()))).await;
+
+        let error = Chain::with_limits(stub.url.clone(), SHORT, NO_WAIT)
+            .human_until(INBOX)
+            .await
+            .unwrap_err();
+
+        assert!(error.is_transient(), "{error}");
+        assert_eq!(stub.calls("eth_call").len(), 1 + READ_RETRIES as usize);
+    }
+
+    #[tokio::test]
+    async fn a_revert_is_not_asked_again() {
+        let stub = call_returning(Err((3, "execution reverted".to_owned()))).await;
+
+        Chain::with_limits(stub.url.clone(), SHORT, NO_WAIT)
+            .settlement_of(B256::ZERO)
+            .await
+            .unwrap_err();
+
+        assert_eq!(stub.calls("eth_call").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_transaction_the_node_fails_to_take_is_sent_once() {
+        let stub = node(|method, _| match method {
+            "eth_sendRawTransaction" => Err((-32005, "limit exceeded".to_owned())),
+            "eth_getTransactionCount" => Ok(json!("0x0")),
+            "eth_estimateGas" => Ok(json!("0x15000")),
+            "eth_feeHistory" => Ok(json!({
+                "oldestBlock": "0x1", "baseFeePerGas": ["0x1", "0x1"],
+                "gasUsedRatio": [0.5], "reward": [["0x1"]]
+            })),
+            "eth_gasPrice" | "eth_maxPriorityFeePerGas" => Ok(json!("0x1")),
+            other => Err((-32601, format!("{other} not stubbed"))),
+        })
+        .await;
+
+        let error = Chain::with_limits(stub.url.clone(), SHORT, NO_WAIT)
+            .attest(&relayer(), INBOX, B256::ZERO, 1, Bytes::new())
+            .await
+            .unwrap_err();
+
+        assert!(error.is_transient(), "{error}");
+        assert_eq!(stub.calls("eth_sendRawTransaction").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_attestation_to_a_node_that_never_answers_is_cut_off() {
+        let (url, _asked) = silent_node().await;
+
+        let started = std::time::Instant::now();
+        let error = Chain::with_limits(url, SHORT, NO_WAIT)
+            .attest(&relayer(), INBOX, B256::ZERO, 1, Bytes::new())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, ChainError::Unreachable(_)), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     fn relayer() -> PrivateKeySigner {

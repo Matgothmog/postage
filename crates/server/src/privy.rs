@@ -8,7 +8,7 @@
 
 use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures_util::FutureExt;
 use futures_util::future::{BoxFuture, Shared};
@@ -31,6 +31,11 @@ const REFRESH_GUARD_SECONDS: i64 = 60;
 /// asking a service that is down once per inbound request is how it is held
 /// down - and we pay the egress for it.
 const FAILURES_BEFORE_COOLDOWN: u32 = 2;
+
+/// How long one JWKS request may take, as the TypeScript's `fetch` was bounded
+/// at. A Privy that accepts the connection and never answers would otherwise
+/// hold every inbound identity read open behind the one shared fetch.
+pub const JWKS_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub fn jwks_url(app_id: &str) -> String {
     format!("https://auth.privy.io/api/v1/apps/{app_id}/jwks.json")
@@ -60,13 +65,31 @@ pub trait JwksFetch: Send + Sync {
 }
 
 /// The production fetcher.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct HttpJwks {
     client: reqwest::Client,
 }
 
+impl Default for HttpJwks {
+    fn default() -> Self {
+        Self::with_timeout(JWKS_TIMEOUT)
+    }
+}
+
 impl HttpJwks {
     pub fn new(client: reqwest::Client) -> Self {
+        Self { client }
+    }
+
+    /// A fetcher whose every request is cut off after `timeout`.
+    fn with_timeout(timeout: Duration) -> Self {
+        // A builder that cannot be built has no TLS backend, which
+        // `Client::default()` panics on too; the fallback is never a client
+        // without the bound.
+        let client = reqwest::Client::builder()
+            .timeout(timeout)
+            .build()
+            .unwrap_or_default();
         Self { client }
     }
 }
@@ -108,17 +131,27 @@ type PendingKeys = Shared<BoxFuture<'static, Result<Keys, JwksError>>>;
 
 /// What a key lookup is to do once the cache lock is released.
 enum Lookup {
-    /// Await the cached (or in-flight) fetch; another caller settles it.
-    Reuse(PendingKeys),
+    /// Await the cached (or in-flight) fetch.
+    Reuse(CachedFetch),
     /// Answer with an empty key set without asking anyone.
     NoKeys,
-    /// Await a fetch this caller started, and settle it.
-    Fetch(PendingKeys),
+    /// Await a fetch this caller started.
+    Fetch(CachedFetch),
+}
+
+/// A fetch and the generation that started it. A waiter that sees it fail
+/// forgets it by generation, so it can never forget a newer fetch.
+#[derive(Clone)]
+struct CachedFetch {
+    generation: u64,
+    pending: PendingKeys,
 }
 
 #[derive(Default)]
 struct CacheState {
-    cached: Option<PendingKeys>,
+    cached: Option<CachedFetch>,
+    /// The generation the next fetch will carry.
+    next_generation: u64,
     last_refresh_attempt: i64,
     /// Consecutive failed fetches, and when the last of them was. Kept apart
     /// from `last_refresh_attempt` because they bound different things: that
@@ -261,13 +294,12 @@ impl PrivyVerifier {
 
     async fn run(&self, lookup: Lookup) -> Result<Keys, JwksError> {
         match lookup {
-            Lookup::Reuse(cached) => cached.await,
+            Lookup::Reuse(fetch) | Lookup::Fetch(fetch) => self.settle(fetch).await,
             Lookup::NoKeys => Ok(Arc::default()),
-            Lookup::Fetch(pending) => self.settle(pending).await,
         }
     }
 
-    fn start_fetch(&self, state: &mut CacheState) -> PendingKeys {
+    fn start_fetch(&self, state: &mut CacheState) -> CachedFetch {
         let fetcher = Arc::clone(&self.fetcher);
         let url = self.jwks_url.clone();
         let pending = async move {
@@ -279,24 +311,42 @@ impl PrivyVerifier {
         }
         .boxed()
         .shared();
-        state.cached = Some(pending.clone());
-        pending
+        let fetch = CachedFetch {
+            generation: state.next_generation,
+            pending,
+        };
+        state.next_generation += 1;
+        state.cached = Some(fetch.clone());
+        fetch
     }
 
-    /// Waits on the fetch this caller started, forgetting it on failure and
-    /// counting it. A failed fetch must not be remembered as an answer, or one
-    /// bad minute breaks signup until the process is replaced; what is
-    /// remembered instead is that it failed, which is what the cooldown reads.
-    async fn settle(&self, pending: PendingKeys) -> Result<Keys, JwksError> {
-        let outcome = pending.await;
+    /// Waits on a fetch, and on failure forgets it and counts it. Every
+    /// waiter does this, not only the caller that started the fetch: that
+    /// caller can be dropped (a client that disconnects) before the fetch
+    /// fails, and the failure it never saw would stay cached for everyone.
+    /// A failed fetch must not be remembered as an answer, or one bad minute
+    /// breaks signup until the process is replaced; what is remembered
+    /// instead is that it failed, which is what the cooldown reads.
+    ///
+    /// The first waiter to look clears the generation and counts the failure;
+    /// the rest find it already gone, so one failed fetch counts once however
+    /// many callers waited on it.
+    async fn settle(&self, fetch: CachedFetch) -> Result<Keys, JwksError> {
+        let outcome = fetch.pending.await;
         let mut state = self.state();
+        let still_cached = state
+            .cached
+            .as_ref()
+            .is_some_and(|cached| cached.generation == fetch.generation);
         match &outcome {
-            Ok(_) => state.failed_fetches = 0,
-            Err(_) => {
+            Ok(_) if still_cached => state.failed_fetches = 0,
+            Ok(_) => {}
+            Err(_) if still_cached => {
                 state.cached = None;
                 state.failed_fetches = state.failed_fetches.saturating_add(1);
                 state.last_failed_fetch = self.now();
             }
+            Err(_) => {}
         }
         outcome
     }
@@ -376,6 +426,8 @@ mod tests {
     struct FakeJwks {
         served: Mutex<Served>,
         requests: AtomicI64,
+        /// When set, the next fetch waits for it and then fails.
+        gate: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
     }
 
     impl JwksFetch for FakeJwks {
@@ -392,7 +444,15 @@ mod tests {
                     body: b"gateway is unhappy".to_vec(),
                 },
             };
-            async move { Ok(response) }.boxed()
+            let gate = self.gate.lock().unwrap().take();
+            async move {
+                if let Some(gate) = gate {
+                    let _ = gate.await;
+                    return Err(JwksError::Transport("connection reset".to_owned()));
+                }
+                Ok(response)
+            }
+            .boxed()
         }
     }
 
@@ -413,6 +473,7 @@ mod tests {
             let jwks = Arc::new(FakeJwks {
                 served: Mutex::new(served),
                 requests: AtomicI64::new(0),
+                gate: Mutex::new(None),
             });
             let clock = Arc::new(AtomicI64::new(FROZEN));
             let reader = Arc::clone(&clock);
@@ -440,6 +501,14 @@ mod tests {
 
         fn serve_keys(&self, keys: &[&TestKey]) {
             self.serve(Served::Json(key_set(keys)));
+        }
+
+        /// Makes the next JWKS fetch hang until the returned sender fires,
+        /// then fail.
+        fn hold_next_fetch(&self) -> tokio::sync::oneshot::Sender<()> {
+            let (release, gate) = tokio::sync::oneshot::channel();
+            *self.jwks.gate.lock().unwrap() = Some(gate);
+            release
         }
 
         fn requests(&self) -> i64 {
@@ -999,6 +1068,86 @@ mod tests {
         let (first, second) = tokio::join!(h.read(&token), h.read(&token));
         assert!(first.is_some() && second.is_some());
         assert_eq!(h.requests(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_failed_fetch_whose_starting_request_was_dropped_is_not_reused() {
+        let h = Arc::new(Harness::new(&[&PUBLISHED]));
+        let token = h.token(&PUBLISHED);
+        let release = h.hold_next_fetch();
+
+        let starter = {
+            let (h, token) = (Arc::clone(&h), token.clone());
+            tokio::spawn(async move { h.read(&token).await })
+        };
+        while h.requests() == 0 {
+            tokio::task::yield_now().await;
+        }
+        // The client goes away mid-fetch, and only then does the fetch fail.
+        starter.abort();
+        let _ = starter.await;
+        release.send(()).unwrap();
+
+        assert!(
+            h.read(&token).await.is_none(),
+            "the waiter that finds the fetch failed gets no key"
+        );
+        assert_eq!(
+            h.user_id(&token).await.as_deref(),
+            Some(SUBJECT),
+            "the next read asks Privy again instead of reusing the failure"
+        );
+        assert_eq!(h.requests(), 2);
+    }
+
+    #[tokio::test]
+    async fn one_failed_fetch_counts_once_however_many_callers_waited_on_it() {
+        let h = Harness::new(&[&PUBLISHED]);
+        let token = h.token(&PUBLISHED);
+        let release = h.hold_next_fetch();
+
+        // The release is polled last, so all three readers are already
+        // waiting on the one fetch when it fails.
+        let (first, second, third, ()) =
+            tokio::join!(h.read(&token), h.read(&token), h.read(&token), async {
+                release.send(()).unwrap()
+            });
+
+        assert!(first.is_none() && second.is_none() && third.is_none());
+        assert_eq!(h.requests(), 1);
+        assert_eq!(
+            h.user_id(&token).await.as_deref(),
+            Some(SUBJECT),
+            "one failure is not yet a cooldown"
+        );
+    }
+
+    #[test]
+    fn the_jwks_request_bound_is_ten_seconds() {
+        assert_eq!(JWKS_TIMEOUT, Duration::from_secs(10));
+    }
+
+    #[tokio::test]
+    async fn the_http_fetcher_gives_up_on_a_server_that_never_answers() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = axum::Router::new().route(
+            "/jwks.json",
+            axum::routing::get(std::future::pending::<&'static str>),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let started = std::time::Instant::now();
+        let response = HttpJwks::with_timeout(Duration::from_millis(100))
+            .fetch(format!("http://{address}/jwks.json"))
+            .await;
+        server.abort();
+
+        assert!(
+            matches!(response, Err(JwksError::Transport(_))),
+            "{response:?}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     #[test]
