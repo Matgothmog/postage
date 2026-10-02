@@ -30,7 +30,8 @@ fn now_seconds() -> u64 {
 #[tokio::test]
 async fn the_gateway_is_told_what_the_receiving_mta_concluded() {
     let edge = FakeEdge::new().gateway_answers(200, json!({"action": "reject", "bounce": "no"}));
-    let message = FakeMessage::new().authenticated_as("mx; dmarc=pass policy.dmarc=none; spf=pass");
+    let message = FakeMessage::new()
+        .authenticated_as("mx.cloudflare.net; dmarc=pass policy.dmarc=none; spf=pass");
 
     run(&edge, &message).await;
 

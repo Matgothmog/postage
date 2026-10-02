@@ -173,11 +173,15 @@ impl InboundMessage for CloudflareMessage {
     }
 
     fn authentication_results(&self) -> Option<String> {
-        self.0
-            .headers()
-            .get("authentication-results")
-            .ok()
-            .flatten()
+        // Plain copies first, then ARC ones, so `auth_results` can prefer the
+        // plain header. Each is every copy joined with ", " in message order.
+        let headers = self.0.headers();
+        let read = |name: &str| headers.get(name).ok().flatten();
+        let joined: Vec<String> = ["authentication-results", "arc-authentication-results"]
+            .into_iter()
+            .filter_map(read)
+            .collect();
+        (!joined.is_empty()).then(|| joined.join(", "))
     }
 
     async fn read_raw(&self) -> std::result::Result<Vec<u8>, EdgeError> {
