@@ -77,23 +77,33 @@ impl QuoteSigner {
     /// The address the escrow must have registered as the classifier for
     /// these signatures to verify.
     pub fn address(&self) -> Address {
-        let point = self.0.verifying_key().to_encoded_point(false);
-        // Uncompressed SEC1 is a 0x04 tag followed by x and y.
-        let hash = keccak256(&point.as_bytes()[1..]);
-        Address::from_slice(&hash[12..])
+        address_of(&self.0)
     }
 
-    /// 65 bytes of r, s and v, with v as 27 or 28.
     fn sign_hash(&self, hash: &B256) -> Result<[u8; 65], QuoteError> {
-        let (signature, recovery) = self
-            .0
-            .sign_prehash_recoverable(hash.as_slice())
-            .map_err(|_| QuoteError::Signing)?;
-        let mut bytes = [0u8; 65];
-        bytes[..64].copy_from_slice(&signature.to_bytes());
-        bytes[64] = 27 + u8::from(recovery.is_y_odd());
-        Ok(bytes)
+        recoverable_signature(&self.0, hash).map_err(|_| QuoteError::Signing)
     }
+}
+
+/// 65 bytes of r, s and v over a prehashed digest, with v as 27 or 28: the
+/// layout viem's `signTypedData` returns.
+pub(crate) fn recoverable_signature(
+    key: &SigningKey,
+    hash: &B256,
+) -> Result<[u8; 65], k256::ecdsa::Error> {
+    let (signature, recovery) = key.sign_prehash_recoverable(hash.as_slice())?;
+    let mut bytes = [0u8; 65];
+    bytes[..64].copy_from_slice(&signature.to_bytes());
+    bytes[64] = 27 + u8::from(recovery.is_y_odd());
+    Ok(bytes)
+}
+
+/// The address a secp256k1 key signs as.
+pub(crate) fn address_of(key: &SigningKey) -> Address {
+    let point = key.verifying_key().to_encoded_point(false);
+    // Uncompressed SEC1 is a 0x04 tag followed by x and y.
+    let hash = keccak256(&point.as_bytes()[1..]);
+    Address::from_slice(&hash[12..])
 }
 
 impl fmt::Debug for QuoteSigner {

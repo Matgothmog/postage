@@ -10,6 +10,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use alloy_signer_local::PrivateKeySigner;
+use postage_core::attestation::AttesterSigner;
 use postage_core::quote::{QuoteSigner, private_key_bytes};
 use postage_core::secret::{MessageIdSecret, SecretError};
 
@@ -149,6 +150,15 @@ where
     let invalid = || ConfigError::Invalid("RELAYER_PRIVATE_KEY");
     let bytes = private_key_bytes(&required(env, "RELAYER_PRIVATE_KEY")?).map_err(|_| invalid())?;
     PrivateKeySigner::from_slice(&bytes).map_err(|_| invalid())
+}
+
+/// The key `HumanRegistry` recognises as its attester (`ATTESTER_PRIVATE_KEY`).
+pub fn attester_signer<F>(env: F) -> Result<AttesterSigner, ConfigError>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let key = required(env, "ATTESTER_PRIVATE_KEY")?;
+    AttesterSigner::from_hex(&key).map_err(|_| ConfigError::Invalid("ATTESTER_PRIVATE_KEY"))
 }
 
 /// The Privy app identity tokens must be issued for, and whose JWKS signs them.
@@ -355,6 +365,29 @@ mod tests {
                 "{key}"
             );
         }
+    }
+
+    #[test]
+    fn an_attester_key_is_read_into_a_signer_with_the_same_address_viem_derives() {
+        let key = format!("0x{}", "11".repeat(32));
+        let signer = attester_signer(with_key("ATTESTER_PRIVATE_KEY", &key)).unwrap();
+        assert_eq!(
+            signer.address().to_checksum(None),
+            "0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A"
+        );
+    }
+
+    #[test]
+    fn a_missing_or_malformed_attester_key_is_named_without_its_value() {
+        assert_eq!(
+            attester_signer(|_| None).map(|_| ()),
+            Err(ConfigError::Missing("ATTESTER_PRIVATE_KEY"))
+        );
+        let error = attester_signer(with_key("ATTESTER_PRIVATE_KEY", "0xdeadbeef"))
+            .map(|_| ())
+            .unwrap_err();
+        assert_eq!(error, ConfigError::Invalid("ATTESTER_PRIVATE_KEY"));
+        assert!(!error.to_string().contains("deadbeef"));
     }
 
     #[test]

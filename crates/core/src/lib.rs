@@ -2,6 +2,7 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+pub mod attestation;
 pub mod brand;
 pub mod challenge_email;
 pub mod classify;

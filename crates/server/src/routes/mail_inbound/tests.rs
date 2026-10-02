@@ -29,7 +29,7 @@ use crate::db::testing::TestDb;
 use crate::http_stub::{Reply, Stub, serve_with};
 use crate::log::captured;
 use crate::routes::router;
-use crate::routes::testing::{Answer, NOW, clock_at, post_with, send};
+use crate::routes::testing::{Answer, NOW, clock_at, keys_in_order, post_with, send};
 
 const PATH: &str = "/api/mail/inbound";
 const DESTINATION: &str = "demo@example.com";
@@ -151,37 +151,6 @@ async fn count(db: &Db, table: &str) -> i64 {
         .await
         .unwrap();
     rows[0].n
-}
-
-/// The keys of a JSON object in the order they were written, which a parsed
-/// `Value` does not keep.
-fn keys_in_order(text: &str) -> Vec<String> {
-    struct Keys(Vec<String>);
-
-    impl<'de> serde::Deserialize<'de> for Keys {
-        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-            struct Visitor;
-            impl<'de> serde::de::Visitor<'de> for Visitor {
-                type Value = Keys;
-                fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                    formatter.write_str("an object")
-                }
-                fn visit_map<A: serde::de::MapAccess<'de>>(
-                    self,
-                    mut map: A,
-                ) -> Result<Keys, A::Error> {
-                    let mut keys = Vec::new();
-                    while let Some((key, _)) = map.next_entry::<String, serde::de::IgnoredAny>()? {
-                        keys.push(key);
-                    }
-                    Ok(Keys(keys))
-                }
-            }
-            deserializer.deserialize_map(Visitor)
-        }
-    }
-
-    serde_json::from_str::<Keys>(text).unwrap().0
 }
 
 /// The raw text of the last field of a serialized object.

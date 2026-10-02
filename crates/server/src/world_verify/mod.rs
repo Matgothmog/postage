@@ -1,5 +1,5 @@
-//! `POST /api/world/verify` (`web/src/app/api/world/verify/route.ts`), up to
-//! and including World's verdict: the free lane's proof of personhood.
+//! `POST /api/world/verify` (`web/src/app/api/world/verify/route.ts`): the
+//! free lane's proof of personhood, and what it buys.
 //!
 //! In the order the TypeScript ran them, each a stage of its own:
 //!
@@ -13,20 +13,27 @@
 //!    in, bounded by the same per-token ceiling live contexts share
 //!    ([`ledger`]).
 //!
-//! What follows a verified person (binding the nullifier, the onchain
-//! attestation, opening the gate) is behind [`SettleVerifiedHuman`].
+//! What follows a verified person is behind [`SettleVerifiedHuman`];
+//! [`Personhood`] is the one the route runs: the onchain attestation, then
+//! binding the nullifier, then the gate ([`settle`]).
 //!
 //! Every refusal decided inside stage 3 or 4 is a [`Stopped::Refused`] with
 //! the TypeScript's status and words. Anything else that goes wrong there is
 //! ours (a missing setting, a bug), logged with a fingerprint of the token
 //! and answered as a bare 500, as Next.js answered the rethrown error.
 
+mod attest;
 mod ledger;
 mod proof;
+mod settle;
 mod world_answer;
 
 #[cfg(test)]
+mod settle_tests;
+#[cfg(test)]
 mod tests;
+
+pub use settle::Personhood;
 
 use std::error::Error;
 

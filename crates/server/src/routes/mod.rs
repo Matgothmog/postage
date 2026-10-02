@@ -20,6 +20,7 @@ mod pipeline_tests;
 pub(crate) mod testing;
 mod wallet_nonce;
 mod world_context;
+mod world_verify;
 
 use std::error::Error;
 use std::sync::Arc;
@@ -48,6 +49,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/health", get(health))
         .route("/api/wallet-nonce", post(wallet_nonce::post))
         .route("/api/world/context", post(world_context::post))
+        .route("/api/world/verify", post(world_verify::post))
         .route("/api/challenge/resolve", post(challenge_resolve::post))
         .route("/api/challenge/deliver", post(challenge_deliver::post))
         .route("/api/challenge/{token}", get(challenge_view::get))
