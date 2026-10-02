@@ -17,8 +17,8 @@ use postage_shared::Tier;
 use serde::Serialize;
 use serde_json::Value;
 
-use super::js::{TypeError, is_truthy, js_length, js_trim, lookup_text, property, request_json};
-use super::{Exit, RouteResult, json, refuse};
+use super::js::{field, is_truthy, js_length, js_trim, lookup_text, request_json};
+use super::{Exit, RouteResult, invalid_request, json, refuse};
 use crate::app::AppState;
 use crate::db::Db;
 use crate::db::challenges::{Challenge, challenge_by_token};
@@ -41,18 +41,19 @@ struct Delivered<'a> {
 /// What the sender pasted, read the way the TypeScript read it.
 struct Paste<'a> {
     token: String,
-    /// `subject?.trim()`. A subject that is not a string got past every
-    /// check in the TypeScript and threw at its first `trim()`, after the
-    /// budget had been charged, so the error waits until then here too.
-    subject: Result<Option<String>, TypeError>,
+    /// `subject?.trim()`; `None` when no subject was given.
+    subject: Option<String>,
     /// As pasted; trimmed where the TypeScript trimmed it.
     text: &'a str,
 }
 
 pub(crate) async fn post(State(state): State<AppState>, body: Bytes) -> RouteResult {
-    // Unguarded in the TypeScript: a body that is not JSON threw, which
-    // Next.js answered with a bare 500.
-    let request = request_json(&body)?;
+    // Unguarded in the TypeScript, where all of this was a bare 500, some of it
+    // after the budget slot was taken. Every field is checked before anything
+    // is spent.
+    let Ok(request) = request_json(&body) else {
+        return Err(invalid_request());
+    };
     let paste = read_paste(&request)?;
 
     let db = state.db().await?;
@@ -73,7 +74,7 @@ pub(crate) async fn post(State(state): State<AppState>, body: Bytes) -> RouteRes
         ));
     }
 
-    let subject = paste.subject?;
+    let subject = paste.subject;
     judge(
         &state,
         db,
@@ -120,9 +121,9 @@ pub(crate) async fn post(State(state): State<AppState>, body: Bytes) -> RouteRes
 
 /// `if (!token || !body?.trim())`, then the length limits.
 fn read_paste(request: &Value) -> Result<Paste<'_>, Exit> {
-    let token = property(request, "token")?;
-    let subject = property(request, "subject")?;
-    let pasted = property(request, "body")?;
+    let token = field(request, "token");
+    let subject = field(request, "subject");
+    let pasted = field(request, "body");
 
     let missing = || refuse(StatusCode::BAD_REQUEST, "token and a message are required");
     let Some(token) = token.filter(|token| is_truthy(Some(token))) else {
@@ -132,7 +133,7 @@ fn read_paste(request: &Value) -> Result<Paste<'_>, Exit> {
         None | Some(Value::Null) => return Err(missing()),
         Some(Value::String(text)) if js_trim(text).is_empty() => return Err(missing()),
         Some(Value::String(text)) => text,
-        Some(_) => return Err(TypeError("body?.trim is not a function".to_owned()).into()),
+        Some(_) => return Err(invalid_request()),
     };
     if js_length(text) > MAX_BODY || subject_length(subject) > MAX_SUBJECT {
         return Err(refuse(
@@ -141,8 +142,8 @@ fn read_paste(request: &Value) -> Result<Paste<'_>, Exit> {
         ));
     }
     Ok(Paste {
-        token: lookup_text(token)?,
-        subject: trimmed_subject(subject),
+        token: lookup_text(token).map_err(|_| invalid_request())?,
+        subject: trimmed_subject(subject)?,
         text,
     })
 }
@@ -258,12 +259,12 @@ fn subject_length(subject: Option<&Value>) -> f64 {
 }
 
 /// `subject?.trim()`: `None` for an absent subject, the trimmed text for a
-/// string, and the `TypeError` anything else threw.
-fn trimmed_subject(subject: Option<&Value>) -> Result<Option<String>, TypeError> {
+/// string, and a refusal for anything else (which threw in the TypeScript).
+fn trimmed_subject(subject: Option<&Value>) -> Result<Option<String>, Exit> {
     match subject {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(text)) => Ok(Some(js_trim(text).to_owned())),
-        Some(_) => Err(TypeError("subject?.trim is not a function".to_owned())),
+        Some(_) => Err(invalid_request()),
     }
 }
 
@@ -614,15 +615,77 @@ mod tests {
         assert_eq!(subject_length(None), 0.0);
     }
 
+    async fn slots_taken(db: &Db) -> i64 {
+        #[derive(serde::Deserialize)]
+        struct Count {
+            n: i64,
+        }
+        let rows: Vec<Count> = db
+            .all("SELECT COUNT(*) AS n FROM classifications", ())
+            .await
+            .unwrap();
+        rows[0].n
+    }
+
+    /// Each of these was a bare 500 in the TypeScript, the subject one only
+    /// after the budget slot had been taken. A deliberate change: all are
+    /// refused with a 400 first, with the model never asked, no budget slot
+    /// taken, the pass still held and nothing relayed.
     #[tokio::test]
-    async fn a_message_that_is_not_a_string_is_the_bare_500_the_typescript_gave() {
+    async fn a_malformed_paste_is_refused_before_anything_is_spent() {
         let fixture = fixture("commercial", 200).await;
+        fixture.cleared().await;
+
+        for (raw, error) in [
+            ("not json", "Invalid request"),
+            ("", "Invalid request"),
+            ("null", "token and a message are required"),
+            ("[]", "token and a message are required"),
+            (r#"{"token":"tok","body":5}"#, "Invalid request"),
+            (r#"{"token":"tok","body":["hi"]}"#, "Invalid request"),
+            (r#"{"token":"tok","body":{"a":1}}"#, "Invalid request"),
+            (r#"{"token":"tok","body":true}"#, "Invalid request"),
+            (
+                r#"{"token":"tok","body":"hi","subject":5}"#,
+                "Invalid request",
+            ),
+            (
+                r#"{"token":"tok","body":"hi","subject":true}"#,
+                "Invalid request",
+            ),
+            (
+                r#"{"token":"tok","body":"hi","subject":["a"]}"#,
+                "Invalid request",
+            ),
+            (
+                r#"{"token":"tok","body":"hi","subject":{"a":1}}"#,
+                "Invalid request",
+            ),
+            (r#"{"token":[],"body":"hi"}"#, "Invalid request"),
+            (r#"{"token":{"a":1},"body":"hi"}"#, "Invalid request"),
+        ] {
+            let answer = fixture.send(raw).await;
+
+            assert_eq!(answer.status, StatusCode::BAD_REQUEST, "{raw}");
+            assert_eq!(answer.body, json!({ "error": error }), "{raw}");
+        }
+        assert_eq!(slots_taken(&fixture.db).await, 0, "no budget slot");
+        assert_eq!(fixture.model.sent().len(), 0);
+        assert!(fixture.relayed_to().is_empty());
+        assert!(fixture.holds_pass().await);
+    }
+
+    /// An oversize subject that is not a string still answers 413 first, as
+    /// it did: only what ended in a 500 changed.
+    #[tokio::test]
+    async fn an_oversize_array_subject_is_still_too_long_rather_than_invalid() {
+        let fixture = fixture("commercial", 200).await;
+        let subject: Vec<u8> = vec![0; 201];
 
         let answer = fixture
-            .send(&json!({ "token": "tok", "body": 5 }).to_string())
+            .send(&json!({ "token": "tok", "subject": subject, "body": "hi" }).to_string())
             .await;
 
-        assert_eq!(answer.status, StatusCode::INTERNAL_SERVER_ERROR);
-        assert_eq!(answer.text, "");
+        assert_eq!(answer.status, StatusCode::PAYLOAD_TOO_LARGE);
     }
 }

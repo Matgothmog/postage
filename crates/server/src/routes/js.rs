@@ -48,6 +48,13 @@ pub(crate) fn property<'a>(body: &'a Value, name: &str) -> Result<Option<&'a Val
     }
 }
 
+/// A property of a body that may be anything: `None` for `null` as well as
+/// for a body without it, where [`property`] throws on `null`. For routes that
+/// refuse a malformed body instead of failing on it.
+pub(crate) fn field<'a>(body: &'a Value, name: &str) -> Option<&'a Value> {
+    property(body, name).ok().flatten()
+}
+
 /// JavaScript truthiness for a value read off a JSON body.
 pub(crate) fn is_truthy(value: Option<&Value>) -> bool {
     match value {
@@ -115,6 +122,13 @@ mod tests {
             property(&json!({ "token": "t" }), "token").unwrap(),
             Some(&json!("t"))
         );
+    }
+
+    #[test]
+    fn a_field_of_null_is_absent_rather_than_an_error() {
+        assert_eq!(field(&Value::Null, "token"), None);
+        assert_eq!(field(&json!([1]), "token"), None);
+        assert_eq!(field(&json!({ "token": 1 }), "token"), Some(&json!(1)));
     }
 
     #[test]

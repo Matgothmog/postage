@@ -12,8 +12,8 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use serde::Serialize;
 
-use super::js::{TypeError, is_truthy, lookup_text, property, request_json};
-use super::{Exit, RouteResult, json, refuse};
+use super::js::{TypeError, field, is_truthy, lookup_text, request_json};
+use super::{Exit, RouteResult, invalid_request, json, refuse};
 use crate::app::AppState;
 use crate::chain::ChainError;
 use crate::db::challenges::challenge_by_token;
@@ -31,17 +31,18 @@ enum Resolution {
 }
 
 pub(crate) async fn post(State(state): State<AppState>, body: Bytes) -> RouteResult {
-    // Unguarded in the TypeScript: a body that is not JSON threw, which
-    // Next.js answered with a bare 500.
-    let body = request_json(&body)?;
-    let token = property(&body, "token")?;
-    let Some(token) = token.filter(|token| is_truthy(Some(token))) else {
+    // Unguarded in the TypeScript, where all of this was a bare 500. Refused
+    // here before the database or the chain is touched.
+    let Ok(body) = request_json(&body) else {
+        return Err(invalid_request());
+    };
+    let Some(token) = field(&body, "token").filter(|token| is_truthy(Some(token))) else {
         return Err(refuse(
             StatusCode::BAD_REQUEST,
             "A challenge token is required",
         ));
     };
-    let token = lookup_text(token)?;
+    let token = lookup_text(token).map_err(|_| invalid_request())?;
 
     let db = state.db().await?;
     let Some(challenge) = challenge_by_token(db, &token).await? else {
@@ -387,16 +388,50 @@ mod tests {
         assert_eq!(answer.status, StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    /// Unguarded in the TypeScript, so Next.js answered with a bare 500.
+    /// Unguarded in the TypeScript, so Next.js answered each of these with a
+    /// bare 500. A deliberate change: they are refused with a 400 before the
+    /// database or the chain is touched.
     #[tokio::test]
-    async fn a_body_that_is_not_json_is_the_bare_500_the_typescript_gave() {
+    async fn a_malformed_body_is_refused_and_nothing_is_recorded() {
         let fixture = fixture(settlement(PAYER)).await;
 
-        for body in ["not json", "null"] {
+        for (body, error) in [
+            ("not json", "Invalid request"),
+            ("", "Invalid request"),
+            ("null", "A challenge token is required"),
+            ("[]", "A challenge token is required"),
+            ("42", "A challenge token is required"),
+            (r#"{"token":[]}"#, "Invalid request"),
+            (r#"{"token":{"a":1}}"#, "Invalid request"),
+        ] {
             let answer = fixture.resolve(body).await;
-            assert_eq!(answer.status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
-            assert_eq!(answer.text, "");
+
+            assert_eq!(answer.status, StatusCode::BAD_REQUEST, "{body}");
+            assert_eq!(answer.body, json!({ "error": error }), "{body}");
         }
+        assert_eq!(
+            wallet_for_sender(&fixture.db, "sender@x.com")
+                .await
+                .unwrap(),
+            None
+        );
+        let challenge = challenge_by_token(&fixture.db, TOKEN)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(challenge.resolved_at, None, "no refusal may settle it");
+    }
+
+    /// Looked up by its decimal text, as it always was: only what threw is
+    /// refused.
+    #[tokio::test]
+    async fn a_number_token_is_still_looked_up_by_its_decimal_text() {
+        let fixture = fixture(settlement(PAYER)).await;
+        seed(&fixture.db, &challenge("42", "commercial")).await;
+
+        let answer = fixture.resolve(r#"{"token":42}"#).await;
+
+        assert_eq!(answer.status, StatusCode::OK, "{}", answer.text);
     }
 
     /// The node is asked about the message this challenge names.

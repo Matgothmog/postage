@@ -18,7 +18,7 @@ use rand_core::{OsRng, TryRngCore};
 use serde::Serialize;
 use serde_json::Value;
 
-use super::js::{property, request_json};
+use super::js::{field, request_json};
 use super::{RouteResult, json, refuse};
 use crate::app::AppState;
 
@@ -35,7 +35,7 @@ pub(crate) async fn post(State(state): State<AppState>, body: Bytes) -> RouteRes
         return Err(refuse(StatusCode::BAD_REQUEST, "Body must be JSON"));
     };
 
-    let wallet = match property(&body, "wallet")? {
+    let wallet = match field(&body, "wallet") {
         Some(Value::String(wallet)) if parse_address(wallet).is_ok() => wallet,
         _ => {
             return Err(refuse(
@@ -198,13 +198,21 @@ mod tests {
     }
 
     /// `const { wallet } = body` on a body of `null` threw in the TypeScript,
-    /// which Next.js answered with an empty 500.
+    /// which Next.js answered with an empty 500. A deliberate change: it is
+    /// refused like any other body without a wallet. The route reads no
+    /// database, so there is no nonce or pass row for a refusal to spend.
     #[tokio::test]
-    async fn a_body_of_null_is_the_bare_500_the_typescript_gave() {
-        let answer = ask("null").await;
+    async fn a_body_that_is_not_an_object_is_refused_rather_than_crashing() {
+        for body in ["null", "[]", "42", r#""0x""#, "true"] {
+            let answer = ask(body).await;
 
-        assert_eq!(answer.status, StatusCode::INTERNAL_SERVER_ERROR);
-        assert_eq!(answer.text, "");
+            assert_eq!(answer.status, StatusCode::BAD_REQUEST, "{body}");
+            assert_eq!(
+                answer.body,
+                json!({ "error": "A valid wallet is required" }),
+                "{body}"
+            );
+        }
     }
 
     #[tokio::test]

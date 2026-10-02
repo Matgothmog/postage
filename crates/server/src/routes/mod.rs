@@ -99,6 +99,14 @@ pub(crate) fn refuse(status: StatusCode, message: &str) -> Exit {
     Exit::Answer(Box::new(refusal(status, message)))
 }
 
+/// A request body no field of which can be read: not JSON, or a field of the
+/// wrong type. The TypeScript let these throw, which Next.js answered with a
+/// bare 500, usually after something had already been spent; they are refused
+/// before anything is, on purpose.
+pub(crate) fn invalid_request() -> Exit {
+    refuse(StatusCode::BAD_REQUEST, "Invalid request")
+}
+
 /// A failure no handler answered for. Carried to [`log_unhandled`] in the
 /// response's extensions, since a response cannot reach the environment the
 /// log line has to be redacted against.

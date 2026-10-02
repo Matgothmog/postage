@@ -10,8 +10,8 @@ use reqwest::Url;
 use serde::Serialize;
 use serde_json::Value;
 
-use super::js::{TypeError, is_truthy, js_trim, lookup_text, property, request_json};
-use super::{Exit, RouteResult, json, refuse};
+use super::js::{field, is_truthy, js_trim, lookup_text, request_json};
+use super::{Exit, RouteResult, invalid_request, json, refuse};
 use crate::app::AppState;
 use crate::auth::{WalletAuth, confirm_statement};
 use crate::claims::settle_claim;
@@ -105,9 +105,12 @@ pub(crate) async fn post(
     headers: HeaderMap,
     body: Bytes,
 ) -> RouteResult {
-    // Unguarded in the TypeScript: a body that is not JSON threw, which
-    // Next.js answered with a bare 500.
-    let request = request_json(&body)?;
+    // Unguarded in the TypeScript, where all of this was a bare 500, a code of
+    // the wrong type only after an attempt had been counted. Every field is
+    // checked before anything is spent.
+    let Ok(request) = request_json(&body) else {
+        return Err(invalid_request());
+    };
     let (handle, code) = read_confirmation(&request)?;
 
     let db = state.db().await?;
@@ -169,11 +172,11 @@ pub(crate) async fn post(
 }
 
 /// The handle to look up, and the code as typed. A code that is not a string
-/// threw at its `trim()` in the TypeScript, after the attempt had been
-/// counted, so that error waits in the second half until then.
-fn read_confirmation(request: &Value) -> Result<(String, Result<&str, TypeError>), Exit> {
-    let handle = property(request, "handle")?;
-    let code = property(request, "code")?;
+/// is refused here; in the TypeScript it threw at its `trim()` after the
+/// attempt had been counted.
+fn read_confirmation(request: &Value) -> Result<(String, &str), Exit> {
+    let handle = field(request, "handle");
+    let code = field(request, "code");
     let (Some(handle), true) = (
         handle.filter(|value| is_truthy(Some(value))),
         is_truthy(code),
@@ -184,10 +187,10 @@ fn read_confirmation(request: &Value) -> Result<(String, Result<&str, TypeError>
         ));
     };
     let code = match code {
-        Some(Value::String(code)) => Ok(js_trim(code)),
-        _ => Err(TypeError("code.trim is not a function".to_owned())),
+        Some(Value::String(code)) => js_trim(code),
+        _ => return Err(invalid_request()),
     };
-    Ok((lookup_text(handle)?, code))
+    Ok((lookup_text(handle).map_err(|_| invalid_request())?, code))
 }
 
 /// Whether this request comes from whoever holds the wallet the claim was
@@ -216,7 +219,7 @@ async fn check_code(
     state: &AppState,
     db: &Db,
     claim: &InboxClaim,
-    code: Result<&str, TypeError>,
+    code: &str,
     now: i64,
 ) -> Result<(), Exit> {
     if claim.expires_at <= now {
@@ -232,7 +235,6 @@ async fn check_code(
         ));
     }
 
-    let code = code?;
     let key = VerificationKey::derive(&message_id_secret(state.env().lookup())?)?;
     if code_matches(&key, &claim.handle, code, &claim.code_hash) {
         return Ok(());
@@ -521,6 +523,41 @@ mod tests {
             no_code.body,
             json!({ "error": "handle and code are required" })
         );
+    }
+
+    /// Each of these was a bare 500 in the TypeScript, a code of the wrong
+    /// type only after an attempt had been counted. A deliberate change: all
+    /// are refused with a 400 first, and the claimer keeps every guess.
+    #[tokio::test]
+    async fn a_malformed_confirmation_is_refused_before_an_attempt_is_spent() {
+        let fixture = fixture().await;
+
+        for (raw, error) in [
+            ("not json", "Invalid request"),
+            ("", "Invalid request"),
+            ("null", "handle and code are required"),
+            ("[]", "handle and code are required"),
+            (r#"{"handle":"demo","code":123456}"#, "Invalid request"),
+            (r#"{"handle":"demo","code":true}"#, "Invalid request"),
+            (r#"{"handle":"demo","code":["000000"]}"#, "Invalid request"),
+            (r#"{"handle":"demo","code":{"a":1}}"#, "Invalid request"),
+            (r#"{"handle":[],"code":"000000"}"#, "Invalid request"),
+            (r#"{"handle":{"a":1},"code":"000000"}"#, "Invalid request"),
+        ] {
+            let proof = wallet_proof();
+            let headers: Vec<(&str, &str)> = proof
+                .iter()
+                .map(|(name, value)| (*name, value.as_str()))
+                .collect();
+
+            let answer = send(fixture.app(), post_with(PATH, raw, &headers)).await;
+
+            assert_eq!(answer.status, StatusCode::BAD_REQUEST, "{raw}");
+            assert_eq!(answer.body, json!({ "error": error }), "{raw}");
+        }
+        assert_eq!(fixture.attempts().await, 0, "no attempt spent");
+        let claim = claim_by_handle(&fixture.db, HANDLE).await.unwrap().unwrap();
+        assert_eq!(claim.code_verified_at, None);
     }
 
     #[test]
