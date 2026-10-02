@@ -3,6 +3,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 pub mod brand;
+pub mod challenge_email;
 pub mod contracts;
 pub mod errors;
 pub mod format;
@@ -19,3 +20,4 @@ pub mod time;
 pub mod verification;
 pub mod wallet_nonce;
 pub mod wallet_proof;
+pub mod world_id_messages;
