@@ -26,6 +26,8 @@
 //! the message the worker sees. The `ARC-Authentication-Results` fallback
 //! stays a weaker source: if Cloudflare ever stamped only that header, a
 //! sender could still write a plain one with this id and have it read first.
+//! For Gmail senders Cloudflare's ARC set is `i=2`, so this fallback rarely
+//! applies.
 //!
 //! Inside the chosen header this is a scan rather than a parse. A method name
 //! has to start a token, which is more than a word boundary asks for.

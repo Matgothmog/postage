@@ -11,9 +11,10 @@ learn a new inbox.
 [`/network`](https://postage-seven.vercel.app/network) shows live,
 subgraph-indexed data — 1 settled payment, 9 verified people, as of this
 writing — and is the fastest way to see the system has actually run.
-That deployment is the TypeScript build submitted to ETHOnline. The Rust port
-in this repository has not been deployed yet, and the end-to-end proofs cited
-below were made on the TypeScript build.
+That deployment now runs the Rust build in this repository, deployed on
+2026-10-02 as a prebuilt preview deployment aliased to postage-seven.vercel.app
+(live identity mode, World sandbox). The ETHOnline submission was the
+TypeScript build, and the end-to-end proofs cited below were made on it.
 
 ## The idea
 
@@ -86,14 +87,15 @@ person minting themselves unlimited free senders. World App's Selfie Check
 supplies that proof through IDKit; the server verifies it against World's
 Developer Portal, and only a verified proof puts the attestation onchain. The
 flow is proven against World's Sandbox App on a sandbox-configured preview
-deploy — the production deploy is built for production World, where Selfie
-Check is not offered. The deployed TypeScript production site also sets
-`IDENTITY_MODE=mock` explicitly, so it clears every claim on the sender-keyed
-stand-in regardless of that env var's own default, which is live. The Rust API
-refuses mock in a Vercel production environment unless
-`POSTAGE_ALLOW_MOCK_IN_PRODUCTION=1` is set as well: the stand-in lets anyone
-through the free lane, and the relayer pays for each attestation. A Rust
-production deployment therefore needs either
+deploy — the TypeScript production deploy was built for production World, where
+Selfie Check is not offered. The TypeScript production site submitted to
+ETHOnline also set `IDENTITY_MODE=mock` explicitly, so it cleared every claim on
+the sender-keyed stand-in regardless of that env var's own default, which is
+live. The Rust build now serving postage-seven.vercel.app runs in live mode
+against World's sandbox. The Rust API refuses mock in a Vercel production
+environment unless `POSTAGE_ALLOW_MOCK_IN_PRODUCTION=1` is set as well: the
+stand-in lets anyone through the free lane, and the relayer pays for each
+attestation. A Rust production deployment therefore needs either
 `POSTAGE_ALLOW_MOCK_IN_PRODUCTION=1` or live mode.
 
 **The Graph** decides what a sender pays. Every payment, every verdict, and every
@@ -278,8 +280,9 @@ The worker's tests run with the rest of the workspace. Runtime config (Mailgun,
 the Cloudflare KV namespace holding messages) is in
 `crates/mail-worker/wrangler.toml`; secrets are set with
 `wrangler secret put POSTAGE_API_URL` / `POSTAGE_SECRET` / `MAILGUN_API_KEY`.
-`npx wrangler deploy` from that directory publishes it as `postage-mail`
-(it runs `worker-build --release` first) and needs Cloudflare credentials this repo does not ship.
+`npx wrangler deploy` from that directory publishes it as `postage-mail` (it
+runs `worker-build --release` first) and needs Cloudflare credentials this repo
+does not ship.
 
 ### `subgraph/`
 
@@ -323,10 +326,11 @@ deployer key, live contract addresses to reuse — is in
 
 ## Deploying the Rust stack
 
-The browser app and the API deploy together as their own Vercel project,
-separate from the existing `postage` project that serves
-postage-seven.vercel.app; link this checkout to that new project with
-`vercel link` before anything else.
+The browser app and the API deploy together to the existing `postage` Vercel
+project, which serves postage-seven.vercel.app; link this checkout to it with
+`vercel link` before anything else. The project's ignored build step is
+`exit 0`, so pushes to Git build nothing: every deploy is built locally and
+uploaded with `--prebuilt`.
 
 `vercel.json` serves `crates/web/dist` as static files, routes `/api/*` to the
 single Rust function `api/index.rs`, falls back to `index.html` for every other
@@ -338,7 +342,10 @@ Vercel.
 Build on a machine with the Rust toolchain and a C compiler (libSQL compiles
 SQLite from C) and upload the output, rather than relying on Vercel's build
 image to compile it. Set the project's environment variables, including the
-three `NEXT_PUBLIC_*` ones the web build reads, then deploy a preview first:
+three `NEXT_PUBLIC_*` ones the web build reads. `vercel pull` writes
+`[SENSITIVE]` in place of every sensitive variable, and those pulled values
+override the shell, so the `NEXT_PUBLIC_*` values the build bakes in have to
+come from a local env file. Then deploy a preview:
 
 ```bash
 vercel pull --environment=preview
@@ -346,19 +353,19 @@ vercel build
 vercel deploy --prebuilt
 ```
 
-Once the checks below pass, deploy to production:
+Production is a preview deployment like that one, aliased to the domain once
+the checks below pass:
 
 ```bash
-vercel pull --environment=production
-vercel build --prod
-vercel deploy --prebuilt --prod
+vercel alias set <deployment-url> postage-seven.vercel.app
 ```
 
 The mail worker deploys separately with `npx wrangler deploy` in
 `crates/mail-worker` (see above). It is the `postage-mail` worker, deployed in
 place of the TypeScript build, and keeps the KV namespace and binding names that
-build used, so held mail survived the switch. `wrangler rollback` returns to the
-previous version.
+build used, so held mail survived the switch.
+`npx wrangler rollback 73edd33b-700a-4cd8-80a5-c32c8126e49a` returns to the last
+TypeScript version.
 
 Before pointing real traffic at a new deployment:
 

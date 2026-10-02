@@ -5,9 +5,9 @@ inbox owner claiming an address, and a challenged stranger who pays instead
 of proving personhood — depends on Privy removing wallet setup from the
 critical path. The free lane is the exception: proving personhood through
 World ID Selfie Check needs no wallet and never touches Privy at all
-(`crates/web/src/challenge_actions.rs:366-372`, `README.md:52-53`). The
+(`crates/web/src/challenge_actions.rs:366-372`, `README.md:53-54`). The
 material for the paths that do depend on it exists scattered across the
-codebase and in `ARCHITECTURE.md:271-299`; this document is the one place it
+codebase and in `ARCHITECTURE.md:273-301`; this document is the one place it
 is stated as an argument.
 
 ## The user who matters
@@ -15,7 +15,7 @@ is stated as an argument.
 Postage has two kinds of user. The inbox owner is crypto-native by
 construction — they claimed a wallet-backed address on purpose. The user this
 document is about is the other one: a stranger who wrote a normal email, got
-held, and received a reply containing an unlock link (`ARCHITECTURE.md:273-274`,
+held, and received a reply containing an unlock link (`ARCHITECTURE.md:275-276`,
 "The person clicking an unlock link is a stranger with no wallet and no reason
 to install one"). They did not choose to interact with a blockchain. To get
 their message through by paying roughly one cent, they now have to make an

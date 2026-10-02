@@ -1,6 +1,7 @@
 # Config for the production mail worker, `postage-mail`, which runs the Rust
 # build; it replaced the TypeScript worker in place under the same name and
-# keeps its KV namespace and binding names. To roll back, run `wrangler rollback`.
+# keeps its KV namespace and binding names. To roll back to the last TypeScript
+# version, run `wrangler rollback 73edd33b-700a-4cd8-80a5-c32c8126e49a`.
 # Secrets are never written here. Set them with:
 #   wrangler secret put POSTAGE_API_URL
 #   wrangler secret put POSTAGE_SECRET

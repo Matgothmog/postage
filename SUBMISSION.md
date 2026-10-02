@@ -33,14 +33,14 @@ anyone who is actually a person skip it.
    Cloudflare Email Routing is the MX for the domain and a catch-all rule sends
    every message to an Email Worker.
 2. The worker hands the parsed fields to the gateway, which classifies the
-   message into one of four tiers (`ARCHITECTURE.md:64-69`). Mail the recipient
+   message into one of four tiers (`ARCHITECTURE.md:65-70`). Mail the recipient
    is waiting for — a login code, a receipt, a delivery update — is delivered at
    once, free, and never held: a login code nobody can pay for is a login code
    that never arrives. Mail that tries to deceive is never delivered at all, and
    being a person does not clear it.
 3. Everything else from an unknown sender is **held** — the raw bytes go into
    Workers KV with the hold's deadline attached, and nothing about what the
-   message says is written to the database (`ARCHITECTURE.md:326-350`,
+   message says is written to the database (`ARCHITECTURE.md:328-352`,
    `:352-358`).
 4. The sender gets a **reply to the message they just sent**, threaded to it by
    `In-Reply-To`, inside the same SMTP session that carried it. It asks one
@@ -352,9 +352,9 @@ wallet sends a transaction carrying USDC value straight to
 (`web/src/app/c/[token]/ChallengeActions.tsx:274`), then `sendTransaction({ to:
 POSTAGE_ESCROW, value: BigInt(quote.amount), data: encodeFunctionData(...
 "payToSend" ...) })` (`:342-357`). **On Arc, native gas is USDC**
-(`ARCHITECTURE.md:178-182`), so `value` is a stablecoin amount — the payment and
+(`ARCHITECTURE.md:180-184`), so `value` is a stablecoin amount — the payment and
 the gas that moves it are the same unit, and there is no ERC-20 `approve` step
-for a first-time user to get wrong (`ARCHITECTURE.md:191-194`).
+for a first-time user to get wrong (`ARCHITECTURE.md:193-196`).
 
 Because a broadcast transaction is not yet a mined one, settlement is polled
 rather than asserted (`ChallengeActions.tsx:326-336`), and the money lands as
@@ -367,8 +367,8 @@ they can read the address the handle points at. The identity token is a
 short-lived JWT whose claims list the accounts Privy verified; it is checked
 here against the app's public JWKS (`web/src/lib/privy.ts:63`, `readIdentity` at
 `:158`) with no app secret and no call-out — so signup asks for a handle and
-nothing else (`ARCHITECTURE.md:276-286`). Only public `NEXT_PUBLIC_*` client ids
-ever reach the browser (`ARCHITECTURE.md:409-412`).
+nothing else (`ARCHITECTURE.md:278-288`). Only public `NEXT_PUBLIC_*` client ids
+ever reach the browser (`ARCHITECTURE.md:411-414`).
 
 Notes on the integration: [`docs/privy-notes.md`](docs/privy-notes.md).
 
@@ -406,7 +406,7 @@ and it must not touch the bytes. Cloudflare's own `send_email` cannot do it: it
 rejects raw MIME whose envelope sender does not match the `From:` header, and
 that address must be on a domain the account owns (`From: header does not
 match mail from`). The only way through it is to rewrite `From:`, which is the
-one edit a forward must never make (`ARCHITECTURE.md:240-253`).
+one edit a forward must never make (`ARCHITECTURE.md:242-255`).
 
 So the release goes out through Mailgun's MIME endpoint, and every option in
 `deliverUntouched` turns something off — `o:dkim: no`, `o:tracking: no`,
@@ -475,7 +475,7 @@ Stated because a judge will find them anyway, and because the second one bounds
 what the demo can show.
 
 - **Arc testnet, not mainnet.** All four contracts are on chain 5042002. Nothing
-  is deployed to Arc Mainnet (`DEPLOYMENTS.md:173-175`). The USDC amounts are
+  is deployed to Arc Mainnet (`DEPLOYMENTS.md:175-177`). The USDC amounts are
   testnet USDC.
 - **The production deploy cannot serve the Selfie Check free lane. The sandbox
   preview can.** This is the sharpest limitation here, so it is stated flatly
@@ -507,10 +507,10 @@ what the demo can show.
   Postage has to still have it. It lives in Cloudflare KV, in the worker that
   received it and nowhere else, written with its deadline attached so Cloudflare
   drops an unanswered one at exactly that moment
-  (`ARCHITECTURE.md:338-350`). Nothing anyone wrote is in the database at all.
+  (`ARCHITECTURE.md:340-352`). Nothing anyone wrote is in the database at all.
 - **Not stored is not the same as not seen.** Five parties see a message in
   plaintext, and that is what SMTP is rather than a shortcut here
-  (`ARCHITECTURE.md:423-449`). The claim "nobody can read your mail" is not made
+  (`ARCHITECTURE.md:425-451`). The claim "nobody can read your mail" is not made
   in this repo, because it would not be true until the MTA itself runs in an
   enclave.
 - **`worker`'s `npm run typecheck` does not run in a fresh checkout.** `tsc` is
@@ -552,7 +552,7 @@ degraded path is **barred from returning the `dangerous` tier**: every branch
 returns `important` or `commercial`, including the one that has just matched
 phishing language (`classify.ts:165-167`, the refusal made explicit at `:181`).
 Pricing then declines to charge punitively on a degraded verdict wherever one
-still arrives (`web/src/lib/pricing.ts:64-68`, `ARCHITECTURE.md:85-88`) — a
+still arrives (`web/src/lib/pricing.ts:64-68`, `ARCHITECTURE.md:86-89`) — a
 wrong verdict there would both block real mail and bill for it.
 
 The classifier does not read Graph data or any onchain history. See "How it

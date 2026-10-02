@@ -167,8 +167,10 @@ resolved with `held_until` null.
 place on 2026-10-02 under the same Cloudflare name, `postage-mail`, and now
 serves `https://postage-mail.postage-worker.workers.dev`. It binds the same KV
 namespace as `HELD`, so held mail carried over, and it serves the same
-`POST /release` route. The other addresses in this section are those of the
-gateway from the ETHOnline deployment.
+`POST /release` route. Its rollback target is the last TypeScript version,
+`73edd33b-700a-4cd8-80a5-c32c8126e49a`. The gateway it calls,
+postage-seven.vercel.app, has also run the Rust build since 2026-10-02; the
+end-to-end proof above was made on the TypeScript stack.
 
 ## Arc Mainnet (5042)
 

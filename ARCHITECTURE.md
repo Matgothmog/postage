@@ -9,9 +9,10 @@ that are not finished.
 
 The application in this repository is Rust compiled two ways: natively for the
 API, and to WebAssembly for the browser app and the mail worker. The deployment
-at postage-seven.vercel.app still runs the TypeScript build it replaced. Source
-comments in the Rust crates that cite paths under `web/`, `worker/` or `shared/`
-refer to the TypeScript those crates replaced, as it stood at commit `eb36792`.
+at postage-seven.vercel.app has run this Rust build since 2026-10-02; the
+ETHOnline submission ran the TypeScript build it replaced. Source comments in
+the Rust crates that cite paths under `web/`, `worker/` or `shared/` refer to
+that TypeScript, as it stood at commit `eb36792`.
 
 ## The shape of it
 
@@ -112,7 +113,8 @@ is `mx.cloudflare.net` (the topmost `Authentication-Results`, or failing that an
 `ARC-Authentication-Results` with `i=1`) and ignores any other
 (`crates/mail-worker/src/auth_results.rs`). That rests on Cloudflare stamping
 its own `Authentication-Results` on every message, above any the sender wrote,
-confirmed against live mail on 2026-10-02; if it ever stamped only the ARC
+which real mail confirmed on 2026-10-02 (for Gmail senders Cloudflare's ARC set
+is `i=2`, so the `i=1` fallback rarely applies); if it ever stamped only the ARC
 header, a sender's own `Authentication-Results` carrying that id would be read
 first. Some mail from mailing lists and forwarders, which breaks one of these
 checks, is challenged where it used to pass.
