@@ -11,6 +11,7 @@ use std::fmt;
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
+use subtle::ConstantTimeEq;
 
 pub(crate) type HmacSha256 = Hmac<Sha256>;
 
@@ -50,6 +51,13 @@ impl MessageIdSecret {
     pub(crate) fn message_id_mac(&self) -> Result<HmacSha256, SecretError> {
         HmacSha256::new_from_slice(&self.0).map_err(|_| SecretError::Derivation("message id"))
     }
+}
+
+/// Whether a caller offered the shared secret a webhook is guarded by,
+/// compared without leaking where the two first differ. A length mismatch is
+/// refused up front and says nothing an attacker could not already learn.
+pub fn offered_secret_matches(offered: &str, expected: &str) -> bool {
+    offered.len() == expected.len() && bool::from(offered.as_bytes().ct_eq(expected.as_bytes()))
 }
 
 impl fmt::Debug for MessageIdSecret {
@@ -108,6 +116,14 @@ derived_key!(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_offered_secret_matches_only_when_identical() {
+        assert!(offered_secret_matches("secret", "secret"));
+        assert!(!offered_secret_matches("secreT", "secret"));
+        assert!(!offered_secret_matches("secret2", "secret"));
+        assert!(!offered_secret_matches("", "secret"));
+    }
 
     #[test]
     fn an_empty_secret_is_refused() {

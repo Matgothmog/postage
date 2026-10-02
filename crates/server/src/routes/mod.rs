@@ -11,7 +11,10 @@ mod challenge_resolve;
 mod challenge_view;
 mod inbox_verify;
 mod js;
+mod mail_inbound;
 mod network_view;
+#[cfg(test)]
+mod pipeline_tests;
 #[cfg(test)]
 pub(crate) mod testing;
 mod wallet_nonce;
@@ -52,6 +55,7 @@ pub fn router(state: AppState) -> Router {
             get(inbox_verify::get).post(inbox_verify::post),
         )
         .route("/api/network", get(network_view::get))
+        .route("/api/mail/inbound", post(mail_inbound::post))
         .layer(from_fn_with_state(state.clone(), log_unhandled))
         .with_state(state)
 }
