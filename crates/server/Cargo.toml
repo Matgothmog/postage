@@ -32,6 +32,7 @@ alloy-signer = "~1.7"
 base64 = "0.22.1"
 p256 = { version = "0.13.2", default-features = false, features = ["ecdsa"] }
 tempfile = "3.27.0"
+tokio = { workspace = true, features = ["net"] }
 tower = { workspace = true }
 
 [lints]
