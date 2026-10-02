@@ -1,14 +1,31 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="h-full antialiased">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Postage</title>
+    <title>Postage — make spam pay</title>
+    <meta
+      name="description"
+      content="Hand out one address instead of your own. Real mail arrives untouched; machines pay you a cent to interrupt you."
+    />
+    <meta name="theme-color" content="#0A0E1A" />
+    <link data-trunk rel="copy-file" href="assets/favicon.ico" />
+    <!-- Geist and Geist Mono are self-hosted (see styles/app.css): no third
+         party sees a visitor before they claim an address. -->
+    <link data-trunk rel="copy-dir" href="assets/fonts" />
+    <link
+      rel="preload"
+      href="/fonts/Geist-Variable.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <link data-trunk rel="tailwind-css" href="styles/app.css" />
     <link data-trunk rel="copy-dir" href="js/dist" data-target-path="bridge" />
     <!-- Must stay ahead of the wasm loader: module scripts run in document
          order, so the bridge global exists before the app starts. -->
     <script type="module" src="/bridge/bridge.js"></script>
     <link data-trunk rel="rust" data-bin="postage-web" data-wasm-opt="0" />
   </head>
-  <body></body>
+  <body class="min-h-full"></body>
 </html>

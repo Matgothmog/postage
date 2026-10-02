@@ -8,6 +8,13 @@ ignore = ["js/node_modules", "js/dist"]
 
 [serve]
 port = 3210
+# Unknown paths (/c/<token>, /network, anything else) get index.html so the
+# client router can answer them.
+no_spa = false
+
+[tools]
+# Pinned to the version web/ builds with; trunk downloads the standalone CLI.
+tailwindcss = "4.3.3"
 
 # Bundles the Privy/IDKit bridge (js/) into js/dist, which index.html copies
 # to dist/bridge/. Needs `npm ci --prefix js` once per checkout.

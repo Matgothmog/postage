@@ -11,6 +11,7 @@ alloy-primitives = { version = "1", features = ["serde"] }
 console_error_panic_hook = { workspace = true }
 js-sys = "0.3"
 leptos = { workspace = true }
+leptos_router = "0.8"
 postage-core = { workspace = true }
 postage-shared = { workspace = true }
 serde = { workspace = true }

@@ -1,0 +1,105 @@
+@import "tailwindcss";
+
+/* Tailwind scans the Rust sources for class names inside `view!` macros. */
+@source "../src";
+
+/*
+ * Geist and Geist Mono, self-hosted (assets/fonts, OFL; copied to /fonts by
+ * index.html). The variable files cover every weight the app uses.
+ */
+@font-face {
+  font-family: "Geist";
+  src: url("/fonts/Geist-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  src: url("/fonts/GeistMono-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/*
+ * Dark electric-blue. Dark is now the only theme — no prefers-color-scheme
+ * split. color-scheme: dark keeps native controls, scrollbars, and
+ * third-party iframes rendering dark too.
+ */
+:root {
+  color-scheme: dark;
+
+  /* Fixed by the brief — do not alter these five. */
+  --bg: #0a0e1a;
+  --surface: #131a2a;
+  --accent: #3b82f6;
+  --fg: #f8fafc;
+  --muted: #94a3b8;
+
+  /* Derived */
+  --surface-2: #1a2338;
+  --line: #1e293b;
+  --line-strong: #2c3a52;
+  --faint: #7c8aa3;
+  --accent-hi: #60a5fa;
+  --accent-lo: #1d4ed8;
+  --accent-soft: #10203c;
+  --on-accent: #061020;
+  --good: #34d399;
+  --good-soft: #0b2620;
+  --warn: #fbbf24;
+  --warn-soft: #2a2110;
+  --bad: #f87171;
+  --bad-soft: #2a1520;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-accent: var(--accent);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-faint: var(--faint);
+  --color-accent-hi: var(--accent-hi);
+  --color-accent-lo: var(--accent-lo);
+  --color-accent-soft: var(--accent-soft);
+  --color-on-accent: var(--on-accent);
+  --color-good: var(--good);
+  --color-good-soft: var(--good-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-bad: var(--bad);
+  --color-bad-soft: var(--bad-soft);
+
+  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, monospace;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+}
+
+/* Soft brand-blue wash for hero and primary-card use. */
+.glow {
+  background-image: radial-gradient(60% 55% at 50% 0%,
+        color-mix(in oklab, var(--accent) 20%, transparent), transparent 70%);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .rise {
+    animation: rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
