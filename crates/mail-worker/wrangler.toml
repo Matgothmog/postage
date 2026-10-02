@@ -1,5 +1,9 @@
 # Copy-ready config for the Rust worker. It does not replace worker/wrangler.toml
-# (the live TypeScript worker); copy the bindings and vars across at cut-over.
+# (the live TypeScript worker); the bindings and vars below match it name for name.
+# Secrets are never written here. Set them with:
+#   wrangler secret put POSTAGE_API_URL
+#   wrangler secret put POSTAGE_SECRET
+#   wrangler secret put MAILGUN_API_KEY
 name = "postage-mail-rs"
 main = "build/worker/shim.mjs"
 compatibility_date = "2026-09-01"
@@ -7,3 +11,22 @@ workers_dev = true
 
 [build]
 command = "cargo install -q worker-build && worker-build --release"
+
+[vars]
+# api.eu.mailgun.net for a domain created in the EU region.
+MAILGUN_API_BASE = "https://api.mailgun.net"
+
+# Mailgun will show MX records for this domain. DO NOT ADD THEM: usepostage.com's
+# MX is what points inbound mail at the worker, and repointing it stops every
+# message reaching Postage at all. Only the SPF and DKIM records are needed, and
+# the SPF one has to be merged into the record already there rather than added
+# beside it - two SPF records are worse than none.
+MAILGUN_DOMAIN = "usepostage.com"
+
+# Held mail, and the only copy of it. Values carry an expiry set when they are
+# written, so a hold nobody answers is dropped by Cloudflare at its deadline.
+# The same namespace as the TypeScript worker, so the two can be swapped at
+# cut-over without orphaning held mail.
+[[kv_namespaces]]
+binding = "HELD"
+id = "332d86ab54b3480492e8241c0e18b9cf"

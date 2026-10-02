@@ -10,8 +10,23 @@ publish.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+base64 = "0.22.1"
+mail-parser = "0.11.9"
+postage-core = { workspace = true }
 postage-shared = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+url = "2"
 worker = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
+wasm-bindgen = { workspace = true }
+web-sys = { version = "0.3", features = ["AbortSignal", "Blob", "BlobPropertyBag", "FormData"] }
+
+[dev-dependencies]
+tokio = { workspace = true }
 
 [lints]
 workspace = true
