@@ -7,7 +7,9 @@
 //! from the caller; nothing here reads a clock.
 
 use libsql::params;
-use serde::Deserialize;
+use postage_core::quote_types::StoredQuote;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use super::{Db, DbError};
 
@@ -36,6 +38,36 @@ pub struct Challenge {
     pub delivered_at: Option<i64>,
     pub entitled_at: Option<i64>,
     pub settled_by: Option<String>,
+}
+
+impl Challenge {
+    /// Whether the receiving server confirmed the envelope sender when this
+    /// challenge was issued, as [`QuoteRecord`] wrote it down.
+    ///
+    /// Anything but an explicit `true` reads as unverified: rows written before
+    /// this was recorded, by the TypeScript, or mangled since. A sender we never
+    /// confirmed can be anyone who wrote that address on an envelope, so the
+    /// doubtful case is the one that must not borrow their name.
+    pub fn sender_verified(&self) -> bool {
+        serde_json::from_str::<Value>(&self.quote_json)
+            .is_ok_and(|quote| quote.get(SENDER_VERIFIED_KEY) == Some(&Value::Bool(true)))
+    }
+}
+
+/// Where in `quote_json` the sender's authentication is kept. It rides with the
+/// quote rather than in a column of its own so recording it needs no change to
+/// the table; the challenge page reads the quote field by field and never
+/// shows it.
+const SENDER_VERIFIED_KEY: &str = "senderVerified";
+
+/// What `quote_json` holds: the stored quote, then whether its sender was
+/// authenticated.
+#[derive(Debug, Serialize)]
+pub struct QuoteRecord<'a> {
+    #[serde(flatten)]
+    pub quote: &'a StoredQuote,
+    #[serde(rename = "senderVerified")]
+    pub sender_verified: bool,
 }
 
 /// A challenge as it is first written, before anything has resolved it.
@@ -252,6 +284,83 @@ mod tests {
                 settled_by: None,
             }
         );
+    }
+
+    fn with_quote_json(quote_json: &str) -> Challenge {
+        Challenge {
+            token: TOKEN.to_owned(),
+            handle: "demo".to_owned(),
+            sender: "sender@example.com".to_owned(),
+            message_id: "<m1@example.com>".to_owned(),
+            tier: "stranger".to_owned(),
+            amount: "50".to_owned(),
+            held_until: None,
+            quote_json: quote_json.to_owned(),
+            created_at: NOW,
+            resolved_at: None,
+            delivered_at: None,
+            entitled_at: None,
+            settled_by: None,
+        }
+    }
+
+    #[test]
+    fn a_sender_recorded_as_verified_reads_back_verified() {
+        assert!(with_quote_json(r#"{"reasons":[],"senderVerified":true}"#).sender_verified());
+    }
+
+    #[test]
+    fn a_sender_recorded_as_unverified_reads_back_unverified() {
+        assert!(!with_quote_json(r#"{"reasons":[],"senderVerified":false}"#).sender_verified());
+    }
+
+    /// Rows from before the flag was recorded say nothing either way, and
+    /// nothing is not a confirmation.
+    #[test]
+    fn a_quote_that_never_recorded_the_sender_reads_as_unverified() {
+        assert!(!with_quote_json("{}").sender_verified());
+        assert!(!with_quote_json(r#"{"reasons":["x"]}"#).sender_verified());
+    }
+
+    #[test]
+    fn anything_but_an_explicit_true_reads_as_unverified() {
+        for raw in [
+            "{not json",
+            "",
+            "null",
+            "[]",
+            r#"{"senderVerified":"true"}"#,
+            r#"{"senderVerified":1}"#,
+            r#"{"senderVerified":null}"#,
+        ] {
+            assert!(!with_quote_json(raw).sender_verified(), "{raw}");
+        }
+    }
+
+    #[test]
+    fn a_quote_record_writes_the_quote_then_the_flag() {
+        let quote: StoredQuote = serde_json::from_value(serde_json::json!({
+            "messageId": "0x01",
+            "inbox": "0x02",
+            "tier": "commercial",
+            "amount": "5",
+            "expiresAt": 9,
+            "signature": "0x03",
+            "reasons": ["r"],
+        }))
+        .unwrap();
+
+        let written = serde_json::to_string(&QuoteRecord {
+            quote: &quote,
+            sender_verified: true,
+        })
+        .unwrap();
+
+        assert_eq!(
+            written,
+            r#"{"messageId":"0x01","inbox":"0x02","tier":"commercial","amount":"5","expiresAt":9,"signature":"0x03","reasons":["r"],"senderVerified":true}"#
+        );
+        assert!(with_quote_json(&written).sender_verified());
     }
 
     #[tokio::test]

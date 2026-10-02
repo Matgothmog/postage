@@ -98,6 +98,7 @@ pub(crate) async fn post(State(state): State<AppState>, body: Bytes) -> RouteRes
         handle: &challenge.handle,
         subject: relay_subject,
         body: js_trim(paste.text),
+        sender_verified: challenge.sender_verified(),
     };
     if let Err(detail) = relay(&state, &held).await {
         // Only a counted pass had anything taken from it. An unlimited window
@@ -273,12 +274,13 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use postage_core::mail::{relayed_text, unverified_relayed_text};
     use serde_json::json;
 
     use super::*;
     use crate::classify::Classifier;
     use crate::config::Env;
-    use crate::db::challenges::claim_challenge;
+    use crate::db::challenges::{NewChallenge, claim_challenge};
     use crate::db::inboxes::create_inbox;
     use crate::db::passes::grant_pass;
     use crate::db::testing::TestDb;
@@ -321,6 +323,12 @@ mod tests {
     /// An inbox, a commercial challenge, a model answering `tier`, and a
     /// Resend that accepts unless `resend_status` says otherwise.
     async fn fixture(tier: &'static str, resend_status: u16) -> Fixture {
+        fixture_quoting(tier, resend_status, "{}").await
+    }
+
+    /// The same, with the challenge's `quote_json` as given: it is where
+    /// whether the sender was authenticated is recorded.
+    async fn fixture_quoting(tier: &'static str, resend_status: u16, quote_json: &str) -> Fixture {
         let db = Arc::new(TestDb::fresh().await);
         create_inbox(
             &db,
@@ -331,7 +339,14 @@ mod tests {
         )
         .await
         .unwrap();
-        seed(&db, &challenge("tok", "commercial")).await;
+        seed(
+            &db,
+            &NewChallenge {
+                quote_json: quote_json.to_owned(),
+                ..challenge("tok", "commercial")
+            },
+        )
+        .await;
         let model = serve_with(move |_| Reply::new(200, model_saying(tier))).await;
         let resend = serve_with(move |_| match resend_status {
             200 => Reply::new(200, r#"{"id":"stub"}"#),
@@ -394,6 +409,13 @@ mod tests {
                 .collect()
         }
 
+        /// The one message Resend was handed.
+        fn relayed(&self) -> Value {
+            let sent = self.resend.sent();
+            assert_eq!(sent.len(), 1, "exactly one relay");
+            sent[0].body.clone()
+        }
+
         async fn holds_pass(&self) -> bool {
             has_live_pass(&self.db, HANDLE, SENDER, NOW).await.unwrap()
         }
@@ -428,6 +450,68 @@ mod tests {
         fixture.paste("here is what I wrote").await;
 
         assert_eq!(fixture.relayed_to(), ["demo@example.com"]);
+    }
+
+    /// A sender the receiving server confirmed is named as the one replies go
+    /// to, as before.
+    #[tokio::test]
+    async fn a_verified_senders_paste_names_them_in_reply_to() {
+        let fixture = fixture_quoting("commercial", 200, r#"{"senderVerified":true}"#).await;
+        fixture.cleared().await;
+
+        fixture.paste("here is what I wrote").await;
+
+        let relayed = fixture.relayed();
+        assert_eq!(relayed["reply_to"], json!(SENDER));
+        assert_eq!(
+            relayed["text"],
+            json!(relayed_text("here is what I wrote", SENDER, HANDLE))
+        );
+    }
+
+    /// Anyone can put any address on an envelope, receive the link in the
+    /// bounce and clear the gate. Relaying that as the address's owner, with
+    /// replies routed to them, is a phishing aid; it still goes through, but
+    /// says it is unchecked and names nobody to reply to.
+    #[tokio::test]
+    async fn an_unverified_senders_paste_has_no_reply_to_and_says_it_is_unchecked() {
+        let fixture = fixture_quoting("commercial", 200, r#"{"senderVerified":false}"#).await;
+        fixture.cleared().await;
+
+        let answer = fixture.paste("here is what I wrote").await;
+
+        assert_eq!(answer.status, StatusCode::OK);
+        let relayed = fixture.relayed();
+        assert_eq!(relayed.get("reply_to"), None);
+        assert_eq!(
+            relayed["text"],
+            json!(unverified_relayed_text(
+                "here is what I wrote",
+                SENDER,
+                HANDLE
+            ))
+        );
+    }
+
+    /// Rows written before authentication was recorded say nothing about it,
+    /// and are treated as the unchecked case.
+    #[tokio::test]
+    async fn a_challenge_that_never_recorded_its_sender_is_relayed_as_unverified() {
+        let fixture = fixture_quoting("commercial", 200, "{}").await;
+        fixture.cleared().await;
+
+        fixture.paste("here is what I wrote").await;
+
+        let relayed = fixture.relayed();
+        assert_eq!(relayed.get("reply_to"), None);
+        assert_eq!(
+            relayed["text"],
+            json!(unverified_relayed_text(
+                "here is what I wrote",
+                SENDER,
+                HANDLE
+            ))
+        );
     }
 
     /// One payment buys one delivery, so the pass has to be gone afterwards.

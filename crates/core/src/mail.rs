@@ -38,15 +38,40 @@ pub fn verification_code_text(handle: &str, code: &str) -> String {
 /// cleared the gate. It goes out under our own name with theirs in Reply-To,
 /// so this footer is how the recipient learns who wrote it.
 pub fn relayed_text(body: &str, from: &str, handle: &str) -> String {
-    [
-        body.to_owned(),
-        String::new(),
-        "\u{2014}".to_owned(),
+    with_footer(
+        body,
         format!(
             "{from} cleared the gate. Sent to {}.",
             postage_address(handle)
         ),
         "Reply goes straight to them.".to_owned(),
+    )
+}
+
+/// The same, for a sender the receiving server never confirmed. Anyone can
+/// write any address on an envelope and still clear the gate, so this goes
+/// out without their name in Reply-To and the footer says plainly that the
+/// address proves nothing.
+pub fn unverified_relayed_text(body: &str, from: &str, handle: &str) -> String {
+    with_footer(
+        body,
+        format!(
+            "Someone using {from} cleared the gate. Sent to {}.",
+            postage_address(handle)
+        ),
+        format!(
+            "Postage could not verify that this message came from {from}. Do not trust the sender address."
+        ),
+    )
+}
+
+fn with_footer(body: &str, who: String, advice: String) -> String {
+    [
+        body.to_owned(),
+        String::new(),
+        "\u{2014}".to_owned(),
+        who,
+        advice,
     ]
     .join("\n")
 }
@@ -98,6 +123,20 @@ mod tests {
              \u{2014}\n\
              alice@example.com cleared the gate. Sent to demo@usepostage.com.\n\
              Reply goes straight to them."
+        );
+    }
+
+    /// Nothing in it vouches for the sender: no promise that a reply reaches
+    /// them, and a warning that the address is unchecked.
+    #[test]
+    fn an_unverified_relay_warns_that_the_sender_address_was_not_checked() {
+        assert_eq!(
+            unverified_relayed_text("Hello there.", "alice@example.com", "demo"),
+            "Hello there.\n\
+             \n\
+             \u{2014}\n\
+             Someone using alice@example.com cleared the gate. Sent to demo@usepostage.com.\n\
+             Postage could not verify that this message came from alice@example.com. Do not trust the sender address."
         );
     }
 }

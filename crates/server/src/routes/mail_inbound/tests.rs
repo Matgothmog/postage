@@ -19,7 +19,7 @@ use crate::app::AppState;
 use crate::chain::Chain;
 use crate::config::Env;
 use crate::db::Db;
-use crate::db::challenges::HOLD_SECONDS;
+use crate::db::challenges::{HOLD_SECONDS, challenge_by_token};
 use crate::db::classifications::{
     CLASSIFY_PER_DOMAIN_HOURLY, CLASSIFY_PER_HANDLE_HOURLY, CLASSIFY_PER_SENDER_HOURLY,
     claim_classification,
@@ -672,6 +672,30 @@ async fn a_hold_reads_as_the_workers_verdict_with_the_notice_to_send() {
             "Held, not lost: say whether a person or a machine wrote this and we deliver the message you already sent - http://localhost/c/{token}"
         )
     );
+}
+
+/// The hold remembers whether the envelope sender was confirmed, so a message
+/// pasted back in later can say whether the address on it was checked.
+#[tokio::test]
+async fn a_hold_records_whether_the_receiving_server_confirmed_the_sender() {
+    let gateway = Gateway::new(None).await;
+    let stored = |answer: Answer| {
+        let db = gateway.db.clone();
+        async move {
+            let token = wire(&answer).token.unwrap();
+            challenge_by_token(&db, &token).await.unwrap().unwrap()
+        }
+    };
+
+    let confirmed = gateway
+        .deliver("someone@nowhere.example", "hello", true)
+        .await;
+    let forged = gateway
+        .deliver("spam@nowhere.example", "hello", false)
+        .await;
+
+    assert!(stored(confirmed).await.sender_verified());
+    assert!(!stored(forged).await.sender_verified());
 }
 
 /// `{ ...wire, ...context }`: the wire fields first, in the order the

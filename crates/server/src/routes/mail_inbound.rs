@@ -388,6 +388,7 @@ async fn challenged(
         verdict: &judged.verdict,
         wallet,
         app_url,
+        authenticated: judged.authenticated,
     };
     let issued = issue_challenge(state, db, &mail)
         .await

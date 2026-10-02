@@ -5,7 +5,9 @@
 use std::fmt;
 use std::time::Duration;
 
-use postage_core::mail::{relayed_text, verification_code_subject, verification_code_text};
+use postage_core::mail::{
+    relayed_text, unverified_relayed_text, verification_code_subject, verification_code_text,
+};
 use serde::Serialize;
 
 use crate::config::{ConfigError, required};
@@ -37,6 +39,9 @@ pub struct HeldMessage<'a> {
     pub handle: &'a str,
     pub subject: &'a str,
     pub body: &'a str,
+    /// Whether the receiving server confirmed `from` when the message was
+    /// held. Only then is it named as the place replies go.
+    pub sender_verified: bool,
 }
 
 /// The JSON Resend takes, in the order the TypeScript wrote it.
@@ -125,16 +130,30 @@ impl Mailer {
     /// own name with theirs in Reply-To rather than forged into From: a
     /// message claiming to be from them would be unsigned mail wearing their
     /// domain, which is what this gateway exists to catch.
+    ///
+    /// An unverified sender gets neither: anyone can write any address on an
+    /// envelope, and a Reply-To naming one we never checked would hand the
+    /// recipient's answer to whoever they were pretending to be.
     pub async fn relay_held_message(&self, message: &HeldMessage<'_>) -> Result<(), MailError> {
-        let text = relayed_text(message.body, message.from, message.handle);
+        let (text, reply_to) = if message.sender_verified {
+            (
+                relayed_text(message.body, message.from, message.handle),
+                // An empty Reply-To was left off, as `...(replyTo ? ...)` did.
+                Some(message.from).filter(|from| !from.is_empty()),
+            )
+        } else {
+            (
+                unverified_relayed_text(message.body, message.from, message.handle),
+                None,
+            )
+        };
         self.send(
             Outgoing {
                 from: &self.from,
                 to: message.to,
                 subject: message.subject,
                 text: &text,
-                // An empty Reply-To was left off, as `...(replyTo ? ...)` did.
-                reply_to: Some(message.from).filter(|from| !from.is_empty()),
+                reply_to,
             },
             "Could not deliver it",
         )
@@ -242,6 +261,7 @@ mod tests {
                 handle: "demo",
                 subject: "Hello",
                 body: "Pasted back in.",
+                sender_verified: true,
             })
             .await
             .unwrap();
@@ -255,6 +275,34 @@ mod tests {
                 "subject": "Hello",
                 "text": relayed_text("Pasted back in.", "alice@example.com", "demo"),
                 "reply_to": "alice@example.com",
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unverified_senders_relay_has_no_reply_to_and_says_so() {
+        let stub = accepting().await;
+
+        mailer(&stub)
+            .relay_held_message(&HeldMessage {
+                to: "reader@example.com",
+                from: "alice@example.com",
+                handle: "demo",
+                subject: "Hello",
+                body: "Pasted back in.",
+                sender_verified: false,
+            })
+            .await
+            .unwrap();
+
+        let sent = stub.sent();
+        assert_eq!(
+            sent[0].body,
+            json!({
+                "from": FROM,
+                "to": "reader@example.com",
+                "subject": "Hello",
+                "text": unverified_relayed_text("Pasted back in.", "alice@example.com", "demo"),
             })
         );
     }
@@ -307,6 +355,7 @@ mod tests {
                 handle: "demo",
                 subject: "Hello",
                 body: "Body",
+                sender_verified: true,
             })
             .await
             .unwrap_err();

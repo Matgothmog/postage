@@ -14,7 +14,9 @@ use rand_core::{OsRng, TryRngCore};
 use crate::app::AppState;
 use crate::config::{classifier_signer, message_id_secret};
 use crate::db::Db;
-use crate::db::challenges::{HOLD_SECONDS, NewChallenge, create_challenge, purge_expired_holds};
+use crate::db::challenges::{
+    HOLD_SECONDS, NewChallenge, QuoteRecord, create_challenge, purge_expired_holds,
+};
 use crate::db::sender_wallets::wallet_for_sender;
 use crate::faults::{BoxError, FaultStage, during, require_configured};
 use crate::reputation::gather_signals;
@@ -29,6 +31,10 @@ pub(super) struct HeldMail<'a> {
     /// The inbox's wallet: the escrow pays it, and its floor prices the mail.
     pub wallet: &'a str,
     pub app_url: &'a str,
+    /// Whether the receiving server confirmed the envelope sender. Recorded
+    /// so a message pasted back in later is not relayed as if from someone we
+    /// never checked.
+    pub authenticated: bool,
 }
 
 /// What a sender is asked for, and where they are sent to answer it.
@@ -85,7 +91,10 @@ pub(super) async fn issue_challenge(
         tier: tier.as_str().to_owned(),
         amount: priced.amount.to_string(),
         held_until,
-        quote_json: serde_json::to_string(&stored)?,
+        quote_json: serde_json::to_string(&QuoteRecord {
+            quote: &stored,
+            sender_verified: mail.authenticated,
+        })?,
         created_at: received_at,
     };
     during(FaultStage::Database, create_challenge(db, &challenge)).await?;
@@ -230,6 +239,10 @@ mod tests {
 
     impl Fixture {
         async fn issue(&self, tier: Tier) -> IssuedChallenge {
+            self.issue_for(tier, true).await
+        }
+
+        async fn issue_for(&self, tier: Tier, authenticated: bool) -> IssuedChallenge {
             let verdict = Verdict {
                 tier,
                 confidence: 0.9,
@@ -243,6 +256,7 @@ mod tests {
                 verdict: &verdict,
                 wallet: WALLET,
                 app_url: APP_URL,
+                authenticated,
             };
             issue_challenge(&self.state, &self.db, &mail).await.unwrap()
         }
@@ -391,6 +405,21 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn the_challenge_records_whether_its_sender_was_authenticated() {
+        let fixture = fixture().await;
+
+        let verified = fixture.issue_for(Tier::Commercial, true).await;
+        let unverified = fixture.issue_for(Tier::Commercial, false).await;
+
+        let stored = |token: String| {
+            let db = &fixture.db;
+            async move { challenge_by_token(db, &token).await.unwrap().unwrap() }
+        };
+        assert!(stored(verified.token).await.sender_verified());
+        assert!(!stored(unverified.token).await.sender_verified());
+    }
+
     #[test]
     fn a_token_is_a_dashless_version_four_uuid() {
         let token = new_token().unwrap();
@@ -428,6 +457,7 @@ mod tests {
             verdict: &verdict,
             wallet: WALLET,
             app_url: APP_URL,
+            authenticated: true,
         };
 
         let error = issue_challenge(&state, &fixture.db, &mail)
