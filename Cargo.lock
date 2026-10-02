@@ -3763,7 +3763,9 @@ name = "postage-web"
 version = "0.1.0"
 dependencies = [
  "alloy-primitives",
+ "alloy-sol-types",
  "console_error_panic_hook",
+ "futures",
  "js-sys",
  "leptos",
  "leptos_router",
@@ -3775,6 +3777,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
+ "web-sys",
 ]
 
 [[package]]

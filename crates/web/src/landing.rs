@@ -2,10 +2,11 @@
 
 use leptos::prelude::*;
 use leptos_router::components::A;
-use postage_core::handle::postage_address;
+use postage_core::handle::{is_valid_handle, postage_address};
 
+use crate::account::ClaimFlow;
 use crate::chrome::{AddressCard, PRIMARY_BUTTON};
-use crate::privy_context::{start_login, use_privy};
+use crate::claim_strip::HandleField;
 
 /// The whole product as four outcomes: what happens to each kind of mail.
 const WHO_PAYS: [(&str, &str, &str); 4] = [
@@ -77,22 +78,50 @@ pub fn Landing() -> impl IntoView {
     }
 }
 
-/// The landing page's one call to action: sign in and get an address. The
-/// handle form (`ClaimHero` in `Account.tsx`) replaces this with the claim
-/// flow; until then the click opens the same Privy login.
+/// The one part of the landing page that needs a session, and the only click
+/// the short path asks for: the handle, then "Claim it". It reads the claim
+/// flow out of context rather than taking props, because the page it sits in
+/// is static markup that does not know about the flow. Rendered outside an
+/// `Account` there is no flow, and so nothing to show.
 #[component]
 pub fn ClaimHero() -> impl IntoView {
-    let privy = use_privy();
+    let Some(flow) = use_context::<ClaimFlow>() else {
+        return ().into_any();
+    };
+    let handle = flow.handle();
+    let busy = flow.busy();
+    let ready = flow.privy_ready();
+    let valid = move || is_valid_handle(&handle.get().trim().to_lowercase());
+
     view! {
-        <div class="mt-9 flex max-w-xl">
+        <form
+            on:submit=move |event| {
+                event.prevent_default();
+                flow.start();
+            }
+            class="mt-9 flex max-w-xl flex-col gap-3 sm:flex-row sm:items-start"
+        >
+            <div class="flex-1">
+                <label for="hero-handle" class="sr-only">
+                    "Your Postage address"
+                </label>
+                <HandleField
+                    id="hero-handle"
+                    value=handle
+                    on_change=Callback::new(move |handle| flow.set_handle(handle))
+                />
+            </div>
+            // Disabled until Privy is ready too: a click before then would
+            // reach no sign-in, and the handle would sit queued for whatever
+            // sign-in happened next.
             <button
-                type="button"
-                class=PRIMARY_BUTTON
-                disabled=move || !privy.ready().get()
-                on:click=move |_| start_login(privy)
+                type="submit"
+                disabled=move || busy.get() || !valid() || !ready.get()
+                class=format!("{PRIMARY_BUTTON} shrink-0 sm:mt-3")
             >
-                "Claim your address"
+                {move || if busy.get() { "Claiming…" } else { "Claim it" }}
             </button>
-        </div>
+        </form>
     }
+    .into_any()
 }

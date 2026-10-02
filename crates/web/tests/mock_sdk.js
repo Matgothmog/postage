@@ -3,17 +3,37 @@
 // every call so the tests can check what crossed the boundary. No network.
 
 let calls = [];
+let events = null;
 
 export function mockCalls() {
   return JSON.stringify(calls);
 }
 
-/// `optionsJson`: `{ready?: bool, loginError?: string}`.
+/// Pushes an auth snapshot into the running app, as Privy does when a token
+/// rotates or the user changes.
+export function mockEmit(snapshotJson) {
+  events.snapshot(JSON.parse(snapshotJson));
+}
+
+const SIGNED_OUT = {
+  ready: true,
+  authenticated: false,
+  userId: null,
+  email: null,
+  wallets: [],
+  identityToken: null,
+};
+
+/// `optionsJson`: `{ready?: bool, loginError?: string, snapshot?: object,
+/// afterLogin?: object, signature?: string, sendError?: {code, message}}`.
+/// `snapshot` replaces the default signed-in snapshot; `afterLogin` is what a
+/// completed login reports (default: nothing changes).
 export function createMockSdk(optionsJson) {
   const options = JSON.parse(optionsJson);
   calls = [];
 
-  function mountPrivy(config, events) {
+  function mountPrivy(config, sdkEvents) {
+    events = sdkEvents;
     calls.push({ fn: "mountPrivy", appId: config.appId, chainId: config.client.defaultChain.id });
     const ready = options.ready !== false;
     const actions = {
@@ -21,11 +41,15 @@ export function createMockSdk(optionsJson) {
         calls.push({ fn: "login" });
         queueMicrotask(() => {
           if (options.loginError) events.loginError(options.loginError);
-          else events.loginComplete();
+          else {
+            if (options.afterLogin) events.snapshot(options.afterLogin);
+            events.loginComplete();
+          }
         });
       },
       async logout() {
         calls.push({ fn: "logout" });
+        events.snapshot(SIGNED_OUT);
       },
       async signMessage(input, signOptions) {
         calls.push({ fn: "signMessage", input, options: signOptions });
@@ -34,9 +58,10 @@ export function createMockSdk(optionsJson) {
           error.code = 4001;
           throw error;
         }
-        return { signature: "0xsigned" };
+        return { signature: options.signature ?? "0xsigned" };
       },
       async sendTransaction(request) {
+        if (options.sendError) throw Object.assign(new Error(options.sendError.message), { code: options.sendError.code });
         calls.push({
           fn: "sendTransaction",
           to: request.to,
@@ -49,14 +74,16 @@ export function createMockSdk(optionsJson) {
       },
     };
     queueMicrotask(() =>
-      events.snapshot({
-        ready,
-        authenticated: true,
-        userId: "did:privy:test",
-        email: "Tester@Example.com",
-        wallets: [{ address: "0x4469e869433cf6cc08dd54afc6ac7e288b9a38f7", walletClientType: "privy" }],
-        identityToken: "id-token-1",
-      })
+      events.snapshot(
+        options.snapshot ?? {
+          ready,
+          authenticated: true,
+          userId: "did:privy:test",
+          email: "Tester@Example.com",
+          wallets: [{ address: "0x4469e869433cf6cc08dd54afc6ac7e288b9a38f7", walletClientType: "privy" }],
+          identityToken: "id-token-1",
+        }
+      )
     );
     return { current: () => (ready ? actions : null) };
   }

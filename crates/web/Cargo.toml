@@ -8,7 +8,9 @@ publish.workspace = true
 
 [dependencies]
 alloy-primitives = { version = "1", features = ["serde"] }
+alloy-sol-types = "1"
 console_error_panic_hook = { workspace = true }
+futures = { version = "0.3", default-features = false, features = ["async-await", "std"] }
 js-sys = "0.3"
 leptos = { workspace = true }
 leptos_router = "0.8"
@@ -19,9 +21,15 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["AbortController", "AbortSignal", "HtmlInputElement", "Response", "Storage", "Window"] }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
+# The browser tests fire input events and read storage.
+web-sys = { version = "0.3", features = ["Event", "EventInit", "HtmlInputElement", "Storage", "Window"] }
+# Drives the async logic in the native unit tests (`block_on`); the browser
+# tests use the browser's own executor.
+futures = { version = "0.3", features = ["executor"] }
 
 [lints]
 workspace = true
