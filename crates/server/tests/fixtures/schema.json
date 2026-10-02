@@ -1,0 +1,50 @@
+{
+  "schema": [
+    "CREATE TABLE IF NOT EXISTS inboxes (\n     handle TEXT PRIMARY KEY,\n     destination TEXT NOT NULL,\n     wallet TEXT,\n     created_at INTEGER NOT NULL\n   )",
+    "CREATE INDEX IF NOT EXISTS inboxes_by_wallet ON inboxes (wallet)",
+    "CREATE TABLE IF NOT EXISTS passes (\n     handle TEXT NOT NULL,\n     sender TEXT NOT NULL,\n     reason TEXT NOT NULL,\n     expires_at INTEGER NOT NULL,\n     uses_left INTEGER,\n     created_at INTEGER NOT NULL,\n     paid_extended_at INTEGER,\n     PRIMARY KEY (handle, sender)\n   )",
+    "CREATE TABLE IF NOT EXISTS inbox_claims (\n     handle TEXT PRIMARY KEY,\n     destination TEXT NOT NULL,\n     wallet TEXT NOT NULL,\n     code_hash TEXT NOT NULL,\n     expires_at INTEGER NOT NULL,\n     attempts INTEGER NOT NULL DEFAULT 0,\n     code_verified_at INTEGER,\n     cf_address_id TEXT,\n     cf_verified_at INTEGER,\n     cf_checked_at INTEGER,\n     cf_checks INTEGER NOT NULL DEFAULT 0,\n     created_at INTEGER NOT NULL\n   )",
+    "CREATE TABLE IF NOT EXISTS classifications (\n     id INTEGER PRIMARY KEY AUTOINCREMENT,\n     handle TEXT NOT NULL,\n     sender TEXT NOT NULL,\n     at INTEGER NOT NULL\n   )",
+    "CREATE INDEX IF NOT EXISTS classifications_recent ON classifications (handle, at)",
+    "CREATE INDEX IF NOT EXISTS classifications_by_age ON classifications (at)",
+    "CREATE TABLE IF NOT EXISTS claim_sends (\n     id INTEGER PRIMARY KEY AUTOINCREMENT,\n     destination TEXT NOT NULL,\n     wallet TEXT,\n     sent_at INTEGER NOT NULL\n   )",
+    "CREATE INDEX IF NOT EXISTS claim_sends_by_destination ON claim_sends (destination, sent_at)",
+    "CREATE INDEX IF NOT EXISTS claim_sends_by_wallet ON claim_sends (wallet, sent_at)",
+    "CREATE INDEX IF NOT EXISTS claim_sends_by_age ON claim_sends (sent_at)",
+    "CREATE TABLE IF NOT EXISTS sender_wallets (\n     sender TEXT PRIMARY KEY,\n     wallet TEXT NOT NULL,\n     linked_at INTEGER NOT NULL\n   )",
+    "CREATE TABLE IF NOT EXISTS nullifiers (\n     nullifier_hash TEXT PRIMARY KEY,\n     sender TEXT NOT NULL,\n     claimed_at INTEGER NOT NULL\n   )",
+    "CREATE TABLE IF NOT EXISTS nullifier_rebinds (\n     id INTEGER PRIMARY KEY AUTOINCREMENT,\n     nullifier_hash TEXT NOT NULL,\n     from_sender TEXT NOT NULL,\n     to_sender TEXT NOT NULL,\n     at INTEGER NOT NULL\n   )",
+    "CREATE INDEX IF NOT EXISTS nullifier_rebinds_by_nullifier ON nullifier_rebinds (nullifier_hash, id)",
+    "CREATE TABLE IF NOT EXISTS challenges (\n     token TEXT PRIMARY KEY,\n     handle TEXT NOT NULL,\n     sender TEXT NOT NULL,\n     message_id TEXT NOT NULL,\n     tier TEXT NOT NULL,\n     amount TEXT NOT NULL,\n     quote_json TEXT NOT NULL,\n     held_until INTEGER,\n     created_at INTEGER NOT NULL,\n     resolved_at INTEGER,\n     entitled_at INTEGER,\n     delivered_at INTEGER,\n     settled_by TEXT\n   )",
+    "CREATE TABLE IF NOT EXISTS issued_rp_contexts (\n     nonce TEXT PRIMARY KEY,\n     token TEXT NOT NULL,\n     created_at INTEGER NOT NULL,\n     expires_at INTEGER NOT NULL,\n     consumed_at INTEGER\n   )",
+    "CREATE INDEX IF NOT EXISTS issued_rp_contexts_by_token ON issued_rp_contexts (token, expires_at)",
+    "CREATE INDEX IF NOT EXISTS issued_rp_contexts_by_age ON issued_rp_contexts (expires_at)",
+    "CREATE TABLE IF NOT EXISTS spent_wallet_nonces (\n     nonce TEXT PRIMARY KEY,\n     expires_at INTEGER NOT NULL\n   )",
+    "CREATE INDEX IF NOT EXISTS spent_wallet_nonces_by_age ON spent_wallet_nonces (expires_at)"
+  ],
+  "table_statements": [
+    "CREATE TABLE IF NOT EXISTS inboxes (\n     handle TEXT PRIMARY KEY,\n     destination TEXT NOT NULL,\n     wallet TEXT,\n     created_at INTEGER NOT NULL\n   )",
+    "CREATE TABLE IF NOT EXISTS passes (\n     handle TEXT NOT NULL,\n     sender TEXT NOT NULL,\n     reason TEXT NOT NULL,\n     expires_at INTEGER NOT NULL,\n     uses_left INTEGER,\n     created_at INTEGER NOT NULL,\n     paid_extended_at INTEGER,\n     PRIMARY KEY (handle, sender)\n   )",
+    "CREATE TABLE IF NOT EXISTS inbox_claims (\n     handle TEXT PRIMARY KEY,\n     destination TEXT NOT NULL,\n     wallet TEXT NOT NULL,\n     code_hash TEXT NOT NULL,\n     expires_at INTEGER NOT NULL,\n     attempts INTEGER NOT NULL DEFAULT 0,\n     code_verified_at INTEGER,\n     cf_address_id TEXT,\n     cf_verified_at INTEGER,\n     cf_checked_at INTEGER,\n     cf_checks INTEGER NOT NULL DEFAULT 0,\n     created_at INTEGER NOT NULL\n   )",
+    "CREATE TABLE IF NOT EXISTS classifications (\n     id INTEGER PRIMARY KEY AUTOINCREMENT,\n     handle TEXT NOT NULL,\n     sender TEXT NOT NULL,\n     at INTEGER NOT NULL\n   )",
+    "CREATE TABLE IF NOT EXISTS claim_sends (\n     id INTEGER PRIMARY KEY AUTOINCREMENT,\n     destination TEXT NOT NULL,\n     wallet TEXT,\n     sent_at INTEGER NOT NULL\n   )",
+    "CREATE TABLE IF NOT EXISTS sender_wallets (\n     sender TEXT PRIMARY KEY,\n     wallet TEXT NOT NULL,\n     linked_at INTEGER NOT NULL\n   )",
+    "CREATE TABLE IF NOT EXISTS nullifiers (\n     nullifier_hash TEXT PRIMARY KEY,\n     sender TEXT NOT NULL,\n     claimed_at INTEGER NOT NULL\n   )",
+    "CREATE TABLE IF NOT EXISTS nullifier_rebinds (\n     id INTEGER PRIMARY KEY AUTOINCREMENT,\n     nullifier_hash TEXT NOT NULL,\n     from_sender TEXT NOT NULL,\n     to_sender TEXT NOT NULL,\n     at INTEGER NOT NULL\n   )",
+    "CREATE TABLE IF NOT EXISTS challenges (\n     token TEXT PRIMARY KEY,\n     handle TEXT NOT NULL,\n     sender TEXT NOT NULL,\n     message_id TEXT NOT NULL,\n     tier TEXT NOT NULL,\n     amount TEXT NOT NULL,\n     quote_json TEXT NOT NULL,\n     held_until INTEGER,\n     created_at INTEGER NOT NULL,\n     resolved_at INTEGER,\n     entitled_at INTEGER,\n     delivered_at INTEGER,\n     settled_by TEXT\n   )",
+    "CREATE TABLE IF NOT EXISTS issued_rp_contexts (\n     nonce TEXT PRIMARY KEY,\n     token TEXT NOT NULL,\n     created_at INTEGER NOT NULL,\n     expires_at INTEGER NOT NULL,\n     consumed_at INTEGER\n   )",
+    "CREATE TABLE IF NOT EXISTS spent_wallet_nonces (\n     nonce TEXT PRIMARY KEY,\n     expires_at INTEGER NOT NULL\n   )"
+  ],
+  "column_dependent_statements": [
+    "CREATE INDEX IF NOT EXISTS inboxes_by_wallet ON inboxes (wallet)",
+    "CREATE INDEX IF NOT EXISTS classifications_recent ON classifications (handle, at)",
+    "CREATE INDEX IF NOT EXISTS classifications_by_age ON classifications (at)",
+    "CREATE INDEX IF NOT EXISTS claim_sends_by_destination ON claim_sends (destination, sent_at)",
+    "CREATE INDEX IF NOT EXISTS claim_sends_by_wallet ON claim_sends (wallet, sent_at)",
+    "CREATE INDEX IF NOT EXISTS claim_sends_by_age ON claim_sends (sent_at)",
+    "CREATE INDEX IF NOT EXISTS nullifier_rebinds_by_nullifier ON nullifier_rebinds (nullifier_hash, id)",
+    "CREATE INDEX IF NOT EXISTS issued_rp_contexts_by_token ON issued_rp_contexts (token, expires_at)",
+    "CREATE INDEX IF NOT EXISTS issued_rp_contexts_by_age ON issued_rp_contexts (expires_at)",
+    "CREATE INDEX IF NOT EXISTS spent_wallet_nonces_by_age ON spent_wallet_nonces (expires_at)"
+  ]
+}

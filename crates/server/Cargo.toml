@@ -11,15 +11,18 @@ postage-core = { workspace = true }
 postage-shared = { workspace = true }
 axum = { workspace = true }
 futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
+libsql = { version = "0.9.30", default-features = false, features = ["core", "remote", "tls", "serde"] }
 reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls"] }
+serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
 base64 = "0.22.1"
 p256 = { version = "0.13.2", default-features = false, features = ["ecdsa"] }
 rand_core = { version = "0.9.5", features = ["os_rng"] }
-tokio = { workspace = true }
+tempfile = "3.27.0"
 
 [lints]
 workspace = true
