@@ -8,6 +8,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use alloy_signer_local::PrivateKeySigner;
 use postage_core::attestation::AttesterSigner;
@@ -22,6 +23,12 @@ pub enum ConfigError {
         "IDENTITY_MODE is set to an unrecognised value: \"{0}\". Expected \"live\" or \"mock\"."
     )]
     UnrecognisedIdentityMode(String),
+    /// Names the override but never echoes a value: nothing here is secret,
+    /// yet an error that quotes the environment invites the habit.
+    #[error(
+        "IDENTITY_MODE=mock is refused in production; set POSTAGE_ALLOW_MOCK_IN_PRODUCTION=1 to override"
+    )]
+    MockRefusedInProduction,
     /// Set, but to something that cannot be what the name says. The value is
     /// left out: several of these are keys.
     #[error("{0} is set but is not valid")]
@@ -183,14 +190,37 @@ pub enum IdentityMode {
 /// stray whitespace, a typo) is an error rather than being coerced to
 /// whichever value it resembles: an operator who typed "Mock " meant mock, and
 /// silently resolving that to live would be the dangerous outcome.
+///
+/// Mock lets anyone holding a challenge token clear the gate for free while
+/// the relayer pays for a real attestation, so on Vercel production it is
+/// refused unless `POSTAGE_ALLOW_MOCK_IN_PRODUCTION` is exactly "1". A
+/// serverless function cannot refuse to boot, so every caller that consults
+/// the mode gets this error instead and answers its config fault; the refusal
+/// is logged once per process.
 pub fn identity_mode<F>(env: F) -> Result<IdentityMode, ConfigError>
 where
     F: Fn(&str) -> Option<String>,
 {
     match env("IDENTITY_MODE").as_deref() {
         None | Some("") | Some("live") => Ok(IdentityMode::Live),
-        Some("mock") => Ok(IdentityMode::Mock),
+        Some("mock") => {
+            let in_production = env("VERCEL_ENV").as_deref() == Some("production");
+            let overridden = env("POSTAGE_ALLOW_MOCK_IN_PRODUCTION").as_deref() == Some("1");
+            if in_production && !overridden {
+                let error = ConfigError::MockRefusedInProduction;
+                log_refusal_once(&error);
+                return Err(error);
+            }
+            Ok(IdentityMode::Mock)
+        }
         Some(other) => Err(ConfigError::UnrecognisedIdentityMode(other.to_owned())),
+    }
+}
+
+fn log_refusal_once(error: &ConfigError) {
+    static LOGGED: AtomicBool = AtomicBool::new(false);
+    if !LOGGED.swap(true, Ordering::Relaxed) {
+        crate::log::error("config.identity_mode_refused", &[("reason", error)]);
     }
 }
 
@@ -282,6 +312,74 @@ mod tests {
         };
         assert!(message.contains("IDENTITY_MODE"), "{message}");
         assert!(message.contains("\"Live\""), "{message}");
+    }
+
+    fn in_environment(
+        mode: &'static str,
+        vercel_env: Option<&'static str>,
+        allow: Option<&'static str>,
+    ) -> impl Fn(&str) -> Option<String> {
+        move |name| match name {
+            "IDENTITY_MODE" => Some(mode.to_owned()),
+            "VERCEL_ENV" => vercel_env.map(str::to_owned),
+            "POSTAGE_ALLOW_MOCK_IN_PRODUCTION" => allow.map(str::to_owned),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn refuses_mock_in_production_without_the_override() {
+        assert_eq!(
+            identity_mode(in_environment("mock", Some("production"), None)),
+            Err(ConfigError::MockRefusedInProduction)
+        );
+    }
+
+    #[test]
+    fn refuses_mock_in_production_when_the_override_is_anything_but_exactly_one() {
+        for allow in ["", "0", "true", "yes", "1 ", "2"] {
+            assert_eq!(
+                identity_mode(in_environment("mock", Some("production"), Some(allow))),
+                Err(ConfigError::MockRefusedInProduction),
+                "{allow:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn allows_mock_in_production_with_the_override() {
+        assert_eq!(
+            identity_mode(in_environment("mock", Some("production"), Some("1"))),
+            Ok(IdentityMode::Mock)
+        );
+    }
+
+    #[test]
+    fn allows_mock_outside_production() {
+        for vercel_env in [None, Some("preview"), Some("development")] {
+            assert_eq!(
+                identity_mode(in_environment("mock", vercel_env, None)),
+                Ok(IdentityMode::Mock),
+                "{vercel_env:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn live_is_unaffected_by_production() {
+        assert_eq!(
+            identity_mode(in_environment("live", Some("production"), None)),
+            Ok(IdentityMode::Live)
+        );
+    }
+
+    #[test]
+    fn the_refusal_names_the_override_and_no_value() {
+        let message = ConfigError::MockRefusedInProduction.to_string();
+        assert!(
+            message.contains("POSTAGE_ALLOW_MOCK_IN_PRODUCTION=1"),
+            "{message}"
+        );
     }
 
     #[test]

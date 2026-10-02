@@ -216,4 +216,46 @@ mod tests {
         assert_eq!(answer.status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(answer.text, "");
     }
+
+    #[tokio::test]
+    async fn mock_mode_in_production_fails_the_open_view_bare_unless_allowed() {
+        let db = db_with(open("tok", "commercial")).await;
+        let production = |extra: Option<(&str, &str)>| {
+            Env::fixed(
+                [("IDENTITY_MODE", "mock"), ("VERCEL_ENV", "production")]
+                    .into_iter()
+                    .chain(extra),
+            )
+        };
+
+        let refused = view(&db, production(None), "tok").await;
+        assert_eq!(refused.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(refused.text, "");
+
+        let other = view(
+            &db,
+            production(Some(("POSTAGE_ALLOW_MOCK_IN_PRODUCTION", "yes"))),
+            "tok",
+        )
+        .await;
+        assert_eq!(other.status, StatusCode::INTERNAL_SERVER_ERROR);
+
+        let allowed = view(
+            &db,
+            production(Some(("POSTAGE_ALLOW_MOCK_IN_PRODUCTION", "1"))),
+            "tok",
+        )
+        .await;
+        assert_eq!(allowed.status, StatusCode::OK);
+        assert_eq!(allowed.body["identityMode"], "mock");
+    }
+
+    #[tokio::test]
+    async fn live_mode_in_production_is_unaffected() {
+        let db = db_with(open("tok", "commercial")).await;
+
+        let answer = view(&db, Env::fixed([("VERCEL_ENV", "production")]), "tok").await;
+
+        assert_eq!(answer.body["identityMode"], "live");
+    }
 }

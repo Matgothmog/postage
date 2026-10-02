@@ -785,6 +785,63 @@ async fn an_unrecognised_identity_mode_fails_loudly_rather_than_guessing() {
     assert!(fixture.settled().is_empty());
 }
 
+#[tokio::test]
+async fn mock_mode_in_production_is_refused_unless_explicitly_allowed() {
+    let fixture = Fixture::accepting().await;
+    let body = json!({ "token": TOKEN }).to_string();
+    let production = |allow: Option<&str>| {
+        let mut vars = vec![
+            ("IDENTITY_MODE", "mock"),
+            ("WORLD_RP_ID", RP_ID),
+            ("VERCEL_ENV", "production"),
+        ];
+        vars.extend(allow.map(|value| ("POSTAGE_ALLOW_MOCK_IN_PRODUCTION", value)));
+        Env::fixed(vars)
+    };
+
+    for allow in [None, Some("true")] {
+        let refused = fixture
+            .send(production(allow), &body, Settles::Cleared)
+            .await;
+        assert_eq!(
+            refused.status,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "{allow:?}"
+        );
+        assert_eq!(refused.text, "");
+    }
+    assert!(
+        fixture.settled().is_empty(),
+        "a refused mode attests nothing"
+    );
+
+    let allowed = fixture
+        .send(production(Some("1")), &body, Settles::Cleared)
+        .await;
+    assert_eq!(allowed.status, StatusCode::OK);
+    assert_eq!(fixture.settled().len(), 1);
+}
+
+#[tokio::test]
+async fn mock_mode_in_a_preview_deployment_still_verifies() {
+    let fixture = Fixture::accepting().await;
+    let preview = Env::fixed([
+        ("IDENTITY_MODE", "mock"),
+        ("WORLD_RP_ID", RP_ID),
+        ("VERCEL_ENV", "preview"),
+    ]);
+
+    let answer = fixture
+        .send(
+            preview,
+            &json!({ "token": TOKEN }).to_string(),
+            Settles::Cleared,
+        )
+        .await;
+
+    assert_eq!(answer.status, StatusCode::OK);
+}
+
 // --- Before any mode is read -----------------------------------------------
 
 #[tokio::test]
