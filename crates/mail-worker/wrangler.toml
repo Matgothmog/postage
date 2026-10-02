@@ -1,10 +1,11 @@
-# Copy-ready config for the Rust worker; its bindings and vars keep the names
-# the former TypeScript worker used.
+# Config for the production mail worker, `postage-mail`, which runs the Rust
+# build; it replaced the TypeScript worker in place under the same name and
+# keeps its KV namespace and binding names. To roll back, run `wrangler rollback`.
 # Secrets are never written here. Set them with:
 #   wrangler secret put POSTAGE_API_URL
 #   wrangler secret put POSTAGE_SECRET
 #   wrangler secret put MAILGUN_API_KEY
-name = "postage-mail-rs"
+name = "postage-mail"
 main = "build/worker/shim.mjs"
 compatibility_date = "2026-09-01"
 workers_dev = true
@@ -25,8 +26,8 @@ MAILGUN_DOMAIN = "usepostage.com"
 
 # Held mail, and the only copy of it. Values carry an expiry set when they are
 # written, so a hold nobody answers is dropped by Cloudflare at its deadline.
-# The same namespace as the TypeScript worker, so the two can be swapped at
-# cut-over without orphaning held mail.
+# The same namespace the TypeScript worker used, so mail held before the
+# switch to the Rust build is still released.
 [[kv_namespaces]]
 binding = "HELD"
 id = "332d86ab54b3480492e8241c0e18b9cf"

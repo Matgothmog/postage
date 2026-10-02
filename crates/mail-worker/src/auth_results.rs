@@ -21,12 +21,11 @@
 //! stamps on mail arriving with no earlier ARC set (`cloudflare.rs` appends
 //! those after the plain headers).
 //!
-//! UNCONFIRMED: the authserv-id comes from Cloudflare's own ARC example
-//! (blog.cloudflare.com/email-routing-subdomains) and third-party reports of
-//! `Authentication-Results: mx.cloudflare.net`. A workerd issue (#6740)
-//! reports Workers receiving only `ARC-Authentication-Results`. If Cloudflare
-//! does not stamp a header of its own, a sender can still write one with this
-//! id; check one real message in staging before cutover.
+//! Confirmed on 2026-10-02 against real mail: Cloudflare stamps a plain
+//! `Authentication-Results` with authserv-id `mx.cloudflare.net`, topmost in
+//! the message the worker sees. The `ARC-Authentication-Results` fallback
+//! stays a weaker source: if Cloudflare ever stamped only that header, a
+//! sender could still write a plain one with this id and have it read first.
 //!
 //! Inside the chosen header this is a scan rather than a parse. A method name
 //! has to start a token, which is more than a word boundary asks for.
@@ -38,8 +37,8 @@
 
 use std::collections::BTreeSet;
 
-/// Authserv-id Cloudflare's MX stamps on the results it records. Unconfirmed
-/// against a live message: see the module docs.
+/// Authserv-id Cloudflare's MX stamps on the results it records, confirmed
+/// against live mail: see the module docs.
 pub const CLOUDFLARE_AUTHSERV_ID: &str = "mx.cloudflare.net";
 
 /// The three results the gateway is told, each `None` when unknown.

@@ -475,7 +475,7 @@ Stated because a judge will find them anyway, and because the second one bounds
 what the demo can show.
 
 - **Arc testnet, not mainnet.** All four contracts are on chain 5042002. Nothing
-  is deployed to Arc Mainnet (`DEPLOYMENTS.md:172-174`). The USDC amounts are
+  is deployed to Arc Mainnet (`DEPLOYMENTS.md:173-175`). The USDC amounts are
   testnet USDC.
 - **The production deploy cannot serve the Selfie Check free lane. The sandbox
   preview can.** This is the sharpest limitation here, so it is stated flatly

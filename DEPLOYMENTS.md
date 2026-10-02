@@ -163,10 +163,11 @@ resolved with `held_until` null.
 
 ### The Rust worker
 
-`crates/mail-worker` is the Rust port of the worker above, named `postage-mail-rs`
-in its `wrangler.toml`. It binds the same KV namespace as `HELD`, so the two can
-be swapped without orphaning held mail, and it serves the same `POST /release`
-route. The addresses in this section are those of the TypeScript worker and
+`crates/mail-worker` is the Rust port of the worker above. It was deployed in
+place on 2026-10-02 under the same Cloudflare name, `postage-mail`, and now
+serves `https://postage-mail.postage-worker.workers.dev`. It binds the same KV
+namespace as `HELD`, so held mail carried over, and it serves the same
+`POST /release` route. The other addresses in this section are those of the
 gateway from the ETHOnline deployment.
 
 ## Arc Mainnet (5042)

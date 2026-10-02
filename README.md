@@ -278,8 +278,8 @@ The worker's tests run with the rest of the workspace. Runtime config (Mailgun,
 the Cloudflare KV namespace holding messages) is in
 `crates/mail-worker/wrangler.toml`; secrets are set with
 `wrangler secret put POSTAGE_API_URL` / `POSTAGE_SECRET` / `MAILGUN_API_KEY`.
-`wrangler deploy` from that directory publishes it as `postage-mail-rs` and
-needs Cloudflare credentials this repo does not ship.
+`npx wrangler deploy` from that directory publishes it as `postage-mail`
+(it runs `worker-build --release` first) and needs Cloudflare credentials this repo does not ship.
 
 ### `subgraph/`
 
@@ -354,20 +354,20 @@ vercel build --prod
 vercel deploy --prebuilt --prod
 ```
 
-The mail worker deploys separately with `wrangler deploy` (see above). It keeps
-the KV namespace and binding names the TypeScript worker used, so held mail
-survives swapping one for the other.
+The mail worker deploys separately with `npx wrangler deploy` in
+`crates/mail-worker` (see above). It is the `postage-mail` worker, deployed in
+place of the TypeScript build, and keeps the KV namespace and binding names that
+build used, so held mail survived the switch. `wrangler rollback` returns to the
+previous version.
 
 Before pointing real traffic at a new deployment:
 
-1. Deploy `postage-mail-rs` (it has its own worker name, so the TypeScript
-   `postage-mail` keeps serving), route one test address to it in Cloudflare
-   Email Routing, send one real email to it, and confirm that Cloudflare
-   stamps its own `Authentication-Results`, with the authserv-id
-   `mx.cloudflare.net`, above any the sender wrote. The worker trusts only
-   headers with that id and reads the topmost; if Cloudflare stamps only the
-   ARC header, a sender's own `Authentication-Results` carrying that id would
-   be read first.
+1. Done (2026-10-02): real mail through the deployed `postage-mail` worker
+   showed Cloudflare stamping its own `Authentication-Results`, with the
+   authserv-id `mx.cloudflare.net`, topmost, above any the sender wrote. The
+   worker trusts only headers with that id and reads the topmost; if
+   Cloudflare ever stamped only the ARC header, a sender's own
+   `Authentication-Results` carrying that id would be read first.
 2. On the first preview deployment, check that `GET /api/health` and a real API
    route both reach the Axum router with the path they were sent.
 3. Sign in with Privy, pay a quote, and run a Selfie Check with real ids,
@@ -418,8 +418,8 @@ changed:
   `mx.cloudflare.net` (the topmost `Authentication-Results`, or failing that an
   `ARC-Authentication-Results` with `i=1`) and sends the `From:` address to the
   gateway as `header_from`. That is safe only if Cloudflare stamps its own
-  `Authentication-Results` above any the sender wrote, which is still to be
-  confirmed against live mail (check 1 under "Deploying the Rust stack").
+  `Authentication-Results` above any the sender wrote, which real mail
+  confirmed on 2026-10-02 (check 1 under "Deploying the Rust stack").
 - **Pasted messages** from a sender who could not be verified go out without a
   `Reply-To` and with a footer saying the sender address could not be verified.
 - **Payments.** A payment on an expired pass that still has uses left adds a

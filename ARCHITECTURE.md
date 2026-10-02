@@ -112,7 +112,7 @@ is `mx.cloudflare.net` (the topmost `Authentication-Results`, or failing that an
 `ARC-Authentication-Results` with `i=1`) and ignores any other
 (`crates/mail-worker/src/auth_results.rs`). That rests on Cloudflare stamping
 its own `Authentication-Results` on every message, above any the sender wrote,
-which is still to be confirmed against live mail; if it stamps only the ARC
+confirmed against live mail on 2026-10-02; if it ever stamped only the ARC
 header, a sender's own `Authentication-Results` carrying that id would be read
 first. Some mail from mailing lists and forwarders, which breaks one of these
 checks, is challenged where it used to pass.
