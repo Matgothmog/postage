@@ -12,6 +12,7 @@ import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { startHeaderProxy } from "./headers.mjs";
 import { sleep, startBrowser } from "./webdriver.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -71,7 +72,8 @@ async function startServer(executable, dbPath) {
     child.once("exit", (code) => reject(new Error(`server exited early (${code}): ${stderr.join("\n")}`)));
     child.stdout.on("data", (chunk) => {
       buffered += chunk.toString();
-      const line = buffered.split("\n").find((candidate) => candidate.startsWith("E2E_READY "));
+      // Only a complete line: the JSON can arrive split across chunks.
+      const line = buffered.split("\n").slice(0, -1).find((candidate) => candidate.startsWith("E2E_READY "));
       if (line) resolveReady(JSON.parse(line.slice("E2E_READY ".length)));
     });
   });
@@ -116,7 +118,12 @@ const executable = build();
 const workdir = mkdtempSync(join(tmpdir(), "postage-e2e-"));
 const dbPath = join(workdir, "e2e.db");
 const server = await startServer(executable, dbPath);
-const { origin } = server.ready;
+// The browser and the script's fetches go through a proxy that adds vercel.json's
+// headers (the CSP is enforced for real); the server's own origin is what it
+// writes into the URLs it hands out (challenge_url).
+const proxy = await startHeaderProxy({ target: server.ready.origin, repo });
+const appOrigin = server.ready.origin;
+const origin = proxy.origin;
 const { owner, sender } = server.ready.config.personas;
 const inbound = (message, secret = server.ready.webhookSecret) =>
   fetch(`${origin}/api/mail/inbound`, {
@@ -132,6 +139,9 @@ const DESTINATION = "reader@example.net";
 let browser;
 try {
   browser = await startBrowser();
+  // challenge_url points at the server itself; open it through the proxy.
+  const gotoDirect = browser.goto.bind(browser);
+  browser.goto = (url) => gotoDirect(url.replace(appOrigin, origin));
   await claimJourney();
   const held = await inboundJourney();
   await humanLaneJourney(held);
@@ -140,11 +150,34 @@ try {
   await networkJourney();
   await concurrencyCheck();
   await fieldOrderJourney();
+  await securityHeadersJourney(held);
 } catch (error) {
   check(`journey aborted: ${error.message.split("\n")[0]}`, false, error.stack);
 } finally {
   await browser?.close();
+  proxy.stop();
   server.stop();
+}
+
+// CSP + headers ------------------------------------------------------------
+async function securityHeadersJourney(held) {
+  journey("Security headers: vercel.json applied, no CSP violation anywhere");
+  const csp = proxy.rules.flatMap((rule) => rule.headers).find((header) => header.key === "Content-Security-Policy");
+  check("vercel.json carries a Content-Security-Policy", Boolean(csp), csp?.value.slice(0, 60));
+  for (const path of ["/", "/c/x", "/network", "/api/health"]) {
+    const response = await fetch(`${origin}${path}`);
+    check(`${path} answers with the CSP, nosniff, no-referrer and frame denial`, response.headers.get("content-security-policy") === csp.value && response.headers.get("x-content-type-options") === "nosniff" && response.headers.get("referrer-policy") === "no-referrer" && response.headers.get("x-frame-options") === "DENY", `status ${response.status}`);
+  }
+  check("API answers are never cached", (await fetch(`${origin}/api/health`)).headers.get("cache-control") === "no-store");
+  // The recorder in the page keeps violations in sessionStorage across every
+  // journey above (all in one tab), so this covers the whole run.
+  for (const path of ["/", "/network", `/c/${held.token}`]) {
+    await browser.goto(`${origin}${path}`);
+    await browser.waitForText(/\S/);
+    await sleep(500);
+  }
+  const seen = JSON.parse(await browser.run('return sessionStorage.getItem("e2e.csp") ?? "[]";'));
+  check("no CSP violation in any journey (wasm, bridge, chunks, fonts, css, fetches)", seen.length === 0, seen.slice(0, 5).join(" | "));
 }
 
 // 1 ------------------------------------------------------------------------
@@ -225,7 +258,7 @@ async function inboundJourney() {
   const response = await inbound({ from: "anna@acme.test", to: `${HANDLE}@usepostage.com`, subject: "Quick question", body: "Hi, are you free Thursday?" });
   const verdict = await response.json();
   check("POST /api/mail/inbound answers 200 with a hold verdict", response.status === 200 && verdict.action === "hold", `status=${response.status} action=${verdict.action} reason=${verdict.reason}`);
-  check("the verdict carries token, held_until and a challenge_url on this origin", verdict.challenge_url === `${origin}/c/${verdict.token}` && verdict.held_until > 0, verdict.challenge_url);
+  check("the verdict carries token, held_until and a challenge_url on this origin", verdict.challenge_url === `${appOrigin}/c/${verdict.token}` && verdict.held_until > 0, verdict.challenge_url);
   check("the notice mail for the sender is present (authenticated sender)", Boolean(verdict.notice?.subject), verdict.notice?.subject);
   const challenge = rows(dbPath, "SELECT * FROM challenges WHERE token = ?", verdict.token)[0];
   check("DB: challenges row recorded for the sender, unresolved", challenge && challenge.sender === "anna@acme.test" && challenge.handle === HANDLE && challenge.resolved_at === null, challenge && `tier=${challenge.tier} amount=${challenge.amount} held_until=${challenge.held_until}`);

@@ -22,3 +22,9 @@ tailwindcss = "4.3.3"
 stage = "pre_build"
 command = "npm"
 command_arguments = ["run", "build", "--prefix", "js"]
+
+# The site's CSP forbids inline scripts; Trunk writes the wasm loader inline.
+[[hooks]]
+stage = "post_build"
+command = "node"
+command_arguments = ["hooks/externalize-init.mjs"]

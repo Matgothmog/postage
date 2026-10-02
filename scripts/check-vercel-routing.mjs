@@ -1,6 +1,6 @@
-// Checks vercel.json without contacting Vercel: it must parse, and its rewrites
+// Checks vercel.json without contacting Vercel: it must parse, its rewrites
 // must send API calls to the function, app routes to index.html, and leave
-// static assets alone. Mirrors Vercel's order: the filesystem wins first, then
+// static assets alone, and its headers must reach every route. Mirrors Vercel's order: the filesystem wins first, then
 // rewrites run top to bottom and the first match applies.
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
@@ -35,4 +35,33 @@ assert.equal(resolve("/fonts/Geist-Variable.woff2"), "file /fonts/Geist-Variable
 // A missing asset must stay a 404 instead of answering with HTML.
 assert.equal(resolve("/bridge/missing.js"), "404");
 assert.equal(resolve("/gone-12345.wasm"), "404");
-console.log("vercel.json routing ok");
+
+// Headers: every rule whose source matches the path applies, later rules
+// overriding earlier ones for the same header name.
+function headersOf(path) {
+  const applied = new Map();
+  for (const { source, headers } of config.headers) {
+    if (!new RegExp(`^${source}$`).test(path)) continue;
+    for (const { key, value } of headers) applied.set(key.toLowerCase(), value);
+  }
+  return applied;
+}
+for (const path of ["/", "/c/x", "/network", "/api/x"]) {
+  const headers = headersOf(path);
+  assert.equal(headers.get("x-content-type-options"), "nosniff", path);
+  assert.equal(headers.get("referrer-policy"), "no-referrer", path);
+  assert.equal(headers.get("x-frame-options"), "DENY", path);
+  assert.match(headers.get("permissions-policy") ?? "", /camera=\(\)/, path);
+  const policy = headers.get("content-security-policy") ?? "";
+  const directive = (name) => policy.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name} `));
+  assert.equal(directive("default-src"), "default-src 'self'", path);
+  assert.equal(directive("frame-ancestors"), "frame-ancestors 'none'", path);
+  assert.equal(directive("base-uri"), "base-uri 'none'", path);
+  assert.equal(directive("object-src"), "object-src 'none'", path);
+  assert.match(directive("script-src") ?? "", /'wasm-unsafe-eval'/, path);
+  // Inline and eval script would defeat the policy; styles are the one allowance.
+  assert.doesNotMatch(directive("script-src") ?? "", /'unsafe-(inline|eval)'/, path);
+}
+assert.equal(headersOf("/api/x").get("cache-control"), "no-store");
+assert.equal(headersOf("/network").get("cache-control"), undefined);
+console.log("vercel.json routing and headers ok");
