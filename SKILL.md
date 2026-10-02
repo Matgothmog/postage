@@ -31,8 +31,9 @@ Deployed Studio endpoint (public, not a secret):
 (`DEPLOYMENTS.md:88`). ENS subgraph ID on the network:
 `5XqPmWe6gjyrJtFn9cLy237i4cWw2j9HcUJEXsP5qGtH` (`crates/core/src/reputation.rs:12`).
 
-Set both in `.env`/`.env.local` from your own Studio project and gateway API
-key — never hardcode a key, never commit one.
+Set both in the API's environment (the Vercel project's variables, or your
+shell) from your own Studio project and gateway API key — never hardcode a key,
+never commit one.
 
 ## Entity model (`subgraph/schema.graphql`)
 

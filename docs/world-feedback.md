@@ -179,13 +179,13 @@ even reach a request: `allow_legacy_proofs: boolean;`, with no `?`, in
 (`node_modules/@worldcoin/idkit-core/dist/index.d.ts:59`) — the same file
 that marks `environment` optional a few lines later at `:65`
 (`environment?: "production" | "staging" | "sandbox";`, the line our
-`WorldEnvironment` type correctly mirrors, `crates/web/src/config.rs:76-100`). `tsc` catches a missing
-`allow_legacy_proofs` at compile time for anyone who lets the type flow
-through; the risk is narrower than "fails at runtime instead of at a type
-check" — it's that the docs give no reason to expect the field is mandatory
-at all, so a caller who types the request loosely (an inline object literal
-without `IDKitRequestConfig`, a spread, an `any`) only finds out from IDKit's
-own runtime throw.
+`WorldEnvironment` type correctly mirrors, `crates/web/src/config.rs:76-100`).
+`tsc` catches a missing `allow_legacy_proofs` at compile time for anyone who
+lets the type flow through; the risk is narrower than "fails at runtime instead
+of at a type check" — it's that the docs give no reason to expect the field is
+mandatory at all, so a caller who types the request loosely (an inline object
+literal without `IDKitRequestConfig`, a spread, an `any`) only finds out from
+IDKit's own runtime throw.
 
 **D. Three unrelated names for the same failure.** Hitting a verification
 limit surfaces as `exceeded_max_verifications` or `already_verified` in the

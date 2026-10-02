@@ -5,9 +5,9 @@ inbox owner claiming an address, and a challenged stranger who pays instead
 of proving personhood — depends on Privy removing wallet setup from the
 critical path. The free lane is the exception: proving personhood through
 World ID Selfie Check needs no wallet and never touches Privy at all
-(`crates/web/src/challenge_actions.rs:366-372`, `README.md:49`). The
+(`crates/web/src/challenge_actions.rs:366-372`, `README.md:52-53`). The
 material for the paths that do depend on it exists scattered across the
-codebase and in `ARCHITECTURE.md:265-293`; this document is the one place it
+codebase and in `ARCHITECTURE.md:269-297`; this document is the one place it
 is stated as an argument.
 
 ## The user who matters
@@ -15,7 +15,7 @@ is stated as an argument.
 Postage has two kinds of user. The inbox owner is crypto-native by
 construction — they claimed a wallet-backed address on purpose. The user this
 document is about is the other one: a stranger who wrote a normal email, got
-held, and received a reply containing an unlock link (`ARCHITECTURE.md:267-268`,
+held, and received a reply containing an unlock link (`ARCHITECTURE.md:271-272`,
 "The person clicking an unlock link is a stranger with no wallet and no reason
 to install one"). They did not choose to interact with a blockchain. To get
 their message through by paying roughly one cent, they now have to make an
@@ -78,22 +78,23 @@ feature, not a bespoke integration. Postage has two, and both go through
 hook that needs no commercial Privy onboarding.
 
 **1. Pay-to-send.** When a held message is challenged as automated mail, the
-sender's embedded wallet sends
-`value: BigInt(quote.amount)` directly to `PostageEscrow.payToSend`
+sender's embedded wallet sends the quoted amount as the transaction's `value`
+(`U256::from(self.amount)`) directly to `PostageEscrow.payToSend`
 (`crates/web/src/challenge_actions.rs:567-576`, with the call data built by
 `pay_to_send_data` at `:160`). This is not a gas-token transfer dressed up as a
 payment: on Arc, native `msg.value` *is* USDC, at 18 decimals
 (`crates/core/src/format.rs:5` and `contracts.rs:60`, 18 decimals; the same
-point is made in `ARCHITECTURE.md` under "Arc — where the money is": "native USDC
-is 18 decimals, but the ERC-20 view of the same balance is 6"). So the one transaction the sender
-signs is simultaneously the gas payment and the stablecoin payment — there is
-no separate `approve` step, and no second asset to hold.
+point is made in `ARCHITECTURE.md` under "Arc — where the money is": "native
+USDC is 18 decimals, but the ERC-20 view of the same balance is 6"). So the one
+transaction the sender signs is simultaneously the gas payment and the
+stablecoin payment — there is no separate `approve` step, and no second asset
+to hold.
 
 **2. Claim earnings / set a floor price.** On the recipient side, the same
 hook drives two more state-changing calls against the same contract:
 `claimEarnings` withdraws what strangers have paid into the inbox, and
 `setFloorPrice` changes what the inbox charges going forward
-(`crates/web/src/inbox_panel.rs:70` and `:77` for the two calls, sent at
+(`crates/web/src/inbox_panel.rs:77` and `:70` for the two calls, sent at
 `:128`).
 
 External evidence that flow 1 has actually settled on-chain: the live
@@ -126,9 +127,10 @@ fetches Privy's public JWKS (`https://auth.privy.io/api/v1/apps/{app_id}/jwks.js
 algorithm but ES256 (`:27`, `:86`), and checks the signature against the
 matching key locally (`:119-143`). This is not Privy's server SDK — nothing in
 the workspace depends on it — and no Privy server secret is held or referenced;
-`ARCHITECTURE.md` makes the same point about this code path ("No app secret, no call out to Privy, no library: one signature check
-against a key anyone can fetch"). The verification depends only on Privy's
-publicly fetchable signing key.
+`ARCHITECTURE.md` makes the same point about this code path ("No app secret, no
+call out to Privy, no library: one signature check against a key anyone can
+fetch"). The verification depends only on Privy's publicly fetchable signing
+key.
 
 ## What this replaces
 
@@ -147,11 +149,12 @@ improvement, not a claim about Privy in the abstract.
 ## Boundaries
 
 What the app does not use: no Privy policies, signers, key quorums, or
-intents, and no Privy Cards or Bridge — a search of `crates/`,
-`crates/web/js/package.json`, and `ARCHITECTURE.md` for those terms and for `@privy-io/server-auth` returns nothing. Every money-moving
-action in the product goes through the client-side `useSendTransaction` hook
-against a raw contract call (`challenge_actions.rs:567-576`,
-`inbox_panel.rs:128`); there is no session-key or spending-policy layer between the user's approval and
-the transaction. The deployment target throughout is Arc **testnet**, not
+intents, and no Privy Cards or Bridge — nothing in `crates/`,
+`crates/web/js/package.json` or `ARCHITECTURE.md` uses them, and nothing
+depends on `@privy-io/server-auth`. Every money-moving action in the product
+goes through the client-side `useSendTransaction` hook against a raw contract
+call (`challenge_actions.rs:567-576`, `inbox_panel.rs:128`); there is no
+session-key or spending-policy layer between the user's approval and the
+transaction. The deployment target throughout is Arc **testnet**, not
 mainnet (`crates/core/src/contracts.rs:54`, `ARC_TESTNET`) — this is a
 proof-of-concept, not a production financial product.

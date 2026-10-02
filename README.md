@@ -11,6 +11,9 @@ learn a new inbox.
 [`/network`](https://postage-seven.vercel.app/network) shows live,
 subgraph-indexed data — 1 settled payment, 9 verified people, as of this
 writing — and is the fastest way to see the system has actually run.
+That deployment is the TypeScript build submitted to ETHOnline. The Rust port
+in this repository has not been deployed yet, and the end-to-end proofs cited
+below were made on the TypeScript build.
 
 ## The idea
 
@@ -84,12 +87,14 @@ supplies that proof through IDKit; the server verifies it against World's
 Developer Portal, and only a verified proof puts the attestation onchain. The
 flow is proven against World's Sandbox App on a sandbox-configured preview
 deploy — the production deploy is built for production World, where Selfie
-Check is not offered. Vercel production also sets `IDENTITY_MODE=mock`
-explicitly, so it clears every claim on the sender-keyed stand-in regardless
-of that env var's own default, which is live. The Rust API refuses mock in a
-Vercel production environment unless `POSTAGE_ALLOW_MOCK_IN_PRODUCTION=1` is
-set as well: the stand-in lets anyone through the free lane, and the relayer
-pays for each attestation.
+Check is not offered. The deployed TypeScript production site also sets
+`IDENTITY_MODE=mock` explicitly, so it clears every claim on the sender-keyed
+stand-in regardless of that env var's own default, which is live. The Rust API
+refuses mock in a Vercel production environment unless
+`POSTAGE_ALLOW_MOCK_IN_PRODUCTION=1` is set as well: the stand-in lets anyone
+through the free lane, and the relayer pays for each attestation. A Rust
+production deployment therefore needs either
+`POSTAGE_ALLOW_MOCK_IN_PRODUCTION=1` or live mode.
 
 **The Graph** decides what a sender pays. Every payment, every verdict, and every
 time a recipient contradicted the classifier is indexed, and that history prices
@@ -206,8 +211,9 @@ sh scripts/build-web.sh
 ```
 
 `NEXT_PUBLIC_WORLD_ENVIRONMENT` is optional. Unset, it is `production`; set it
-to exactly `sandbox` to target a Sandbox World App build. Any other value fails
-the build, and so does anything but `production` in a Vercel production build.
+to `sandbox` to target a Sandbox World App build (`staging` is also accepted);
+any other value fails the build, and so does anything but `production` in a
+Vercel production build.
 Without `NEXT_PUBLIC_PRIVY_APP_ID` the app renders a configuration notice and
 nothing else. `trunk serve` in `crates/web` serves the app on port 3210, but
 without an API behind it.
@@ -230,8 +236,7 @@ Vercel. Grouped by what each gates:
 
 - **Have a working default.** `DATABASE_URL` defaults to
   `file:.data/postage.db`, a local SQLite file; use a `libsql://…` URL with
-  `DATABASE_AUTH_TOKEN` for Turso. `NEXT_PUBLIC_WORLD_ENVIRONMENT` defaults to
-  `production`.
+  `DATABASE_AUTH_TOKEN` for Turso.
 - **Only matter in live identity mode, which is the default.** `IDENTITY_MODE`
   unset or blank means live. Live mode needs `NEXT_PUBLIC_WORLD_APP_ID`
   (at build time), `WORLD_RP_ID`, `WORLD_RP_SIGNING_KEY`, and `WORLD_ACTION`;
@@ -311,20 +316,33 @@ deployer key, live contract addresses to reuse — is in
 
 ## Deploying the Rust stack
 
-The browser app and the API deploy as one Vercel project. `vercel.json` serves
-`crates/web/dist` as static files, routes `/api/*` to the single Rust function
-`api/index.rs`, falls back to `index.html` for every other path so the client
-router can answer it, allows the function up to 120 seconds, and sets the
-security headers, including the Content Security Policy. `node
-scripts/check-vercel-routing.mjs` checks those rules without contacting Vercel.
+The browser app and the API deploy together as their own Vercel project,
+separate from the existing `postage` project that serves
+postage-seven.vercel.app; link this checkout to that new project with
+`vercel link` before anything else.
+
+`vercel.json` serves `crates/web/dist` as static files, routes `/api/*` to the
+single Rust function `api/index.rs`, falls back to `index.html` for every other
+path so the client router can answer it, allows the function up to 120
+seconds, and sets the security headers, including the Content Security Policy.
+`node scripts/check-vercel-routing.mjs` checks those rules without contacting
+Vercel.
 
 Build on a machine with the Rust toolchain and a C compiler (libSQL compiles
 SQLite from C) and upload the output, rather than relying on Vercel's build
 image to compile it. Set the project's environment variables, including the
-three `NEXT_PUBLIC_*` ones the web build reads, then:
+three `NEXT_PUBLIC_*` ones the web build reads, then deploy a preview first:
 
 ```bash
 vercel pull
+vercel build
+vercel deploy --prebuilt
+```
+
+Once the checks below pass, deploy to production:
+
+```bash
+vercel pull --environment=production
 vercel build --prod
 vercel deploy --prebuilt --prod
 ```
@@ -335,15 +353,23 @@ survives swapping one for the other.
 
 Before pointing real traffic at a new deployment:
 
-1. Send one real email through the staging worker and confirm that the
+1. Deploy `postage-mail-rs` (it has its own worker name, so the TypeScript
+   `postage-mail` keeps serving), route one test address to it in Cloudflare
+   Email Routing, send one real email to it, and confirm that the
    `Authentication-Results` header Cloudflare stamps carries the authserv-id
-   `mx.cloudflare.net`. The worker trusts only that header.
+   `mx.cloudflare.net`. The worker trusts only headers with that id, and if
+   Cloudflare does not stamp one, a sender could forge it.
 2. On the first preview deployment, check that `GET /api/health` and a real API
    route both reach the Axum router with the path they were sent.
 3. Sign in with Privy, pay a quote, and run a Selfie Check with real ids,
    watching the browser console for Content Security Policy refusals.
 4. Run a smoke test against a disposable Turso database before the production
    one.
+5. Decide the production identity mode. With `IDENTITY_MODE=mock` and no
+   `POSTAGE_ALLOW_MOCK_IN_PRODUCTION=1`, a Vercel production deployment answers
+   `POST /api/world/verify` and the view of an open challenge
+   (`GET /api/challenge/{token}`) with a 500, so no held sender can load their
+   challenge page at all.
 
 ## What you can run without credentials
 
@@ -379,22 +405,21 @@ changed:
 - **Sender authentication.** A sender counts as authenticated when SPF and DKIM
   both pass, or when DMARC passes and the `From:` domain equals the envelope
   domain. Some mailing-list and forwarded mail that used to pass is now
-  challenged. The worker reads only the `Authentication-Results` header stamped
-  by `mx.cloudflare.net` and sends the `From:` address to the gateway as
-  `header_from`.
+  challenged. The worker reads results only from a header whose authserv-id is
+  `mx.cloudflare.net` (the topmost `Authentication-Results`, or failing that an
+  `ARC-Authentication-Results` with `i=1`) and sends the `From:` address to the
+  gateway as `header_from`.
 - **Pasted messages** from a sender who could not be verified go out without a
-  `Reply-To` and with an "unverified" footer.
+  `Reply-To` and with a footer saying the sender address could not be verified.
 - **Payments.** A payment on an expired pass that still has uses left adds a
   use, and concurrent first payments from one sender are all counted.
 - **Classifier.** Each attempt times out after 20 seconds, with one retry, and
   the tier is constrained to the four allowed values in the request.
 - **Mock identity mode** is refused in a Vercel production environment unless
   `POSTAGE_ALLOW_MOCK_IN_PRODUCTION=1` is set.
-- **Inbound mail** up to 4.5 MB is accepted.
 - **Challenge page.** A World ID poll that fails unexpectedly reads
-  "Verification failed. Try again, or pay instead." The browser no longer
-  applies its own subject and body limits; the server enforces 200 and 20,000
-  characters.
+  "Verification failed. Try again, or pay instead." The server enforces 200 and
+  20,000 characters for subject and body, as before.
 - **Sign-out and races.** A second wallet on the same browser no longer sees the
   previous wallet's inbox, concurrent claims on one handle resolve to a single
   owner, and a slow upstream (the subgraph, Cloudflare, Resend, World) times out

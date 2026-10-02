@@ -6,10 +6,11 @@ is the point.
 
 This describes what runs today, including the parts that are not finished.
 
-The application is Rust compiled two ways: natively for the API, and to
-WebAssembly for the browser app and the mail worker. Source comments in the Rust
-crates that cite paths under `web/`, `worker/` or `shared/` refer to the
-TypeScript those crates replaced, as it stood at commit `eb36792`.
+The application in this repository is Rust compiled two ways: natively for the
+API, and to WebAssembly for the browser app and the mail worker. The deployment
+at postage-seven.vercel.app still runs the TypeScript build it replaced. Source
+comments in the Rust crates that cite paths under `web/`, `worker/` or `shared/`
+refer to the TypeScript those crates replaced, as it stood at commit `eb36792`.
 
 ## The shape of it
 
@@ -105,11 +106,14 @@ when DMARC passed for a `From:` domain equal to the envelope's domain
 (`crates/core/src/sender_auth.rs`). A DMARC pass alone is not enough: anyone can
 sign for their own domain while writing somebody else's address on the envelope.
 The worker sends the `From:` address along (`header_from`) so the gateway can
-make that comparison, and it reads results only from the `Authentication-Results`
-header stamped by `mx.cloudflare.net`, never one the sender wrote
-(`crates/mail-worker/src/auth_results.rs`). Some mail from mailing lists and
-forwarders, which breaks one of these checks, is challenged where it used to
-pass.
+make that comparison, and it reads results only from a header whose authserv-id
+is `mx.cloudflare.net` (the topmost `Authentication-Results`, or failing that an
+`ARC-Authentication-Results` with `i=1`) and ignores any other
+(`crates/mail-worker/src/auth_results.rs`). That rests on Cloudflare stamping
+such a header on every message, which is still to be confirmed against live
+mail; if it does not, a sender could write one with that id. Some mail from
+mailing lists and forwarders, which breaks one of these checks, is challenged
+where it used to pass.
 
 ## The price cannot be invented
 

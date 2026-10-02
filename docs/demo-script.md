@@ -13,7 +13,9 @@ requires a decision while filming.
 The video this script produced was recorded on the app's first implementation
 (TypeScript on Next.js). The app has since been rewritten in Rust and
 WebAssembly with the same screens and flows, so the shots below still apply; the
-code citations are to the Rust source.
+code citations are to the Rust source. The Vercel steps describe the original
+`postage` project; the Rust app deploys as its own project (README, "Deploying
+the Rust stack").
 
 ## The rules (quoted, automatic, non-negotiable)
 
@@ -81,17 +83,20 @@ real take.
 
 1. **Build the preview deploy.** In the Vercel project settings, set
    `NEXT_PUBLIC_WORLD_ENVIRONMENT=sandbox` and `IDENTITY_MODE=live` scoped to
-   the **Preview** environment (not Production). Both values are read when the
-   browser app is built, so trigger a fresh preview deployment after setting
-   them (push to a non-`main` branch, or run a manual preview deploy).
-   Open the resulting preview URL once — this only confirms the build
-   succeeded, nothing about the World ID env var. There is no page you can
-   load to confirm sandbox mode is active: the one build-time guard in this
-   repo (`crates/web/src/config.rs:54-59`, mirrored in `scripts/build-web.sh`)
-   only fires when `VERCEL_ENV` is `production`, so it never runs on a preview
-   build at all, and `NEXT_PUBLIC_WORLD_ENVIRONMENT` itself is only used once
-   you reach the Selfie Check call (`crates/web/src/world_id.rs:49`) — a normal
-   page load never touches it. To actually confirm this preview is in sandbox mode
+   the **Preview** environment (not Production).
+   `NEXT_PUBLIC_WORLD_ENVIRONMENT` is read when the browser app is built and
+   `IDENTITY_MODE` by the API at run time, so trigger a fresh preview
+   deployment after setting them (push to a non-`main` branch, or run a manual
+   preview deploy). Open the resulting preview URL once — this only confirms
+   the build succeeded, nothing about the World ID env var. There is no page
+   you can load to confirm sandbox mode is active: the production guard
+   (`crates/web/src/config.rs:54-59`, mirrored in `scripts/build-web.sh`) only
+   fires when `VERCEL_ENV` is `production`, and the other build-time check
+   (`config.rs:41-44`) only rejects a value other than `production`, `staging`
+   or `sandbox`, so neither tells you a preview picked up `sandbox`; and
+   `NEXT_PUBLIC_WORLD_ENVIRONMENT` itself is only used once you reach the
+   Selfie Check call (`crates/web/src/world_id.rs:49`) — a normal page load
+   never touches it. To actually confirm this preview is in sandbox mode
    before the take: open the challenge page on the preview URL, trigger the
    World ID verify prompt, and — without tapping or scanning it — inspect
    where the "Continue in World App" connector link points (on iOS Safari,
