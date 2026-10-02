@@ -115,8 +115,21 @@ async fn the_challenge_and_network_routes_render_their_pages() {
     drop(challenge);
 
     go_to("/network");
+    install_routes(vec![route(
+        "GET",
+        "/api/network",
+        vec![reply(
+            200,
+            json!({
+                "earned": "0", "verifiedCount": 0, "delivered": 0, "sponsored": "0",
+                "hasActiveSigner": false, "vault": null,
+                "feed": [], "senders": [], "inboxes": [], "enclaves": [],
+            }),
+        )],
+    )]);
     let network = mount(|| view! { <AppRoutes /> });
-    network.shows("Ledger").await;
+    network.shows("Every cent,").await;
+    assert_eq!(requests_to("GET", "/api/network").len(), 1);
 }
 
 #[wasm_bindgen_test]
