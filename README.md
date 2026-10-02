@@ -96,7 +96,10 @@ against World's sandbox. The Rust API refuses mock in a Vercel production
 environment unless `POSTAGE_ALLOW_MOCK_IN_PRODUCTION=1` is set as well: the
 stand-in lets anyone through the free lane, and the relayer pays for each
 attestation. A Rust production deployment therefore needs either
-`POSTAGE_ALLOW_MOCK_IN_PRODUCTION=1` or live mode.
+`POSTAGE_ALLOW_MOCK_IN_PRODUCTION=1` or live mode. The deployment serving
+postage-seven.vercel.app is a preview deployment (`VERCEL_ENV=preview`), so
+this refusal does not cover it; it is in live mode because the preview
+environment sets it.
 
 **The Graph** decides what a sender pays. Every payment, every verdict, and every
 time a recipient contradicted the classifier is indexed, and that history prices
@@ -381,11 +384,13 @@ Before pointing real traffic at a new deployment:
    watching the browser console for Content Security Policy refusals.
 4. Run a smoke test against a disposable Turso database before the production
    one.
-5. Decide the production identity mode. With `IDENTITY_MODE=mock` and no
-   `POSTAGE_ALLOW_MOCK_IN_PRODUCTION=1`, a Vercel production deployment answers
-   `POST /api/world/verify` and the view of an open challenge
-   (`GET /api/challenge/{token}`) with a 500, so no held sender can load their
-   challenge page at all.
+5. Decide the identity mode before aliasing. The API refuses
+   `IDENTITY_MODE=mock` only when `VERCEL_ENV` is `production`, and the
+   deployment aliased to postage-seven.vercel.app is a preview, so nothing
+   stops mock there: confirm the preview environment sets live mode. On a
+   Vercel production deployment, mock without
+   `POSTAGE_ALLOW_MOCK_IN_PRODUCTION=1` answers `POST /api/world/verify` and
+   `GET /api/challenge/{token}` with a 500.
 
 ## What you can run without credentials
 
