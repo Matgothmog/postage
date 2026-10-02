@@ -9,6 +9,7 @@
 mod challenge_deliver;
 mod challenge_resolve;
 mod challenge_view;
+mod inbox;
 mod inbox_verify;
 mod js;
 mod mail_inbound;
@@ -50,6 +51,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/challenge/resolve", post(challenge_resolve::post))
         .route("/api/challenge/deliver", post(challenge_deliver::post))
         .route("/api/challenge/{token}", get(challenge_view::get))
+        .route("/api/inbox", get(inbox::get).post(inbox::post))
         .route(
             "/api/inbox/verify",
             get(inbox_verify::get).post(inbox_verify::post),

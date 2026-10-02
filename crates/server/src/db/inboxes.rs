@@ -6,11 +6,13 @@
 //! reads a clock.
 
 use libsql::params;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::{Db, DbError};
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+/// Serialized in the column order `SELECT *` returns on a database built from
+/// the current schema, which is the order `GET /api/inbox` answers in.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Inbox {
     pub handle: String,
     /// Where mail is forwarded. Verified with Cloudflare before anything is sent.

@@ -80,6 +80,63 @@ pub async fn start_claim(db: &Db, claim: &NewClaim, now: i64) -> Result<(), DbEr
     Ok(())
 }
 
+/// Starts a claim only if the handle is still free to this wallet, deciding
+/// that in the same statement that writes it; `false` when it is not.
+///
+/// Free means what `/api/inbox` checks before it gets this far: no inbox
+/// held by another wallet, and no claim by another wallet that has either
+/// had its code answered or not yet expired. The TypeScript checked that and
+/// then wrote unconditionally, so two wallets could both pass the check and
+/// the later write took the handle, and a claim promoted to an inbox between
+/// the check and the write was overwritten. Here a write that lost that race
+/// changes nothing.
+///
+/// `code_verified_at` is set by the short signup, whose address Privy has
+/// already confirmed. Writing it here rather than in a second statement leaves
+/// no moment in which the claim exists unverified and another request can
+/// start it over.
+pub async fn start_claim_if_free(
+    db: &Db,
+    claim: &NewClaim,
+    code_verified_at: Option<i64>,
+    now: i64,
+) -> Result<bool, DbError> {
+    let started = db
+        .run(
+            "INSERT INTO inbox_claims
+       (handle, destination, wallet, code_hash, expires_at, attempts, code_verified_at,
+        cf_address_id, cf_verified_at, created_at)
+     SELECT ?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8, ?9
+     WHERE NOT EXISTS (SELECT 1 FROM inboxes WHERE handle = ?1 AND wallet IS NOT ?3)
+     ON CONFLICT (handle) DO UPDATE SET
+       destination = excluded.destination,
+       wallet = excluded.wallet,
+       code_hash = excluded.code_hash,
+       expires_at = excluded.expires_at,
+       attempts = 0,
+       code_verified_at = excluded.code_verified_at,
+       cf_address_id = excluded.cf_address_id,
+       cf_verified_at = excluded.cf_verified_at,
+       cf_checked_at = NULL,
+       cf_checks = 0
+     WHERE inbox_claims.wallet = excluded.wallet
+        OR (inbox_claims.code_verified_at IS NULL AND inbox_claims.expires_at <= ?9)",
+            params![
+                claim.handle.to_lowercase(),
+                claim.destination.to_lowercase(),
+                claim.wallet.to_lowercase(),
+                claim.code_hash.as_str(),
+                claim.expires_at,
+                code_verified_at,
+                claim.cf_address_id.as_deref(),
+                claim.cf_verified_at,
+                now
+            ],
+        )
+        .await?;
+    Ok(started > 0)
+}
+
 pub async fn record_claim_send(
     db: &Db,
     destination: &str,
@@ -89,6 +146,73 @@ pub async fn record_claim_send(
     db.run(
         "INSERT INTO claim_sends (destination, wallet, sent_at) VALUES (?, ?, ?)",
         params![destination.to_lowercase(), wallet.to_lowercase(), now],
+    )
+    .await?;
+    Ok(())
+}
+
+/// The ceilings [`record_claim_send_within`] holds a new send under.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClaimSendLimits {
+    pub window_seconds: i64,
+    pub per_destination: i64,
+    pub per_wallet: i64,
+}
+
+/// Records a send only while both counts are still under their ceilings, and
+/// says whether it did. One statement counts and writes, so a burst of
+/// concurrent claims cannot all read the same counts and all send; the
+/// TypeScript counted and then wrote, and every request in such a burst got
+/// its mail out.
+pub async fn record_claim_send_within(
+    db: &Db,
+    destination: &str,
+    wallet: &str,
+    limits: ClaimSendLimits,
+    now: i64,
+) -> Result<bool, DbError> {
+    let recorded = db
+        .run(
+            "INSERT INTO claim_sends (destination, wallet, sent_at)
+     SELECT ?1, ?2, ?3
+     WHERE (SELECT COUNT(*) FROM claim_sends WHERE destination = ?1 AND sent_at > ?4) < ?5
+       AND (SELECT COUNT(*) FROM claim_sends WHERE wallet = ?2 AND sent_at > ?4) < ?6",
+            params![
+                destination.to_lowercase(),
+                wallet.to_lowercase(),
+                now,
+                now - limits.window_seconds,
+                limits.per_destination,
+                limits.per_wallet
+            ],
+        )
+        .await?;
+    Ok(recorded > 0)
+}
+
+/// Points the claim at a registered Cloudflare address, but only while it is
+/// still the claim that was started with `code_hash`. Every start writes a
+/// fresh hash, so a request that started the claim cannot attach its address
+/// to a claim a later request has since started over.
+pub async fn attach_destination_to_claim(
+    db: &Db,
+    handle: &str,
+    code_hash: &str,
+    address_id: &str,
+    verified_at: Option<i64>,
+    now: i64,
+) -> Result<(), DbError> {
+    db.run(
+        "UPDATE inbox_claims
+     SET cf_address_id = ?, cf_verified_at = ?, cf_checked_at = ?, cf_checks = cf_checks + 1
+     WHERE handle = ? AND code_hash = ?",
+        params![
+            address_id,
+            verified_at,
+            now,
+            handle.to_lowercase(),
+            code_hash
+        ],
     )
     .await?;
     Ok(())
@@ -779,5 +903,217 @@ mod tests {
         clear_claim(&db, "demo").await.unwrap();
 
         assert_eq!(claim_by_handle(&db, "demo").await.unwrap(), None);
+    }
+
+    fn other_wallet() -> String {
+        format!("0x{}", "22".repeat(20))
+    }
+
+    async fn start_if_free(db: &Db, wallet: &str, now: i64) -> bool {
+        start_claim_if_free(db, &new_claim("demo", "x@example.com", wallet), None, now)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_free_handle_is_started_and_its_own_wallet_may_start_it_over() {
+        let db = TestDb::fresh().await;
+
+        assert!(start_if_free(&db, &wallet(), NOW).await);
+        assert!(start_if_free(&db, &wallet(), NOW + 1).await);
+        assert_eq!(stored(&db, "demo").await.wallet, wallet());
+    }
+
+    #[tokio::test]
+    async fn another_wallets_live_claim_is_not_overwritten() {
+        let db = TestDb::fresh().await;
+        claim(&db, "demo").await;
+
+        assert!(!start_if_free(&db, &other_wallet(), NOW).await);
+        assert_eq!(stored(&db, "demo").await.wallet, wallet());
+    }
+
+    #[tokio::test]
+    async fn another_wallets_claim_is_released_exactly_when_it_expires() {
+        let db = TestDb::fresh().await;
+        claim(&db, "demo").await;
+
+        assert!(!start_if_free(&db, &other_wallet(), NOW + 899).await);
+        assert!(start_if_free(&db, &other_wallet(), NOW + 900).await);
+        assert_eq!(stored(&db, "demo").await.wallet, other_wallet());
+    }
+
+    #[tokio::test]
+    async fn an_answered_claim_is_held_even_after_it_expires() {
+        let db = TestDb::fresh().await;
+        claim(&db, "demo").await;
+        mark_code_verified(&db, "demo", NOW).await.unwrap();
+
+        assert!(!start_if_free(&db, &other_wallet(), NOW + 10 * HOUR).await);
+    }
+
+    #[tokio::test]
+    async fn a_handle_that_is_another_wallets_inbox_is_not_claimed() {
+        let db = TestDb::fresh().await;
+        crate::db::inboxes::create_inbox(&db, "demo", "o@example.com", Some(&wallet()), NOW)
+            .await
+            .unwrap();
+
+        assert!(!start_if_free(&db, &other_wallet(), NOW).await);
+        assert!(
+            start_if_free(&db, &wallet(), NOW).await,
+            "its owner may repoint it"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_inbox_with_no_wallet_is_nobodys_to_claim() {
+        let db = TestDb::fresh().await;
+        crate::db::inboxes::create_inbox(&db, "demo", "o@example.com", None, NOW)
+            .await
+            .unwrap();
+
+        assert!(!start_if_free(&db, &wallet(), NOW).await);
+    }
+
+    #[tokio::test]
+    async fn the_short_signup_starts_its_claim_already_verified() {
+        let db = TestDb::fresh().await;
+
+        start_claim_if_free(
+            &db,
+            &new_claim("demo", "x@example.com", &wallet()),
+            Some(NOW),
+            NOW,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(stored(&db, "demo").await.code_verified_at, Some(NOW));
+    }
+
+    /// Two wallets racing for one handle: whichever writes first holds it,
+    /// and the other changes nothing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn of_many_wallets_racing_for_one_handle_exactly_one_starts_a_claim() {
+        let db = Arc::new(TestDb::fresh().await);
+        let racers: Vec<_> = (1..=16_u8)
+            .map(|n| {
+                let db = db.clone();
+                tokio::spawn(async move {
+                    let wallet = format!("0x{}", format!("{n:02x}").repeat(20));
+                    start_if_free(&db, &wallet, NOW).await
+                })
+            })
+            .collect();
+        let mut started = 0;
+        for racer in racers {
+            if racer.await.unwrap() {
+                started += 1;
+            }
+        }
+
+        assert_eq!(started, 1);
+    }
+
+    fn limits() -> ClaimSendLimits {
+        ClaimSendLimits {
+            window_seconds: HOUR,
+            per_destination: 3,
+            per_wallet: 5,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_send_is_recorded_until_either_ceiling_is_reached() {
+        let db = TestDb::fresh().await;
+        for _ in 0..3 {
+            assert!(
+                record_claim_send_within(&db, "x@example.com", &wallet(), limits(), NOW)
+                    .await
+                    .unwrap()
+            );
+        }
+        assert!(
+            !record_claim_send_within(&db, "X@example.com", &other_wallet(), limits(), NOW)
+                .await
+                .unwrap()
+        );
+
+        for n in 0..2 {
+            let to = format!("y{n}@example.com");
+            assert!(
+                record_claim_send_within(&db, &to, &wallet(), limits(), NOW)
+                    .await
+                    .unwrap()
+            );
+        }
+        assert!(
+            !record_claim_send_within(&db, "z@example.com", &wallet(), limits(), NOW)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            recent_claims_from(&db, &wallet(), HOUR, NOW).await.unwrap(),
+            5
+        );
+    }
+
+    #[tokio::test]
+    async fn sends_outside_the_window_do_not_count_toward_a_ceiling() {
+        let db = TestDb::fresh().await;
+        for _ in 0..3 {
+            record_claim_send(&db, "x@example.com", &wallet(), NOW - HOUR)
+                .await
+                .unwrap();
+        }
+
+        assert!(
+            record_claim_send_within(&db, "x@example.com", &wallet(), limits(), NOW)
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_burst_of_concurrent_sends_from_one_wallet_stops_at_its_ceiling() {
+        let db = Arc::new(TestDb::fresh().await);
+        let sends: Vec<_> = (0..20)
+            .map(|n| {
+                let db = db.clone();
+                tokio::spawn(async move {
+                    let to = format!("v{n}@example.com");
+                    record_claim_send_within(&db, &to, &wallet(), limits(), NOW)
+                        .await
+                        .unwrap()
+                })
+            })
+            .collect();
+        let mut recorded = 0;
+        for send in sends {
+            if send.await.unwrap() {
+                recorded += 1;
+            }
+        }
+
+        assert_eq!(recorded, 5);
+    }
+
+    #[tokio::test]
+    async fn an_address_is_attached_only_to_the_claim_it_was_registered_for() {
+        let db = TestDb::fresh().await;
+        claim(&db, "demo").await;
+
+        attach_destination_to_claim(&db, "DEMO", "someone-elses-hash", "addr-1", Some(NOW), NOW)
+            .await
+            .unwrap();
+        assert_eq!(stored(&db, "demo").await.cf_address_id, None);
+
+        attach_destination_to_claim(&db, "demo", "deadbeef", "addr-1", Some(NOW), NOW)
+            .await
+            .unwrap();
+        let attached = stored(&db, "demo").await;
+        assert_eq!(attached.cf_address_id.as_deref(), Some("addr-1"));
+        assert_eq!(attached.cf_checks, 1);
     }
 }

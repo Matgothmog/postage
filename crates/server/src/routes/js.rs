@@ -90,9 +90,13 @@ pub(crate) fn js_length(text: &str) -> usize {
 /// `String.prototype.trim`: JavaScript's whitespace set, which counts U+FEFF
 /// and not U+0085, unlike Rust's `trim`.
 pub(crate) fn js_trim(text: &str) -> &str {
-    text.trim_matches(|character: char| {
-        character == '\u{feff}' || (character.is_whitespace() && character != '\u{85}')
-    })
+    text.trim_matches(is_js_whitespace)
+}
+
+/// What a JavaScript `\s` matches: Rust's whitespace set with U+FEFF added
+/// and U+0085 taken out.
+pub(crate) fn is_js_whitespace(character: char) -> bool {
+    character == '\u{feff}' || (character.is_whitespace() && character != '\u{85}')
 }
 
 #[cfg(test)]

@@ -157,7 +157,7 @@ fn is_fresh(issued_at: f64, now: i64) -> bool {
 
 /// A header as the Fetch API's `Headers.get` reads it: every value under the
 /// name joined with ", ", each byte taken as one Latin-1 character.
-fn header_text(headers: &HeaderMap, name: &str) -> Option<String> {
+pub(crate) fn header_text(headers: &HeaderMap, name: &str) -> Option<String> {
     let values: Vec<String> = headers
         .get_all(name)
         .iter()
