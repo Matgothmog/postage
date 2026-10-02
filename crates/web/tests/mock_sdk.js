@@ -4,6 +4,8 @@
 
 let calls = [];
 let events = null;
+let pollWaiter = null;
+let sendWaiter = null;
 
 export function mockCalls() {
   return JSON.stringify(calls);
@@ -13,6 +15,17 @@ export function mockCalls() {
 /// rotates or the user changes.
 export function mockEmit(snapshotJson) {
   events.snapshot(JSON.parse(snapshotJson));
+}
+
+/// Finishes a Selfie Check that is waiting (signal `hang`) with
+/// `{success, result | error}`.
+export function mockCompletePoll(completionJson) {
+  pollWaiter(JSON.parse(completionJson));
+}
+
+/// Lets a transaction held by the `holdSend` option go through.
+export function mockReleaseSend() {
+  sendWaiter();
 }
 
 const SIGNED_OUT = {
@@ -25,12 +38,15 @@ const SIGNED_OUT = {
 };
 
 /// `optionsJson`: `{ready?: bool, loginError?: string, snapshot?: object,
-/// afterLogin?: object, signature?: string, sendError?: {code, message}}`.
+/// afterLogin?: object, signature?: string, sendError?: {code, message},
+/// holdSend?: bool}`.
 /// `snapshot` replaces the default signed-in snapshot; `afterLogin` is what a
 /// completed login reports (default: nothing changes).
 export function createMockSdk(optionsJson) {
   const options = JSON.parse(optionsJson);
   calls = [];
+  pollWaiter = null;
+  sendWaiter = null;
 
   function mountPrivy(config, sdkEvents) {
     events = sdkEvents;
@@ -70,6 +86,7 @@ export function createMockSdk(optionsJson) {
           valueType: typeof request.value,
           value: request.value === undefined ? null : request.value.toString(),
         });
+        if (options.holdSend) await new Promise((resolve) => (sendWaiter = resolve));
         return { hash: `0x${"ab".repeat(32)}` };
       },
     };
@@ -100,6 +117,7 @@ export function createMockSdk(optionsJson) {
               calls.push({ fn: "poll", timeout });
               if (preset.signal === "rejected") return { success: false, error: "user_rejected" };
               if (preset.signal === "poll-throws") throw new Error("broke its word");
+              if (preset.signal === "hang") return await new Promise((resolve) => (pollWaiter = resolve));
               return { success: true, result: { protocol_version: "3.0", nullifier: "0x01" } };
             },
           };

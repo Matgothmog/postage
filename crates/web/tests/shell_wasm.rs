@@ -104,9 +104,14 @@ async fn an_unknown_path_renders_the_not_found_screen() {
 async fn the_challenge_and_network_routes_render_their_pages() {
     quiesce().await;
     go_to("/c/abc123");
+    install_routes(vec![route(
+        "GET",
+        "/api/challenge/abc123",
+        vec![reply(200, json!({"state": "dead"}))],
+    )]);
     let challenge = mount(|| view! { <AppRoutes /> });
-    challenge.shows("Challenge").await;
-    assert!(challenge.query("[data-token='abc123']").is_some());
+    challenge.shows("Dead link.").await;
+    assert_eq!(requests_to("GET", "/api/challenge/abc123").len(), 1);
     drop(challenge);
 
     go_to("/network");

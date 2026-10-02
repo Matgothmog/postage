@@ -30,6 +30,10 @@ extern "C" {
     fn mock_calls() -> String;
     #[wasm_bindgen(js_name = mockEmit)]
     fn mock_emit(snapshot_json: &str);
+    #[wasm_bindgen(js_name = mockCompletePoll)]
+    fn mock_complete_poll(completion_json: &str);
+    #[wasm_bindgen(js_name = mockReleaseSend)]
+    pub fn release_send();
 }
 
 #[wasm_bindgen(module = "/tests/mock_fetch.js")]
@@ -240,6 +244,11 @@ pub fn signed_out() -> Value {
 /// Pushes a new auth snapshot, as Privy does on a token rotation or sign-in.
 pub fn emit(snapshot: &Value) {
     mock_emit(&snapshot.to_string());
+}
+
+/// Answers a Selfie Check that is waiting on the World App (signal `hang`).
+pub fn complete_poll(completion: &Value) {
+    mock_complete_poll(&completion.to_string());
 }
 
 pub fn calls() -> Vec<Value> {

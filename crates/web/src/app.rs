@@ -11,8 +11,9 @@ use leptos_router::components::{Route, Router, Routes};
 use leptos_router::path;
 
 use crate::bridge::privy::{Privy, PrivyConfig};
+use crate::challenge_page::ChallengePage;
 use crate::config::PRIVY_APP_ID;
-use crate::pages::{ChallengePage, HomePage, NetworkPage};
+use crate::pages::{HomePage, NetworkPage};
 use crate::screens::{ErrorGuard, NotFound};
 
 #[component]

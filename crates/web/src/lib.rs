@@ -7,6 +7,9 @@
 //!   claim flow and the owner's dashboard. `pending_claim` remembers a claim
 //!   across reloads, `proof` proves a wallet to the server, `api` and `http`
 //!   are the typed `fetch` layer, and `chain` reads the escrow contract.
+//! - `challenge_page`, `challenge_actions`, `challenge_api`, `world_id`, `qr`:
+//!   the page a stranger gets in a bounce email, with its three ways through
+//!   (prove a person, pay, paste the message again).
 //! - `config`: build-time client configuration (the `NEXT_PUBLIC_*` values).
 //! - `bridge`: typed access to the Privy and World IDKit JS SDKs.
 
@@ -17,6 +20,9 @@ pub mod api;
 pub mod app;
 pub mod bridge;
 pub mod chain;
+pub mod challenge_actions;
+pub mod challenge_api;
+pub mod challenge_page;
 pub mod chrome;
 pub mod claim_strip;
 pub mod config;
@@ -27,4 +33,6 @@ pub mod pages;
 pub mod pending_claim;
 pub mod privy_context;
 pub mod proof;
+pub mod qr;
 pub mod screens;
+pub mod world_id;

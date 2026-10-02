@@ -2,7 +2,6 @@
 
 use leptos::prelude::*;
 use leptos_router::components::A;
-use leptos_router::hooks::use_params_map;
 
 use crate::account::Account;
 use crate::chrome::{QUIET_BUTTON, Shell};
@@ -14,20 +13,6 @@ use crate::landing::Landing;
 #[component]
 pub fn HomePage() -> impl IntoView {
     view! { <Account landing=ViewFn::from(|| view! { <Landing /> }) /> }
-}
-
-/// `/c/:token`: the challenge a stranger gets in a bounce email.
-#[component]
-pub fn ChallengePage() -> impl IntoView {
-    let params = use_params_map();
-    let token = move || params.read().get("token").unwrap_or_default();
-    view! {
-        <Shell actions=GetAnAddress>
-            <main class="mx-auto w-full max-w-xl px-6 py-16" data-token=token>
-                <h1 class="text-2xl font-semibold tracking-[-0.02em] text-fg">"Challenge"</h1>
-            </main>
-        </Shell>
-    }
 }
 
 /// `/network`: the public ledger.

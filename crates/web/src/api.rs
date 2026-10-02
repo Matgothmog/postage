@@ -81,11 +81,12 @@ pub async fn get_inbox(proof: ProofHeaders) -> Result<Option<Inbox>, InboxErrorK
 #[error("{0}")]
 pub struct ApiError(pub String);
 
-const UNREACHABLE: &str = "Could not reach the server. Check your connection and try again";
+pub(crate) const UNREACHABLE: &str =
+    "Could not reach the server. Check your connection and try again";
 
 /// The server's own words for a refusal (`{"error": "..."}`), when it gave
 /// some.
-fn error_text(body: &str) -> Option<String> {
+pub(crate) fn error_text(body: &str) -> Option<String> {
     #[derive(Deserialize)]
     struct Refusal {
         error: Option<String>,
@@ -95,7 +96,7 @@ fn error_text(body: &str) -> Option<String> {
 
 /// Splits an answer into its body (2xx) or the refusal's words (anything
 /// else, or no answer), using `fallback` when the server said nothing usable.
-fn body_or_refusal(
+pub(crate) fn body_or_refusal(
     answer: Result<HttpResponse, HttpError>,
     fallback: &str,
 ) -> Result<String, ApiError> {
