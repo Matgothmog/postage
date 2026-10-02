@@ -4,6 +4,7 @@
 use serde_json::{Value, json};
 
 use super::*;
+use crate::ports::{EdgeError, InboundMessage};
 use crate::testing::{FakeEdge, FakeMessage, RAW_MESSAGE, RECIPIENT, SENDER, settings};
 
 const RETRY: &str = "Postage is temporarily unavailable, please retry";
@@ -303,4 +304,93 @@ async fn an_inbox_the_gateway_answers_200_for_but_does_not_know_is_refused_perma
         *message.rejects.borrow(),
         vec!["No such address at this domain"]
     );
+}
+
+/// A message whose raw stream is whatever the test says it is, and otherwise
+/// the usual recorder.
+struct RawStream {
+    inner: FakeMessage,
+    raw: Result<Vec<u8>, EdgeError>,
+}
+
+impl InboundMessage for RawStream {
+    fn envelope_from(&self) -> String {
+        self.inner.envelope_from()
+    }
+
+    fn envelope_to(&self) -> String {
+        self.inner.envelope_to()
+    }
+
+    fn authentication_results(&self) -> Option<String> {
+        self.inner.authentication_results()
+    }
+
+    async fn read_raw(&self) -> Result<Vec<u8>, EdgeError> {
+        self.raw.clone()
+    }
+
+    fn set_reject(&self, reason: &str) {
+        self.inner.set_reject(reason);
+    }
+
+    async fn forward(&self, to: &str) -> Result<(), EdgeError> {
+        self.inner.forward(to).await
+    }
+
+    async fn reply(
+        &self,
+        from_name: &str,
+        from_email: &str,
+        notice: &postage_shared::GatewayNotice,
+    ) -> Result<(), EdgeError> {
+        self.inner.reply(from_name, from_email, notice).await
+    }
+}
+
+fn with_raw(raw: Result<Vec<u8>, EdgeError>) -> RawStream {
+    RawStream {
+        inner: FakeMessage::new(),
+        raw,
+    }
+}
+
+#[tokio::test]
+async fn a_raw_stream_that_cannot_be_read_is_logged_and_refused_for_a_retry() {
+    let edge = FakeEdge::new().gateway_answers(200, json!({"action": "reject"}));
+    let message = with_raw(Err(EdgeError("stream errored".to_owned())));
+
+    handle_email(&edge, &settings(), &message).await;
+
+    assert_eq!(*message.inner.rejects.borrow(), vec![RETRY]);
+    assert_eq!(edge.labels(), vec!["message read failed"]);
+    assert!(edge.logs.borrow()[0].text.contains("stream errored"));
+    assert!(
+        edge.gateway_calls.borrow().is_empty(),
+        "nothing can be classified from bytes that were never read"
+    );
+}
+
+/// The raw bytes are what get held or forwarded, so a message the parser finds
+/// no headers in costs the classifier its context and never the message.
+#[tokio::test]
+async fn a_message_the_parser_cannot_read_reaches_the_gateway_as_empty_instead_of_being_refused() {
+    let edge = FakeEdge::new().gateway_answers(
+        200,
+        json!({"action": "forward", "to": "owner@personal.example"}),
+    );
+    let message = with_raw(Ok(Vec::new()));
+
+    handle_email(&edge, &settings(), &message).await;
+
+    let payload = gateway_payload(&edge);
+    assert_eq!(payload["subject"], "");
+    assert_eq!(payload["body"], "");
+    assert_eq!(payload["header_from"], Value::Null);
+    assert_eq!(
+        *message.inner.forwards.borrow(),
+        vec!["owner@personal.example"]
+    );
+    assert!(message.inner.rejects.borrow().is_empty());
+    assert!(edge.logs.borrow().is_empty());
 }

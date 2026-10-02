@@ -153,6 +153,18 @@ async fn a_request_with_no_destination_is_refused_before_kv_is_touched() {
     assert!(edge.get_calls.borrow().is_empty());
 }
 
+/// `null` is valid JSON that names neither field. It must be refused like any
+/// other body without them, not blow up the handler (the TypeScript version
+/// threw reading `token` off it).
+#[tokio::test]
+async fn a_json_null_body_is_refused_as_missing_its_fields_before_kv_is_touched() {
+    let edge = FakeEdge::new();
+    let reply = send(&edge, Request::valid().with_body("null")).await;
+
+    assert_eq!(reply, text(400, "token and to are required"));
+    assert!(edge.get_calls.borrow().is_empty());
+}
+
 #[tokio::test]
 async fn an_empty_string_token_is_treated_as_no_token_at_all() {
     let edge = FakeEdge::new();

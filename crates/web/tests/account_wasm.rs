@@ -503,3 +503,90 @@ async fn verifying_a_stored_claim_asks_the_poll_endpoint_with_the_handle_url_enc
     ));
     let _ = VERIFY;
 }
+
+// --- answers that arrive after the user moved on (#37, #38) -----------------
+
+fn inbox_reply_for(handle: &str) -> Value {
+    reply(
+        200,
+        json!({"inbox": {"handle": handle, "destination": "demo@example.com",
+                         "wallet": WALLET, "created_at": 1}}),
+    )
+}
+
+fn held_reply(gate: &str, mut response: Value) -> Value {
+    response["gate"] = json!(gate);
+    response
+}
+
+/// Two reads leave in order and answer in the opposite order: the slow, older
+/// one must not put its inbox over the newer read's.
+#[wasm_bindgen_test]
+async fn a_slow_older_read_does_not_overwrite_the_newer_inbox_it_was_overtaken_by() {
+    quiesce().await;
+    let page = open(
+        signed_in_options(Some("t1")),
+        vec![route(
+            "GET",
+            INBOX,
+            vec![
+                held_reply("old-read", inbox_reply_for("older")),
+                inbox_reply_for("newer"),
+            ],
+        )],
+    );
+    eventually("the first read to leave", || {
+        requests_to("GET", INBOX).len() == 1
+    })
+    .await;
+
+    // Privy rotates the identity token while the first read is still held.
+    emit(&signed_in(WALLET, Some("Tester@Example.com"), Some("t2")));
+    page.shows("newer@usepostage.com").await;
+
+    open_gate("old-read");
+    settle().await;
+    page.assert_absent("older@usepostage.com");
+    assert!(page.text().contains("newer@usepostage.com"));
+}
+
+/// "Start over" while the restored claim is still being checked: the check's
+/// answer is about a claim that is no longer on screen.
+#[wasm_bindgen_test]
+async fn a_restored_claim_check_that_answers_after_start_over_does_not_bring_the_claim_back() {
+    quiesce().await;
+    clear_storage();
+    store_claim(WALLET, "demo", "demo@example.com", false);
+    install_routes(vec![
+        route("GET", INBOX, vec![no_inbox()]),
+        route(
+            "GET",
+            "/api/inbox/verify?handle=demo",
+            vec![held_reply(
+                "restored-check",
+                reply(
+                    200,
+                    json!({"codeVerified": true, "cloudflareVerified": false, "live": false}),
+                ),
+            )],
+        ),
+    ]);
+    let page = mount(|| {
+        start_privy(signed_in_options(Some("t")));
+        view! { <Router><Account landing=ViewFn::from(|| view! { <Landing /> }) /></Router> }
+    });
+    page.shows("One click left").await;
+    eventually("the restored claim to be checked", || {
+        requests_to("GET", "/api/inbox/verify?handle=demo").len() == 1
+    })
+    .await;
+
+    page.click("Start over");
+    page.shows("Pick your address.").await;
+    assert!(stored_claim().is_none());
+
+    open_gate("restored-check");
+    settle().await;
+    page.assert_absent("One click left");
+    assert!(page.text().contains("Pick your address."));
+}
