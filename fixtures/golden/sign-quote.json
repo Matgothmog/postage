@@ -1,0 +1,177 @@
+{
+  "function": "sign-quote",
+  "description": "signQuote: EIP-712 Quote typed-data signature (viem signTypedData). Expiry is now + 86400.",
+  "config": {
+    "classifierPrivateKey": "0x1111111111111111111111111111111111111111111111111111111111111111",
+    "signerAddress": "0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A",
+    "domain": {
+      "name": "Postage",
+      "version": "2",
+      "chainId": 5042002,
+      "verifyingContract": "0x4469e869433cf6cc08dd54afc6ac7e288b9a38f7"
+    },
+    "primaryType": "Quote",
+    "types": {
+      "Quote": [
+        "bytes32 messageId",
+        "address inbox",
+        "uint8 tier",
+        "uint256 amount",
+        "uint40 expiresAt"
+      ]
+    },
+    "tierIndex": {
+      "human": 0,
+      "important": 1,
+      "commercial": 2,
+      "dangerous": 3
+    },
+    "ttlSeconds": 86400
+  },
+  "cases": [
+    {
+      "name": "human tier, one cent",
+      "input": {
+        "now": 1800000000,
+        "messageId": "0xabababababababababababababababababababababababababababababababab",
+        "inbox": "0x1234567890abcdef1234567890abcdef12345678",
+        "tier": "human",
+        "amount": "10000000000000000"
+      },
+      "output": {
+        "messageId": "0xabababababababababababababababababababababababababababababababab",
+        "inbox": "0x1234567890abcdef1234567890abcdef12345678",
+        "tier": "human",
+        "amount": "10000000000000000",
+        "expiresAt": 1800086400,
+        "signature": "0x105f789dd4e7933175bb2f22b92593e9e4a47863a6a465b7ef8341dd8b48a7db5371f44fd3dbb61d78b61e7d4c1cef39b74f3fa118197939e4bc7324d296c12b1c"
+      }
+    },
+    {
+      "name": "important tier, zero amount",
+      "input": {
+        "now": 1800000000,
+        "messageId": "0xabababababababababababababababababababababababababababababababab",
+        "inbox": "0x1234567890abcdef1234567890abcdef12345678",
+        "tier": "important",
+        "amount": "0"
+      },
+      "output": {
+        "messageId": "0xabababababababababababababababababababababababababababababababab",
+        "inbox": "0x1234567890abcdef1234567890abcdef12345678",
+        "tier": "important",
+        "amount": "0",
+        "expiresAt": 1800086400,
+        "signature": "0xf17aa0fbee0227d9e012c780a0a17ff343f09a32c95569a0653d2bcf4a21426f74f5ad287a968e7a948d1b96b4e50eda5398ebf2725e107c2779df5c42cb8e221c"
+      }
+    },
+    {
+      "name": "commercial tier",
+      "input": {
+        "now": 1800000123,
+        "messageId": "0x0000000000000000000000000000000000000000000000000000000000000001",
+        "inbox": "0x1234567890abcdef1234567890abcdef12345678",
+        "tier": "commercial",
+        "amount": "10000000000000000"
+      },
+      "output": {
+        "messageId": "0x0000000000000000000000000000000000000000000000000000000000000001",
+        "inbox": "0x1234567890abcdef1234567890abcdef12345678",
+        "tier": "commercial",
+        "amount": "10000000000000000",
+        "expiresAt": 1800086523,
+        "signature": "0xac347e17f2d542249465473762de0560a7835c9fba0dd48779a66309b231a2256beb5810b0b3cab95b33cb86b1f22d229df350d0772727961f8eec96817907911b"
+      }
+    },
+    {
+      "name": "dangerous tier, ten times floor",
+      "input": {
+        "now": 1800000123,
+        "messageId": "0x0000000000000000000000000000000000000000000000000000000000000001",
+        "inbox": "0x1234567890abcdef1234567890abcdef12345678",
+        "tier": "dangerous",
+        "amount": "100000000000000000"
+      },
+      "output": {
+        "messageId": "0x0000000000000000000000000000000000000000000000000000000000000001",
+        "inbox": "0x1234567890abcdef1234567890abcdef12345678",
+        "tier": "dangerous",
+        "amount": "100000000000000000",
+        "expiresAt": 1800086523,
+        "signature": "0x2eaf7e25591f9f49311c2f8bc9caae6f898e454b50815564c59a50ed2a7c28ad28c66dd9f0c70a778955b6d6901f292faaa0a731955323c0a61caa63998a6e3b1b"
+      }
+    },
+    {
+      "name": "uint256 max amount",
+      "input": {
+        "now": 1700000000,
+        "messageId": "0xabababababababababababababababababababababababababababababababab",
+        "inbox": "0x1234567890abcdef1234567890abcdef12345678",
+        "tier": "commercial",
+        "amount": "115792089237316195423570985008687907853269984665640564039457584007913129639935"
+      },
+      "output": {
+        "messageId": "0xabababababababababababababababababababababababababababababababab",
+        "inbox": "0x1234567890abcdef1234567890abcdef12345678",
+        "tier": "commercial",
+        "amount": "115792089237316195423570985008687907853269984665640564039457584007913129639935",
+        "expiresAt": 1700086400,
+        "signature": "0x6f96038bde1f08dae71ac1ac6586923b6facbdcef8b39495cb0a482ab46667cf29aa755fbe845a67f5d01bed62265ab483bbd105e4a593c75bb0e09a01ca5dfa1c"
+      }
+    },
+    {
+      "name": "clock at zero",
+      "input": {
+        "now": 0,
+        "messageId": "0xabababababababababababababababababababababababababababababababab",
+        "inbox": "0x1234567890abcdef1234567890abcdef12345678",
+        "tier": "human",
+        "amount": "1"
+      },
+      "output": {
+        "messageId": "0xabababababababababababababababababababababababababababababababab",
+        "inbox": "0x1234567890abcdef1234567890abcdef12345678",
+        "tier": "human",
+        "amount": "1",
+        "expiresAt": 86400,
+        "signature": "0x0dcdd1529f17a851a61716fd1b5e83d4607b0be36ed424bdf56aafa67bbdd1c53673be1785f0f5ddb2620b2e76108cf5851aeceab55c4dd6280fe125b7a233a81b"
+      }
+    },
+    {
+      "name": "expiry lands exactly on uint40 max",
+      "input": {
+        "now": 1099511541375,
+        "messageId": "0xabababababababababababababababababababababababababababababababab",
+        "inbox": "0x1234567890abcdef1234567890abcdef12345678",
+        "tier": "human",
+        "amount": "1"
+      },
+      "output": {
+        "messageId": "0xabababababababababababababababababababababababababababababababab",
+        "inbox": "0x1234567890abcdef1234567890abcdef12345678",
+        "tier": "human",
+        "amount": "1",
+        "expiresAt": 1099511627775,
+        "signature": "0x06c1ab1a4e216e30f899460b12d747250704f5f4c9621743f144f6e9139ddefe7dbe87fc3a0d086c7399e4845d4acbad9365d8bab56cfe111c8e16b1c10338fc1c"
+      }
+    },
+    {
+      "name": "EIP-55 checksummed inbox address",
+      "input": {
+        "now": 1800000000,
+        "messageId": "0xabababababababababababababababababababababababababababababababab",
+        "inbox": "0x1234567890AbcdEF1234567890aBcdef12345678",
+        "tier": "commercial",
+        "amount": "5000000000000000"
+      },
+      "output": {
+        "messageId": "0xabababababababababababababababababababababababababababababababab",
+        "inbox": "0x1234567890AbcdEF1234567890aBcdef12345678",
+        "tier": "commercial",
+        "amount": "5000000000000000",
+        "expiresAt": 1800086400,
+        "signature": "0xf90cbc3f06827b7f44601e1ffcce2605a4a811babf9b888fbe44db09b48f872e6d6a87734b56f7fb3ea5a7fad56724136f0a362fa49acccc02b0e9f5055855b71c"
+      }
+    }
+  ]
+}

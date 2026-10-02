@@ -1,0 +1,850 @@
+{
+  "function": "pricing",
+  "description": "quote (pricing.ts): amount = floor * multiplierBps / 10000 (integer division), multiplierBps clamped to [10000, 100000]; important is free. Floats in the multiplier math use JS Math.round semantics. floor and amount are decimal strings of 18-decimal USDC base units.",
+  "config": {
+    "now": 1800000000,
+    "oneBps": 10000,
+    "ceilingBps": 100000,
+    "yearSeconds": 31536000
+  },
+  "cases": [
+    {
+      "name": "human, no signals",
+      "input": {
+        "floor": "10000000000000000",
+        "tier": "human",
+        "signals": null,
+        "degraded": false
+      },
+      "output": {
+        "amount": "10000000000000000",
+        "floor": "10000000000000000",
+        "multiplierBps": 10000,
+        "free": false,
+        "reasons": [
+          "Reads human, nobody proved it"
+        ]
+      }
+    },
+    {
+      "name": "human, empty signals",
+      "input": {
+        "floor": "10000000000000000",
+        "tier": "human",
+        "signals": {
+          "paidCount": 0,
+          "spamReports": 0,
+          "spamRate": 0,
+          "ensNames": 0,
+          "oldestEnsAt": null
+        },
+        "degraded": false
+      },
+      "output": {
+        "amount": "10000000000000000",
+        "floor": "10000000000000000",
+        "multiplierBps": 10000,
+        "free": false,
+        "reasons": [
+          "Reads human, nobody proved it"
+        ]
+      }
+    },
+    {
+      "name": "human, empty signals, degraded",
+      "input": {
+        "floor": "10000000000000000",
+        "tier": "human",
+        "signals": {
+          "paidCount": 0,
+          "spamReports": 0,
+          "spamRate": 0,
+          "ensNames": 0,
+          "oldestEnsAt": null
+        },
+        "degraded": true
+      },
+      "output": {
+        "amount": "10000000000000000",
+        "floor": "10000000000000000",
+        "multiplierBps": 10000,
+        "free": false,
+        "reasons": [
+          "Reads human, nobody proved it"
+        ]
+      }
+    },
+    {
+      "name": "important, no signals",
+      "input": {
+        "floor": "10000000000000000",
+        "tier": "important",
+        "signals": null,
+        "degraded": false
+      },
+      "output": {
+        "amount": "0",
+        "floor": "10000000000000000",
+        "multiplierBps": 0,
+        "free": true,
+        "reasons": [
+          "Something they are waiting for"
+        ]
+      }
+    },
+    {
+      "name": "important, empty signals",
+      "input": {
+        "floor": "10000000000000000",
+        "tier": "important",
+        "signals": {
+          "paidCount": 0,
+          "spamReports": 0,
+          "spamRate": 0,
+          "ensNames": 0,
+          "oldestEnsAt": null
+        },
+        "degraded": false
+      },
+      "output": {
+        "amount": "0",
+        "floor": "10000000000000000",
+        "multiplierBps": 0,
+        "free": true,
+        "reasons": [
+          "Something they are waiting for"
+        ]
+      }
+    },
+    {
+      "name": "important, empty signals, degraded",
+      "input": {
+        "floor": "10000000000000000",
+        "tier": "important",
+        "signals": {
+          "paidCount": 0,
+          "spamReports": 0,
+          "spamRate": 0,
+          "ensNames": 0,
+          "oldestEnsAt": null
+        },
+        "degraded": true
+      },
+      "output": {
+        "amount": "0",
+        "floor": "10000000000000000",
+        "multiplierBps": 0,
+        "free": true,
+        "reasons": [
+          "Something they are waiting for"
+        ]
+      }
+    },
+    {
+      "name": "commercial, no signals",
+      "input": {
+        "floor": "10000000000000000",
+        "tier": "commercial",
+        "signals": null,
+        "degraded": false
+      },
+      "output": {
+        "amount": "10000000000000000",
+        "floor": "10000000000000000",
+        "multiplierBps": 10000,
+        "free": false,
+        "reasons": [
+          "Automated mail nobody asked for"
+        ]
+      }
+    },
+    {
+      "name": "commercial, empty signals",
+      "input": {
+        "floor": "10000000000000000",
+        "tier": "commercial",
+        "signals": {
+          "paidCount": 0,
+          "spamReports": 0,
+          "spamRate": 0,
+          "ensNames": 0,
+          "oldestEnsAt": null
+        },
+        "degraded": false
+      },
+      "output": {
+        "amount": "10000000000000000",
+        "floor": "10000000000000000",
+        "multiplierBps": 10000,
+        "free": false,
+        "reasons": [
+          "Automated mail nobody asked for"
+        ]
+      }
+    },
+    {
+      "name": "commercial, empty signals, degraded",
+      "input": {
+        "floor": "10000000000000000",
+        "tier": "commercial",
+        "signals": {
+          "paidCount": 0,
+          "spamReports": 0,
+          "spamRate": 0,
+          "ensNames": 0,
+          "oldestEnsAt": null
+        },
+        "degraded": true
+      },
+      "output": {
+        "amount": "10000000000000000",
+        "floor": "10000000000000000",
+        "multiplierBps": 10000,
+        "free": false,
+        "reasons": [
+          "Automated mail nobody asked for"
+        ]
+      }
+    },
+    {
+      "name": "dangerous, no signals",
+      "input": {
+        "floor": "10000000000000000",
+        "tier": "dangerous",
+        "signals": null,
+        "degraded": false
+      },
+      "output": {
+        "amount": "100000000000000000",
+        "floor": "10000000000000000",
+        "multiplierBps": 100000,
+        "free": false,
+        "reasons": [
+          "Reads as an attempt to deceive"
+        ]
+      }
+    },
+    {
+      "name": "dangerous, empty signals",
+      "input": {
+        "floor": "10000000000000000",
+        "tier": "dangerous",
+        "signals": {
+          "paidCount": 0,
+          "spamReports": 0,
+          "spamRate": 0,
+          "ensNames": 0,
+          "oldestEnsAt": null
+        },
+        "degraded": false
+      },
+      "output": {
+        "amount": "100000000000000000",
+        "floor": "10000000000000000",
+        "multiplierBps": 100000,
+        "free": false,
+        "reasons": [
+          "Reads as an attempt to deceive"
+        ]
+      }
+    },
+    {
+      "name": "dangerous, empty signals, degraded",
+      "input": {
+        "floor": "10000000000000000",
+        "tier": "dangerous",
+        "signals": {
+          "paidCount": 0,
+          "spamReports": 0,
+          "spamRate": 0,
+          "ensNames": 0,
+          "oldestEnsAt": null
+        },
+        "degraded": true
+      },
+      "output": {
+        "amount": "20000000000000000",
+        "floor": "10000000000000000",
+        "multiplierBps": 20000,
+        "free": false,
+        "reasons": [
+          "Reads as an attempt to deceive",
+          "Priced down: headers only"
+        ]
+      }
+    },
+    {
+      "name": "commercial, paidCount 2 (below good-history threshold)",
+      "input": {
+        "floor": "10000000000000000",
+        "tier": "commercial",
+        "signals": {
+          "paidCount": 2,
+          "spamReports": 0,
+          "spamRate": 0,
+          "ensNames": 0,
+          "oldestEnsAt": null
+        },
+        "degraded": false
+      },
+      "output": {
+        "amount": "10000000000000000",
+        "floor": "10000000000000000",
+        "multiplierBps": 10000,
+        "free": false,
+        "reasons": [
+          "Automated mail nobody asked for"
+        ]
+      }
+    },
+    {
+      "name": "commercial, paidCount 3, spamRate 0 (good history halves)",
+      "input": {
+        "floor": "10000000000000000",
+        "tier": "commercial",
+        "signals": {
+          "paidCount": 3,
+          "spamReports": 0,
+          "spamRate": 0,
+          "ensNames": 0,
+          "oldestEnsAt": null
+        },
+        "degraded": false
+      },
+      "output": {
+        "amount": "10000000000000000",
+        "floor": "10000000000000000",
+        "multiplierBps": 10000,
+        "free": false,
+        "reasons": [
+          "Automated mail nobody asked for",
+          "Good history here: 3 messages",
+          "Already at this inbox's floor"
+        ]
+      }
+    },
+    {
+      "name": "commercial, paidCount 3, spamRate 0.19999 (just under cutoff)",
+      "input": {
+        "floor": "10000000000000000",
+        "tier": "commercial",
+        "signals": {
+          "paidCount": 3,
+          "spamReports": 0,
+          "spamRate": 0.19999,
+          "ensNames": 0,
+          "oldestEnsAt": null
+        },
+        "degraded": false
+      },
+      "output": {
+        "amount": "10000000000000000",
+        "floor": "10000000000000000",
+        "multiplierBps": 10000,
+        "free": false,
+        "reasons": [
+          "Automated mail nobody asked for",
+          "Spam-reported 0 of 3 times here",
+          "Good history here: 3 messages",
+          "Already at this inbox's floor"
+        ]
+      }
+    },
+    {
+      "name": "commercial, paidCount 3, spamRate 0.2 (at cutoff)",
+      "input": {
+        "floor": "10000000000000000",
+        "tier": "commercial",
+        "signals": {
+          "paidCount": 5,
+          "spamReports": 1,
+          "spamRate": 0.2,
+          "ensNames": 0,
+          "oldestEnsAt": null
+        },
+        "degraded": false
+      },
+      "output": {
+        "amount": "18000000000000000",
+        "floor": "10000000000000000",
+        "multiplierBps": 18000,
+        "free": false,
+        "reasons": [
+          "Automated mail nobody asked for",
+          "Spam-reported 1 of 5 times here"
+        ]
+      }
+    },
+    {
+      "name": "commercial, spam rate 0.5 with history",
+      "input": {
+        "floor": "10000000000000000",
+        "tier": "commercial",
+        "signals": {
+          "paidCount": 4,
+          "spamReports": 2,
+          "spamRate": 0.5,
+          "ensNames": 0,
+          "oldestEnsAt": null
+        },
+        "degraded": false
+      },
+      "output": {
+        "amount": "30000000000000000",
+        "floor": "10000000000000000",
+        "multiplierBps": 30000,
+        "free": false,
+        "reasons": [
+          "Automated mail nobody asked for",
+          "Spam-reported 2 of 4 times here"
+        ]
+      }
+    },
+    {
+      "name": "human, spam rate 0.1 with 10 messages",
+      "input": {
+        "floor": "10000000000000000",
+        "tier": "human",
+        "signals": {
+          "paidCount": 10,
+          "spamReports": 1,
+          "spamRate": 0.1,
+          "ensNames": 0,
+          "oldestEnsAt": null
+        },
+        "degraded": false
+      },
+      "output": {
+        "amount": "10000000000000000",
+        "floor": "10000000000000000",
+        "multiplierBps": 10000,
+        "free": false,
+        "reasons": [
+          "Reads human, nobody proved it",
+          "Spam-reported 1 of 10 times here",
+          "Good history here: 10 messages",
+          "Already at this inbox's floor"
+        ]
+      }
+    },
+    {
+      "name": "spamRate positive but paidCount 0 is ignored",
+      "input": {
+        "floor": "10000000000000000",
+        "tier": "commercial",
+        "signals": {
+          "paidCount": 0,
+          "spamReports": 3,
+          "spamRate": 0.5,
+          "ensNames": 0,
+          "oldestEnsAt": null
+        },
+        "degraded": false
+      },
+      "output": {
+        "amount": "10000000000000000",
+        "floor": "10000000000000000",
+        "multiplierBps": 10000,
+        "free": false,
+        "reasons": [
+          "Automated mail nobody asked for"
+        ]
+      }
+    },
+    {
+      "name": "commercial, one ENS name, no age",
+      "input": {
+        "floor": "10000000000000000",
+        "tier": "commercial",
+        "signals": {
+          "paidCount": 0,
+          "spamReports": 0,
+          "spamRate": 0,
+          "ensNames": 1,
+          "oldestEnsAt": null
+        },
+        "degraded": false
+      },
+      "output": {
+        "amount": "10000000000000000",
+        "floor": "10000000000000000",
+        "multiplierBps": 10000,
+        "free": false,
+        "reasons": [
+          "Automated mail nobody asked for",
+          "Holds 1 ENS name",
+          "Already at this inbox's floor"
+        ]
+      }
+    },
+    {
+      "name": "commercial, two ENS names (plural)",
+      "input": {
+        "floor": "10000000000000000",
+        "tier": "commercial",
+        "signals": {
+          "paidCount": 0,
+          "spamReports": 0,
+          "spamRate": 0,
+          "ensNames": 2,
+          "oldestEnsAt": null
+        },
+        "degraded": false
+      },
+      "output": {
+        "amount": "10000000000000000",
+        "floor": "10000000000000000",
+        "multiplierBps": 10000,
+        "free": false,
+        "reasons": [
+          "Automated mail nobody asked for",
+          "Holds 2 ENS names",
+          "Already at this inbox's floor"
+        ]
+      }
+    },
+    {
+      "name": "commercial, ENS exactly one year old (no age bonus)",
+      "input": {
+        "floor": "10000000000000000",
+        "tier": "commercial",
+        "signals": {
+          "paidCount": 0,
+          "spamReports": 0,
+          "spamRate": 0,
+          "ensNames": 1,
+          "oldestEnsAt": 1768464000
+        },
+        "degraded": false
+      },
+      "output": {
+        "amount": "10000000000000000",
+        "floor": "10000000000000000",
+        "multiplierBps": 10000,
+        "free": false,
+        "reasons": [
+          "Automated mail nobody asked for",
+          "Holds 1 ENS name",
+          "Already at this inbox's floor"
+        ]
+      }
+    },
+    {
+      "name": "commercial, ENS one year and a second old",
+      "input": {
+        "floor": "10000000000000000",
+        "tier": "commercial",
+        "signals": {
+          "paidCount": 0,
+          "spamReports": 0,
+          "spamRate": 0,
+          "ensNames": 1,
+          "oldestEnsAt": 1768463999
+        },
+        "degraded": false
+      },
+      "output": {
+        "amount": "10000000000000000",
+        "floor": "10000000000000000",
+        "multiplierBps": 10000,
+        "free": false,
+        "reasons": [
+          "Automated mail nobody asked for",
+          "Holds 1 ENS name",
+          "Oldest registered 1 years ago",
+          "Already at this inbox's floor"
+        ]
+      }
+    },
+    {
+      "name": "commercial, ENS 2.9 years old floors to 2",
+      "input": {
+        "floor": "10000000000000000",
+        "tier": "commercial",
+        "signals": {
+          "paidCount": 0,
+          "spamReports": 0,
+          "spamRate": 0,
+          "ensNames": 3,
+          "oldestEnsAt": 1708545600
+        },
+        "degraded": false
+      },
+      "output": {
+        "amount": "10000000000000000",
+        "floor": "10000000000000000",
+        "multiplierBps": 10000,
+        "free": false,
+        "reasons": [
+          "Automated mail nobody asked for",
+          "Holds 3 ENS names",
+          "Oldest registered 2 years ago",
+          "Already at this inbox's floor"
+        ]
+      }
+    },
+    {
+      "name": "commercial, ENS dated in the future (negative age)",
+      "input": {
+        "floor": "10000000000000000",
+        "tier": "commercial",
+        "signals": {
+          "paidCount": 0,
+          "spamReports": 0,
+          "spamRate": 0,
+          "ensNames": 1,
+          "oldestEnsAt": 1800001000
+        },
+        "degraded": false
+      },
+      "output": {
+        "amount": "10000000000000000",
+        "floor": "10000000000000000",
+        "multiplierBps": 10000,
+        "free": false,
+        "reasons": [
+          "Automated mail nobody asked for",
+          "Holds 1 ENS name",
+          "Already at this inbox's floor"
+        ]
+      }
+    },
+    {
+      "name": "dangerous, everything bad (hits the ceiling)",
+      "input": {
+        "floor": "10000000000000000",
+        "tier": "dangerous",
+        "signals": {
+          "paidCount": 10,
+          "spamReports": 10,
+          "spamRate": 1,
+          "ensNames": 0,
+          "oldestEnsAt": null
+        },
+        "degraded": false
+      },
+      "output": {
+        "amount": "100000000000000000",
+        "floor": "10000000000000000",
+        "multiplierBps": 100000,
+        "free": false,
+        "reasons": [
+          "Reads as an attempt to deceive",
+          "Spam-reported 10 of 10 times here"
+        ]
+      }
+    },
+    {
+      "name": "dangerous, degraded, spam-reported",
+      "input": {
+        "floor": "10000000000000000",
+        "tier": "dangerous",
+        "signals": {
+          "paidCount": 2,
+          "spamReports": 1,
+          "spamRate": 0.5,
+          "ensNames": 0,
+          "oldestEnsAt": null
+        },
+        "degraded": true
+      },
+      "output": {
+        "amount": "40000000000000000",
+        "floor": "10000000000000000",
+        "multiplierBps": 40000,
+        "free": false,
+        "reasons": [
+          "Reads as an attempt to deceive",
+          "Priced down: headers only",
+          "Spam-reported 1 of 2 times here"
+        ]
+      }
+    },
+    {
+      "name": "dangerous, degraded, ENS and good history",
+      "input": {
+        "floor": "10000000000000000",
+        "tier": "dangerous",
+        "signals": {
+          "paidCount": 5,
+          "spamReports": 0,
+          "spamRate": 0,
+          "ensNames": 1,
+          "oldestEnsAt": 1705392000
+        },
+        "degraded": true
+      },
+      "output": {
+        "amount": "10000000000000000",
+        "floor": "10000000000000000",
+        "multiplierBps": 10000,
+        "free": false,
+        "reasons": [
+          "Reads as an attempt to deceive",
+          "Priced down: headers only",
+          "Good history here: 5 messages",
+          "Holds 1 ENS name",
+          "Oldest registered 3 years ago",
+          "Already at this inbox's floor"
+        ]
+      }
+    },
+    {
+      "name": "commercial, good history + ENS + old (clamped up to floor)",
+      "input": {
+        "floor": "10000000000000000",
+        "tier": "commercial",
+        "signals": {
+          "paidCount": 9,
+          "spamReports": 0,
+          "spamRate": 0,
+          "ensNames": 2,
+          "oldestEnsAt": 1642320000
+        },
+        "degraded": false
+      },
+      "output": {
+        "amount": "10000000000000000",
+        "floor": "10000000000000000",
+        "multiplierBps": 10000,
+        "free": false,
+        "reasons": [
+          "Automated mail nobody asked for",
+          "Good history here: 9 messages",
+          "Holds 2 ENS names",
+          "Oldest registered 5 years ago",
+          "Already at this inbox's floor"
+        ]
+      }
+    },
+    {
+      "name": "human, good history only (clamped up to floor)",
+      "input": {
+        "floor": "10000000000000000",
+        "tier": "human",
+        "signals": {
+          "paidCount": 3,
+          "spamReports": 0,
+          "spamRate": 0,
+          "ensNames": 0,
+          "oldestEnsAt": null
+        },
+        "degraded": false
+      },
+      "output": {
+        "amount": "10000000000000000",
+        "floor": "10000000000000000",
+        "multiplierBps": 10000,
+        "free": false,
+        "reasons": [
+          "Reads human, nobody proved it",
+          "Good history here: 3 messages",
+          "Already at this inbox's floor"
+        ]
+      }
+    },
+    {
+      "name": "important ignores signals and degraded",
+      "input": {
+        "floor": "10000000000000000",
+        "tier": "important",
+        "signals": {
+          "paidCount": 9,
+          "spamReports": 9,
+          "spamRate": 1,
+          "ensNames": 5,
+          "oldestEnsAt": 1516176000
+        },
+        "degraded": true
+      },
+      "output": {
+        "amount": "0",
+        "floor": "10000000000000000",
+        "multiplierBps": 0,
+        "free": true,
+        "reasons": [
+          "Something they are waiting for"
+        ]
+      }
+    },
+    {
+      "name": "floor of zero",
+      "input": {
+        "floor": "0",
+        "tier": "commercial",
+        "signals": null,
+        "degraded": false
+      },
+      "output": {
+        "amount": "0",
+        "floor": "0",
+        "multiplierBps": 10000,
+        "free": false,
+        "reasons": [
+          "Automated mail nobody asked for"
+        ]
+      }
+    },
+    {
+      "name": "floor of one base unit, bps truncation",
+      "input": {
+        "floor": "1",
+        "tier": "dangerous",
+        "signals": null,
+        "degraded": false
+      },
+      "output": {
+        "amount": "10",
+        "floor": "1",
+        "multiplierBps": 100000,
+        "free": false,
+        "reasons": [
+          "Reads as an attempt to deceive"
+        ]
+      }
+    },
+    {
+      "name": "floor of 3 with 1.4x multiplier truncates",
+      "input": {
+        "floor": "3",
+        "tier": "commercial",
+        "signals": {
+          "paidCount": 1,
+          "spamReports": 0,
+          "spamRate": 0.1,
+          "ensNames": 0,
+          "oldestEnsAt": null
+        },
+        "degraded": false
+      },
+      "output": {
+        "amount": "4",
+        "floor": "3",
+        "multiplierBps": 14000,
+        "free": false,
+        "reasons": [
+          "Automated mail nobody asked for",
+          "Spam-reported 0 of 1 times here"
+        ]
+      }
+    },
+    {
+      "name": "very large floor",
+      "input": {
+        "floor": "1000000000000000000000000000007",
+        "tier": "dangerous",
+        "signals": null,
+        "degraded": false
+      },
+      "output": {
+        "amount": "10000000000000000000000000000070",
+        "floor": "1000000000000000000000000000007",
+        "multiplierBps": 100000,
+        "free": false,
+        "reasons": [
+          "Reads as an attempt to deceive"
+        ]
+      }
+    }
+  ]
+}

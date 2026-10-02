@@ -1,0 +1,211 @@
+{
+  "function": "wallet-nonce",
+  "description": "mintWalletNonce / verifyWalletNonce: `<expiresAt>.<random hex>.<HMAC tag>`. Key = HKDF-SHA256(MESSAGE_ID_SECRET, salt \"\", info \"postage:wallet-nonce\", 32). Tag preimage `postage-wallet-nonce|wallet.lower|expiresAt|random`. verify returns the expiry or null.",
+  "config": {
+    "messageIdSecret": "golden-vector-message-id-secret-not-for-production",
+    "ttlSeconds": 120,
+    "randomByteCount": 16
+  },
+  "mint": [
+    {
+      "name": "mint, mixed-case wallet",
+      "input": {
+        "wallet": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+        "now": 1800000000,
+        "randomBytesHex": "01080f161d242b323940474e555c636a"
+      },
+      "output": "1800000120.01080f161d242b323940474e555c636a.75afbaf2e7bcfe13ff09f9830f34e5aed928f9ebeb8cee2202f1eea3f6540015"
+    },
+    {
+      "name": "mint, same wallet lowercased gives the same tag",
+      "input": {
+        "wallet": "0xabcdef0123456789abcdef0123456789abcdef01",
+        "now": 1800000000,
+        "randomBytesHex": "01080f161d242b323940474e555c636a"
+      },
+      "output": "1800000120.01080f161d242b323940474e555c636a.75afbaf2e7bcfe13ff09f9830f34e5aed928f9ebeb8cee2202f1eea3f6540015"
+    },
+    {
+      "name": "mint, different random bytes",
+      "input": {
+        "wallet": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+        "now": 1800000000,
+        "randomBytesHex": "c8cfd6dde4ebf2f900070e151c232a31"
+      },
+      "output": "1800000120.c8cfd6dde4ebf2f900070e151c232a31.85d5a10fd1531e216e3bc30da80bfa234dc62bcdb6506022f34537a8af0b6a17"
+    },
+    {
+      "name": "mint, clock at zero",
+      "input": {
+        "wallet": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+        "now": 0,
+        "randomBytesHex": "01080f161d242b323940474e555c636a"
+      },
+      "output": "120.01080f161d242b323940474e555c636a.8ec255705aba486dd0f402366702335a6c1344c1aa01952da208946fdea43375"
+    }
+  ],
+  "verify": [
+    {
+      "name": "valid at mint time",
+      "input": {
+        "nonce": "1800000120.01080f161d242b323940474e555c636a.75afbaf2e7bcfe13ff09f9830f34e5aed928f9ebeb8cee2202f1eea3f6540015",
+        "wallet": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+        "now": 1800000000
+      },
+      "output": 1800000120
+    },
+    {
+      "name": "valid, wallet case differs",
+      "input": {
+        "nonce": "1800000120.01080f161d242b323940474e555c636a.75afbaf2e7bcfe13ff09f9830f34e5aed928f9ebeb8cee2202f1eea3f6540015",
+        "wallet": "0xabcdef0123456789abcdef0123456789abcdef01",
+        "now": 1800000000
+      },
+      "output": 1800000120
+    },
+    {
+      "name": "valid one second before expiry",
+      "input": {
+        "nonce": "1800000120.01080f161d242b323940474e555c636a.75afbaf2e7bcfe13ff09f9830f34e5aed928f9ebeb8cee2202f1eea3f6540015",
+        "wallet": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+        "now": 1800000119
+      },
+      "output": 1800000120
+    },
+    {
+      "name": "refused exactly at expiry",
+      "input": {
+        "nonce": "1800000120.01080f161d242b323940474e555c636a.75afbaf2e7bcfe13ff09f9830f34e5aed928f9ebeb8cee2202f1eea3f6540015",
+        "wallet": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+        "now": 1800000120
+      },
+      "output": null
+    },
+    {
+      "name": "refused one second after expiry",
+      "input": {
+        "nonce": "1800000120.01080f161d242b323940474e555c636a.75afbaf2e7bcfe13ff09f9830f34e5aed928f9ebeb8cee2202f1eea3f6540015",
+        "wallet": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+        "now": 1800000121
+      },
+      "output": null
+    },
+    {
+      "name": "refused for a different wallet",
+      "input": {
+        "nonce": "1800000120.01080f161d242b323940474e555c636a.75afbaf2e7bcfe13ff09f9830f34e5aed928f9ebeb8cee2202f1eea3f6540015",
+        "wallet": "0x0000000000000000000000000000000000000001",
+        "now": 1800000000
+      },
+      "output": null
+    },
+    {
+      "name": "refused with last tag nibble flipped",
+      "input": {
+        "nonce": "1800000120.01080f161d242b323940474e555c636a.75afbaf2e7bcfe13ff09f9830f34e5aed928f9ebeb8cee2202f1eea3f6540010",
+        "wallet": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+        "now": 1800000000
+      },
+      "output": null
+    },
+    {
+      "name": "refused with expiry text altered (leading zero)",
+      "input": {
+        "nonce": "01800000120.01080f161d242b323940474e555c636a.75afbaf2e7bcfe13ff09f9830f34e5aed928f9ebeb8cee2202f1eea3f6540015",
+        "wallet": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+        "now": 1800000000
+      },
+      "output": null
+    },
+    {
+      "name": "refused with expiry extended",
+      "input": {
+        "nonce": "1800001120.01080f161d242b323940474e555c636a.75afbaf2e7bcfe13ff09f9830f34e5aed928f9ebeb8cee2202f1eea3f6540015",
+        "wallet": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+        "now": 1800000000
+      },
+      "output": null
+    },
+    {
+      "name": "refused with truncated tag",
+      "input": {
+        "nonce": "1800000120.01080f161d242b323940474e555c636a.75afbaf2e7bcfe13ff09f9830f34e5aed928f9ebeb8cee2202f1eea3f654001",
+        "wallet": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+        "now": 1800000000
+      },
+      "output": null
+    },
+    {
+      "name": "refused with two parts",
+      "input": {
+        "nonce": "1800000120.75afbaf2e7bcfe13ff09f9830f34e5aed928f9ebeb8cee2202f1eea3f6540015",
+        "wallet": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+        "now": 1800000000
+      },
+      "output": null
+    },
+    {
+      "name": "refused with four parts",
+      "input": {
+        "nonce": "1800000120.01080f161d242b323940474e555c636a.75afbaf2e7bcfe13ff09f9830f34e5aed928f9ebeb8cee2202f1eea3f6540015.extra",
+        "wallet": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+        "now": 1800000000
+      },
+      "output": null
+    },
+    {
+      "name": "refused with empty string",
+      "input": {
+        "nonce": "",
+        "wallet": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+        "now": 1800000000
+      },
+      "output": null
+    },
+    {
+      "name": "refused with non-digit expiry",
+      "input": {
+        "nonce": "12a45.01080f161d242b323940474e555c636a.75afbaf2e7bcfe13ff09f9830f34e5aed928f9ebeb8cee2202f1eea3f6540015",
+        "wallet": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+        "now": 1800000000
+      },
+      "output": null
+    },
+    {
+      "name": "refused with empty expiry",
+      "input": {
+        "nonce": ".01080f161d242b323940474e555c636a.75afbaf2e7bcfe13ff09f9830f34e5aed928f9ebeb8cee2202f1eea3f6540015",
+        "wallet": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+        "now": 1800000000
+      },
+      "output": null
+    },
+    {
+      "name": "refused with short random",
+      "input": {
+        "nonce": "1800000120.01080f161d242b323940474e555c63.75afbaf2e7bcfe13ff09f9830f34e5aed928f9ebeb8cee2202f1eea3f6540015",
+        "wallet": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+        "now": 1800000000
+      },
+      "output": null
+    },
+    {
+      "name": "refused with uppercase random hex",
+      "input": {
+        "nonce": "1800000120.01080F161D242B323940474E555C636A.75afbaf2e7bcfe13ff09f9830f34e5aed928f9ebeb8cee2202f1eea3f6540015",
+        "wallet": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+        "now": 1800000000
+      },
+      "output": null
+    },
+    {
+      "name": "refused with non-hex random",
+      "input": {
+        "nonce": "1800000120.zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz.75afbaf2e7bcfe13ff09f9830f34e5aed928f9ebeb8cee2202f1eea3f6540015",
+        "wallet": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+        "now": 1800000000
+      },
+      "output": null
+    }
+  ]
+}

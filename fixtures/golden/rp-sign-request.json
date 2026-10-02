@@ -1,0 +1,137 @@
+{
+  "function": "rp-sign-request",
+  "description": "signRequest from @worldcoin/idkit-server (World ID 4.0 rp_context signature). Randomness is the 32 bytes from crypto.getRandomValues (hashed to a field element for the nonce); clock is Date.now. Default ttl when omitted is whatever the SDK uses (recorded in the case).",
+  "config": {
+    "productionTtlSeconds": 300
+  },
+  "cases": [
+    {
+      "name": "action, ttl 300 (production values)",
+      "input": {
+        "signingKeyHex": "0x2222222222222222222222222222222222222222222222222222222222222222",
+        "action": "selfie-check",
+        "ttl": 300,
+        "now": 1800000000,
+        "randomBytesHex": "030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dc"
+      },
+      "output": {
+        "sig": "0x4d9a096ca0c086f7516cc15312c2e383831f78bf2878cf8e205ba0fab95ba33020c4a1d2423498926b38b00b62e917c7f45ce15adc26de1e7e0764a5856e81f31b",
+        "nonce": "0x0004d1b47ed3b04c5ff6a0280293cb2ab55bd297c9c2e0c3449831b419285d7d",
+        "createdAt": 1800000000,
+        "expiresAt": 1800000300
+      }
+    },
+    {
+      "name": "same random, different clock",
+      "input": {
+        "signingKeyHex": "0x2222222222222222222222222222222222222222222222222222222222222222",
+        "action": "selfie-check",
+        "ttl": 300,
+        "now": 1800000001,
+        "randomBytesHex": "030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dc"
+      },
+      "output": {
+        "sig": "0x0e418255b1516be6a652bac4099d7b117899463b4936bb16f2d69f91f17324cb5c38767a97c761aa1f674c4dacceeff3a69601a6d4c4fc27e178c5a5d3c8f1ee1c",
+        "nonce": "0x0004d1b47ed3b04c5ff6a0280293cb2ab55bd297c9c2e0c3449831b419285d7d",
+        "createdAt": 1800000001,
+        "expiresAt": 1800000301
+      }
+    },
+    {
+      "name": "different random bytes",
+      "input": {
+        "signingKeyHex": "0x2222222222222222222222222222222222222222222222222222222222222222",
+        "action": "selfie-check",
+        "ttl": 300,
+        "now": 1800000000,
+        "randomBytesHex": "636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c"
+      },
+      "output": {
+        "sig": "0x8d84b625b47f9d0b5ac17b5f084818264a3272c7c686d5a27a55fd000ddc1f101fb05e77d09fedde75762bffeb7217c7791e011e2964a6797d9b983414dadda71c",
+        "nonce": "0x00078ce074f025621c7ed699017017d98d8a94cea3365b90833c71c89b2ca0f6",
+        "createdAt": 1800000000,
+        "expiresAt": 1800000300
+      }
+    },
+    {
+      "name": "different action",
+      "input": {
+        "signingKeyHex": "0x2222222222222222222222222222222222222222222222222222222222222222",
+        "action": "other-action",
+        "ttl": 300,
+        "now": 1800000000,
+        "randomBytesHex": "030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dc"
+      },
+      "output": {
+        "sig": "0x399882eeda6f1049b1dba315fd5e96c9b25fa7fb8901374a2e38d41f9f83b9771c593b88a392841330a8b8554bbfe786ee38179d5594091d4e1442d5864ceadf1b",
+        "nonce": "0x0004d1b47ed3b04c5ff6a0280293cb2ab55bd297c9c2e0c3449831b419285d7d",
+        "createdAt": 1800000000,
+        "expiresAt": 1800000300
+      }
+    },
+    {
+      "name": "no action",
+      "input": {
+        "signingKeyHex": "0x2222222222222222222222222222222222222222222222222222222222222222",
+        "action": null,
+        "ttl": 300,
+        "now": 1800000000,
+        "randomBytesHex": "030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dc"
+      },
+      "output": {
+        "sig": "0xcb53aff109e7e4e3a2a8523e35e6db604f3aa0bb892a0b2ff40f2ed82fcb4a905a485ffc07ccb9c4cc7fd88404f8450d4d68d3df2e3143c6c3a7577950c922d11b",
+        "nonce": "0x0004d1b47ed3b04c5ff6a0280293cb2ab55bd297c9c2e0c3449831b419285d7d",
+        "createdAt": 1800000000,
+        "expiresAt": 1800000300
+      }
+    },
+    {
+      "name": "default ttl",
+      "input": {
+        "signingKeyHex": "0x2222222222222222222222222222222222222222222222222222222222222222",
+        "action": "selfie-check",
+        "ttl": null,
+        "now": 1800000000,
+        "randomBytesHex": "030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dc"
+      },
+      "output": {
+        "sig": "0x4d9a096ca0c086f7516cc15312c2e383831f78bf2878cf8e205ba0fab95ba33020c4a1d2423498926b38b00b62e917c7f45ce15adc26de1e7e0764a5856e81f31b",
+        "nonce": "0x0004d1b47ed3b04c5ff6a0280293cb2ab55bd297c9c2e0c3449831b419285d7d",
+        "createdAt": 1800000000,
+        "expiresAt": 1800000300
+      }
+    },
+    {
+      "name": "key without 0x prefix",
+      "input": {
+        "signingKeyHex": "2222222222222222222222222222222222222222222222222222222222222222",
+        "action": "selfie-check",
+        "ttl": 300,
+        "now": 1800000000,
+        "randomBytesHex": "030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dc"
+      },
+      "output": {
+        "sig": "0x4d9a096ca0c086f7516cc15312c2e383831f78bf2878cf8e205ba0fab95ba33020c4a1d2423498926b38b00b62e917c7f45ce15adc26de1e7e0764a5856e81f31b",
+        "nonce": "0x0004d1b47ed3b04c5ff6a0280293cb2ab55bd297c9c2e0c3449831b419285d7d",
+        "createdAt": 1800000000,
+        "expiresAt": 1800000300
+      }
+    },
+    {
+      "name": "random bytes all 0xff",
+      "input": {
+        "signingKeyHex": "0x2222222222222222222222222222222222222222222222222222222222222222",
+        "action": "selfie-check",
+        "ttl": 300,
+        "now": 1800000000,
+        "randomBytesHex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      "output": {
+        "sig": "0x4a98235566eef6b007784ac6a5f6c5725d18c9f9d2274ccd45c80a300d7c3ad0579c2a08d559447de14b0b5105513e47205a82f62e85313f067d158108d367011b",
+        "nonce": "0x00a9c584056064687e149968cbab758a3376d22aedc6a55823d1b3ecbee81b8f",
+        "createdAt": 1800000000,
+        "expiresAt": 1800000300
+      }
+    }
+  ]
+}

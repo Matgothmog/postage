@@ -1,0 +1,99 @@
+{
+  "function": "message-id",
+  "description": "messageIdFor: 0x + hex HMAC-SHA256 over `sender.lower|handle.lower|subject|receivedAt`, keyed with MESSAGE_ID_SECRET (raw UTF-8 bytes).",
+  "config": {
+    "messageIdSecret": "golden-vector-message-id-secret-not-for-production"
+  },
+  "cases": [
+    {
+      "name": "plain",
+      "input": {
+        "sender": "alice@example.com",
+        "handle": "bob",
+        "subject": "Hello there",
+        "receivedAt": 1800000000
+      },
+      "output": "0xaa6b1b45da5607caee4a2f20382e7ef69682d6d8cc2353e6be2ebd979d82476d"
+    },
+    {
+      "name": "sender and handle are lowercased",
+      "input": {
+        "sender": "Alice@Example.COM",
+        "handle": "BoB",
+        "subject": "Hello there",
+        "receivedAt": 1800000000
+      },
+      "output": "0xaa6b1b45da5607caee4a2f20382e7ef69682d6d8cc2353e6be2ebd979d82476d"
+    },
+    {
+      "name": "subject case is preserved",
+      "input": {
+        "sender": "alice@example.com",
+        "handle": "bob",
+        "subject": "HELLO There",
+        "receivedAt": 1800000000
+      },
+      "output": "0xb1ac862cd5df5488d9ea9f404543a885bdeffd5df0f7927749776ee4dcc73c99"
+    },
+    {
+      "name": "empty subject",
+      "input": {
+        "sender": "alice@example.com",
+        "handle": "bob",
+        "subject": "",
+        "receivedAt": 1800000000
+      },
+      "output": "0x79211b516eeaffe8ccc60d33978e09a867aeb7489109c7b8e4bfc0bdc87a13d7"
+    },
+    {
+      "name": "subject containing the separator",
+      "input": {
+        "sender": "alice@example.com",
+        "handle": "bob",
+        "subject": "a|b|c",
+        "receivedAt": 1800000000
+      },
+      "output": "0x7abdb57de990407ec0d5733ee0746aa2528e2ae37623de2f01a95d3ce11e3169"
+    },
+    {
+      "name": "unicode subject",
+      "input": {
+        "sender": "alice@example.com",
+        "handle": "bob",
+        "subject": "Reçu: 100 € 📬 日本語",
+        "receivedAt": 1800000000
+      },
+      "output": "0x17f000a91d2f79de0be23001d5013733eeb74e5a4c41df5401d08a5fb5cae58c"
+    },
+    {
+      "name": "receivedAt zero",
+      "input": {
+        "sender": "alice@example.com",
+        "handle": "bob",
+        "subject": "x",
+        "receivedAt": 0
+      },
+      "output": "0xe13e9957b3bd2f827651b66cb35d1b9d4eb520544edc9f8decc0b77fd0502a65"
+    },
+    {
+      "name": "receivedAt one second later",
+      "input": {
+        "sender": "alice@example.com",
+        "handle": "bob",
+        "subject": "Hello there",
+        "receivedAt": 1800000001
+      },
+      "output": "0x0c38794322e8be77bcec9b3a65a5375d5ff055315f2b4902186b0315b2133ebb"
+    },
+    {
+      "name": "handle with dots and dashes",
+      "input": {
+        "sender": "no-reply@mail.example.org",
+        "handle": "a.b_c-d",
+        "subject": "Your code is 123456",
+        "receivedAt": 1234567890
+      },
+      "output": "0xc83cc1c146d1c03a358b7914ad4589b6bd1d4a1bb22751782bdb1cb114ae9dd0"
+    }
+  ]
+}

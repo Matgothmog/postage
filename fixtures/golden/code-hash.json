@@ -1,0 +1,178 @@
+{
+  "function": "code-hash",
+  "description": "hashCode / codeMatches / generateCode. Key = HKDF-SHA256(MESSAGE_ID_SECRET, salt \"\", info \"postage:verification-code\", 32). hashCode = hex HMAC-SHA256 over `handle.lower:code`. generateCode = randomInt(0, 1_000_000) zero-padded to 6 digits.",
+  "config": {
+    "messageIdSecret": "golden-vector-message-id-secret-not-for-production"
+  },
+  "hashCode": [
+    {
+      "name": "ordinary",
+      "input": {
+        "handle": "alice",
+        "code": "123456"
+      },
+      "output": "5c561b9d57c67f7f30ea4d20eed5da31957e57afc13f818385d88a7b5cb90224"
+    },
+    {
+      "name": "handle is lowercased",
+      "input": {
+        "handle": "ALICE",
+        "code": "123456"
+      },
+      "output": "5c561b9d57c67f7f30ea4d20eed5da31957e57afc13f818385d88a7b5cb90224"
+    },
+    {
+      "name": "leading zeros",
+      "input": {
+        "handle": "alice",
+        "code": "000042"
+      },
+      "output": "53f160767e817c444c03ff4161ce94c672322d632ae034686073d819e616b466"
+    },
+    {
+      "name": "different handle, same code",
+      "input": {
+        "handle": "bob",
+        "code": "123456"
+      },
+      "output": "844690ca36076003ffb86e9c90de0ec48da5b1015d9ecb4f3e96cbf22e356eda"
+    },
+    {
+      "name": "empty code",
+      "input": {
+        "handle": "alice",
+        "code": ""
+      },
+      "output": "8a37e1500c2ff91ed23e96e7031e504d22ef6af9b422f799145d8f31f1f91750"
+    },
+    {
+      "name": "handle with punctuation",
+      "input": {
+        "handle": "a.b_c-d",
+        "code": "999999"
+      },
+      "output": "512dc7693b61c452ac4ddd631b0daf350da5788dbdd68113995df50b210f7b5b"
+    },
+    {
+      "name": "handle containing the separator",
+      "input": {
+        "handle": "al:ice",
+        "code": "123456"
+      },
+      "output": "55de35ab95db21a382b191d0e83bd0324eb186d395a070895a11bacd24785303"
+    }
+  ],
+  "codeMatches": [
+    {
+      "name": "match",
+      "input": {
+        "handle": "alice",
+        "code": "123456",
+        "expected": "5c561b9d57c67f7f30ea4d20eed5da31957e57afc13f818385d88a7b5cb90224"
+      },
+      "output": true
+    },
+    {
+      "name": "match, handle case differs",
+      "input": {
+        "handle": "ALICE",
+        "code": "123456",
+        "expected": "5c561b9d57c67f7f30ea4d20eed5da31957e57afc13f818385d88a7b5cb90224"
+      },
+      "output": true
+    },
+    {
+      "name": "mismatch, wrong code",
+      "input": {
+        "handle": "alice",
+        "code": "123457",
+        "expected": "5c561b9d57c67f7f30ea4d20eed5da31957e57afc13f818385d88a7b5cb90224"
+      },
+      "output": false
+    },
+    {
+      "name": "mismatch, other handle",
+      "input": {
+        "handle": "bob",
+        "code": "123456",
+        "expected": "5c561b9d57c67f7f30ea4d20eed5da31957e57afc13f818385d88a7b5cb90224"
+      },
+      "output": false
+    },
+    {
+      "name": "mismatch, stored hash one nibble off",
+      "input": {
+        "handle": "alice",
+        "code": "123456",
+        "expected": "5c561b9d57c67f7f30ea4d20eed5da31957e57afc13f818385d88a7b5cb90220"
+      },
+      "output": false
+    },
+    {
+      "name": "mismatch, stored hash too short",
+      "input": {
+        "handle": "alice",
+        "code": "123456",
+        "expected": "5c561b9d57c67f7f30ea4d20eed5da31957e57afc13f818385d88a7b5cb902"
+      },
+      "output": false
+    },
+    {
+      "name": "mismatch, stored hash empty",
+      "input": {
+        "handle": "alice",
+        "code": "123456",
+        "expected": ""
+      },
+      "output": false
+    },
+    {
+      "name": "mismatch, stored hash too long",
+      "input": {
+        "handle": "alice",
+        "code": "123456",
+        "expected": "5c561b9d57c67f7f30ea4d20eed5da31957e57afc13f818385d88a7b5cb9022400"
+      },
+      "output": false
+    },
+    {
+      "name": "uppercase stored hash still matches",
+      "input": {
+        "handle": "alice",
+        "code": "123456",
+        "expected": "5C561B9D57C67F7F30EA4D20EED5DA31957E57AFC13F818385D88A7B5CB90224"
+      },
+      "output": true
+    }
+  ],
+  "generateCode": [
+    {
+      "name": "randomInt returns 0",
+      "input": {
+        "randomInt": 0
+      },
+      "output": "000000"
+    },
+    {
+      "name": "randomInt returns 42",
+      "input": {
+        "randomInt": 42
+      },
+      "output": "000042"
+    },
+    {
+      "name": "randomInt returns 999999",
+      "input": {
+        "randomInt": 999999
+      },
+      "output": "999999"
+    },
+    {
+      "name": "randomInt returns 123456",
+      "input": {
+        "randomInt": 123456
+      },
+      "output": "123456"
+    }
+  ]
+}

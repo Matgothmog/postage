@@ -1,0 +1,62 @@
+{
+  "function": "hash-signal",
+  "description": "hashSignal from @worldcoin/idkit/hashing, as used by app/api/world/verify (compared lowercased against signal_hash).",
+  "cases": [
+    {
+      "name": "empty string",
+      "input": {
+        "signal": ""
+      },
+      "output": "0x00c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a4"
+    },
+    {
+      "name": "short ascii",
+      "input": {
+        "signal": "hello"
+      },
+      "output": "0x001c8aff950685c2ed4bc3174f3472287b56d9517b9c948127319a09a7a36dea"
+    },
+    {
+      "name": "challenge-token-shaped value",
+      "input": {
+        "signal": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "output": "0x0099aad0474e6f9520f2dc873d0a896509e8f18f9c0257c61d3583683a2c21eb"
+    },
+    {
+      "name": "uppercase",
+      "input": {
+        "signal": "HELLO"
+      },
+      "output": "0x001a5d6cb6ecd5059e65b5a6e8117beede444b8b1152787f00a4d98dca32f02f"
+    },
+    {
+      "name": "0x-prefixed hex string",
+      "input": {
+        "signal": "0xdeadbeef"
+      },
+      "output": "0x00d4fd4e189132273036449fc9e11198c739161b4c0116a9a2dccdfa1c492006"
+    },
+    {
+      "name": "unicode",
+      "input": {
+        "signal": "héllo 📬 世界"
+      },
+      "output": "0x0073d2c807373d1fd2aac3711cd1a75da373d8023ff8981678663528f716d589"
+    },
+    {
+      "name": "long ascii",
+      "input": {
+        "signal": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "output": "0x00fa0c9183d89d2dfac84b8da9a1e6a3b1835482f27fd1f4842ad312cc25385d"
+    },
+    {
+      "name": "whitespace",
+      "input": {
+        "signal": " a b\n"
+      },
+      "output": "0x009facd2c197005290753a3502fb429d1ada47e68168fe783594d35758353274"
+    }
+  ]
+}
