@@ -86,9 +86,10 @@ flow is proven against World's Sandbox App on a sandbox-configured preview
 deploy — the production deploy is built for production World, where Selfie
 Check is not offered. Vercel production also sets `IDENTITY_MODE=mock`
 explicitly, so it clears every claim on the sender-keyed stand-in regardless
-of that env var's own default; `identityMode()` now defaulting to live
-changes behavior for local development and preview deploys only, not for
-[postage-seven.vercel.app](https://postage-seven.vercel.app).
+of that env var's own default, which is live. The Rust API refuses mock in a
+Vercel production environment unless `POSTAGE_ALLOW_MOCK_IN_PRODUCTION=1` is
+set as well: the stand-in lets anyone through the free lane, and the relayer
+pays for each attestation.
 
 **The Graph** decides what a sender pays. Every payment, every verdict, and every
 time a recipient contradicted the classifier is indexed, and that history prices
@@ -142,16 +143,26 @@ that properly means running the MTA itself inside an enclave. See
 
 ## Layout
 
-    contracts/   escrow, enclave registry, identity registry, vault
-    shared/      the verdict shape worker and web agree on, nothing else
-    subgraph/    indexes all four on Arc
-    web/         signup, dashboard, challenge page, and the API behind them
-    worker/      the Cloudflare mail worker
+    contracts/           escrow, enclave registry, identity registry, vault (Solidity)
+    subgraph/            indexes all four on Arc (AssemblyScript)
+    crates/shared/       wire types the API and the mail worker agree on
+    crates/core/         pricing, quote signing, sender authentication, the
+                         classifier's header fallback: pure logic, native or wasm
+    crates/server/       the API (Axum, libSQL, alloy)
+    crates/web/          the browser app (Leptos, compiled to WebAssembly)
+    crates/web/js/       a small vendor bridge for Privy and World IDKit
+    crates/mail-worker/  the Cloudflare email worker (workers-rs)
+    api/index.rs         the Vercel function that serves the API
+    fixtures/golden/     frozen test vectors from the original TypeScript
+    e2e/                 a local end-to-end run
+    scripts/             the web build and a check of vercel.json
 
-Four independent trees. `web/`, `worker/`, and `subgraph/` each have their own
-`package.json`; `contracts/` is Foundry, keyed off `foundry.toml`. There is no
-root workspace and no root `package.json` — running `npm install` at the repo
-root has nothing to install against.
+The Rust crates are one Cargo workspace rooted at the top-level `Cargo.toml`,
+pinned to Rust 1.95.0 with the `wasm32-unknown-unknown` target
+(`rust-toolchain.toml`). `contracts/` is Foundry, keyed off `foundry.toml`;
+`subgraph/` has its own `package.json`. There is no root `package.json`: the
+only npm package besides the subgraph is `crates/web/js`, which bundles the
+two SDKs that have no Rust version. No TypeScript application code remains.
 
 [ARCHITECTURE.md](ARCHITECTURE.md) explains how the parts fit and why each is
 there. Addresses and endpoints are in [DEPLOYMENTS.md](DEPLOYMENTS.md).
@@ -159,85 +170,103 @@ there. Addresses and endpoints are in [DEPLOYMENTS.md](DEPLOYMENTS.md).
 ## Run it
 
 Or skip all of this and use the live demo linked at the top. Otherwise, each
-tree below installs, tests, and builds on its own.
+part below installs, tests, and builds on its own.
 
-### `web/`
+### The Rust workspace
 
-```bash
-cd web
-npm install
-cp .env.local.example .env.local
-npm run dev         # next dev -p 3210 → http://localhost:3210
-```
-
-The server starts, but the app won't render past a configuration notice
-without `NEXT_PUBLIC_PRIVY_APP_ID` set — `Providers`
-(`web/src/app/providers.tsx:10-20`) short-circuits the whole tree to a
-"NEXT_PUBLIC_PRIVY_APP_ID is not set." message otherwise. The challenge page
-adds its own requirement: identity checking defaults to **live** World ID
-Selfie Check, and the first time a sender tries to prove personhood,
-`/api/world/context` throws unless `WORLD_RP_ID`, `WORLD_RP_SIGNING_KEY`, and
-`WORLD_ACTION` are set, and `/api/world/verify` throws unless `WORLD_RP_ID`
-is set. A missing `NEXT_PUBLIC_WORLD_APP_ID` doesn't throw — the client-side
-Selfie Check fails softly instead, reporting "World ID isn't configured yet"
-for the challenge page to show. Set `IDENTITY_MODE=mock` in `.env.local` to
-skip World entirely and clear the check on a sender-keyed stand-in — the way
-to work on anything else in this tree without World credentials.
+You need the pinned toolchain (`rustup` reads `rust-toolchain.toml`) and
+[`cargo-nextest`](https://nexte.st).
 
 ```bash
-npm test            # node --test, src/**/*.test.ts
-npm run lint         # eslint
-npm run typecheck    # tsc --noEmit
-npm run build        # next build
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo nextest run --workspace
 ```
 
-`.env.local` has about two dozen variables. Grouped by what they actually gate
-(source: the comments in `web/.env.local.example` itself):
+Nothing in the test suite reaches a live service: the database tests use local
+libSQL files, and everything outside the process is a loopback stub.
 
-- **Ship with a working local default already in the example file**, nothing
-  to fill in: `APP_URL` (`http://localhost:3210`), `DATABASE_URL`
-  (`file:.data/postage.db`, local SQLite), `MAIL_FROM`.
-- **Only matter in live identity mode, which is the default.**
-  `IDENTITY_MODE` unset or blank means live. Live mode needs
-  `NEXT_PUBLIC_WORLD_APP_ID`, `WORLD_RP_ID`, `WORLD_RP_SIGNING_KEY`, and
-  `WORLD_ACTION`; set `IDENTITY_MODE=mock` to skip all four and clear the
-  check on a sender-keyed stand-in instead. `NEXT_PUBLIC_WORLD_ENVIRONMENT`
-  is separate and always safe to leave blank — it defaults to World's
-  production backend and only needs setting to target World's sandbox.
-- **Gate one integration each, blank otherwise:** `NEXT_PUBLIC_PRIVY_APP_ID`
-  (Privy wallet/signup), `ATTESTER_PRIVATE_KEY` (onchain attestations to
-  `HumanRegistry`), `MAIL_WEBHOOK_SECRET` / `MAIL_WORKER_URL` (talking to the
-  deployed mail worker), `MESSAGE_ID_SECRET` (keys the onchain message id),
-  `GRAPH_QUERY_URL` / `GRAPH_API_KEY` (subgraph-priced holds),
+The browser app's component tests run in a real browser. They need headless
+Firefox, `geckodriver` and `wasm-bindgen-test-runner` on the path:
+
+```bash
+CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+  cargo test -p postage-web --target wasm32-unknown-unknown
+```
+
+The browser app is built into `crates/web/dist` by `sh scripts/build-web.sh`,
+which installs the bridge's npm dependencies (`npm ci` in `crates/web/js`) and
+runs `trunk build --release`. It needs `cargo`, `trunk` and `npm` on the path,
+and the public ids are read when it runs and compiled into the WebAssembly:
+
+```bash
+NEXT_PUBLIC_PRIVY_APP_ID=<privy app id> \
+NEXT_PUBLIC_WORLD_APP_ID=<world app id> \
+sh scripts/build-web.sh
+```
+
+`NEXT_PUBLIC_WORLD_ENVIRONMENT` is optional. Unset, it is `production`; set it
+to exactly `sandbox` to target a Sandbox World App build. Any other value fails
+the build, and so does anything but `production` in a Vercel production build.
+Without `NEXT_PUBLIC_PRIVY_APP_ID` the app renders a configuration notice and
+nothing else. `trunk serve` in `crates/web` serves the app on port 3210, but
+without an API behind it.
+
+The repository has no standalone API dev server. To see the whole app running
+locally with no credentials, use the end-to-end harness, which serves the real
+router and the built bundle over a local libSQL file with every outside service
+stubbed:
+
+```bash
+node e2e/run.mjs        # needs Node 23+, trunk, geckodriver and Firefox
+```
+
+See [e2e/README.md](e2e/README.md) for what it covers.
+
+### The API's configuration
+
+The API reads its settings from the process environment, set per project in
+Vercel. Grouped by what each gates:
+
+- **Have a working default.** `DATABASE_URL` defaults to
+  `file:.data/postage.db`, a local SQLite file; use a `libsql://…` URL with
+  `DATABASE_AUTH_TOKEN` for Turso. `NEXT_PUBLIC_WORLD_ENVIRONMENT` defaults to
+  `production`.
+- **Only matter in live identity mode, which is the default.** `IDENTITY_MODE`
+  unset or blank means live. Live mode needs `NEXT_PUBLIC_WORLD_APP_ID`
+  (at build time), `WORLD_RP_ID`, `WORLD_RP_SIGNING_KEY`, and `WORLD_ACTION`;
+  `/api/world/context` and `/api/world/verify` refuse without them. Set
+  `IDENTITY_MODE=mock` to skip all of it and clear the check on a sender-keyed
+  stand-in, which the API refuses when `VERCEL_ENV` is `production` unless
+  `POSTAGE_ALLOW_MOCK_IN_PRODUCTION=1` is also set. Any other value is a
+  configuration error.
+- **Gate one integration each.** `NEXT_PUBLIC_PRIVY_APP_ID` (sign-in; also read
+  by the server to check identity tokens), `ATTESTER_PRIVATE_KEY` (onchain
+  attestations to `HumanRegistry`), `MAIL_WEBHOOK_SECRET` / `MAIL_WORKER_URL`
+  (talking to the deployed mail worker), `MESSAGE_ID_SECRET` (keys the onchain
+  message id), `GRAPH_QUERY_URL` / `GRAPH_API_KEY` (subgraph-priced holds),
   `RELAYER_PRIVATE_KEY` / `CLASSIFIER_PRIVATE_KEY` / `ANTHROPIC_API_KEY`
-  (classifier signing and AI classification), `CLOUDFLARE_ACCOUNT_ID` /
-  `CLOUDFLARE_API_TOKEN` (registering forwarding addresses), `RESEND_API_KEY`
-  (verification and release email). `ARC_RPC_URL` is optional even for
-  onchain features — unset, viem falls back to Arc's public RPC.
-- Whether `npm run dev` tolerates every gated variable staying blank, or
-  throws on one of them, was not exercised live for this README — the
-  grouping above is drawn from the file's own comments, not a run of the
-  server.
+  (relaying, quote signing and classification), `CLOUDFLARE_ACCOUNT_ID` /
+  `CLOUDFLARE_API_TOKEN` (registering forwarding addresses), `RESEND_API_KEY` /
+  `MAIL_FROM` (verification and release email), `APP_URL` (the origin that
+  challenge links point at). `ARC_RPC_URL` is optional even for onchain
+  features: unset, the API uses Arc's public RPC.
 
-### `worker/`
+A missing setting fails the route that needs it with an error naming the
+variable; the rest of the API keeps working.
+
+### The mail worker
 
 ```bash
-cd worker
-npm install
-npm test             # node --test, src/**/*.test.ts — 51 tests
-npm run typecheck     # tsc --noEmit
+cd crates/mail-worker
+worker-build --release        # builds build/worker/shim.mjs
 ```
 
-**`npm run typecheck` currently fails on a fresh checkout**, with `sh: 1:
-tsc: not found` — `typescript` is a declared devDependency, resolved in the
-lockfile, but not actually present under `worker/node_modules` as checked
-out. Not fixed here; running the command above will hit it.
-
-There is no lint script and no local build or dev script in
-`worker/package.json`. Runtime config (Mailgun, the Cloudflare KV namespace
-holding messages) lives in `worker/wrangler.toml`; secrets are set with
-`wrangler secret put POSTAGE_API_URL` / `POSTAGE_SECRET` / `MAILGUN_API_KEY`
-(`worker/wrangler.toml`, bottom). `npm run deploy` runs `wrangler deploy` and
+The worker's tests run with the rest of the workspace. Runtime config (Mailgun,
+the Cloudflare KV namespace holding messages) is in
+`crates/mail-worker/wrangler.toml`; secrets are set with
+`wrangler secret put POSTAGE_API_URL` / `POSTAGE_SECRET` / `MAILGUN_API_KEY`.
+`wrangler deploy` from that directory publishes it as `postage-mail-rs` and
 needs Cloudflare credentials this repo does not ship.
 
 ### `subgraph/`
@@ -280,36 +309,103 @@ Foundry has no separate typecheck step; `forge fmt` (`contracts/foundry.toml`
 deployer key, live contract addresses to reuse — is in
 `contracts/.env.example`, not needed for `forge build` or `forge test`.
 
+## Deploying the Rust stack
+
+The browser app and the API deploy as one Vercel project. `vercel.json` serves
+`crates/web/dist` as static files, routes `/api/*` to the single Rust function
+`api/index.rs`, falls back to `index.html` for every other path so the client
+router can answer it, allows the function up to 120 seconds, and sets the
+security headers, including the Content Security Policy. `node
+scripts/check-vercel-routing.mjs` checks those rules without contacting Vercel.
+
+Build on a machine with the Rust toolchain and a C compiler (libSQL compiles
+SQLite from C) and upload the output, rather than relying on Vercel's build
+image to compile it. Set the project's environment variables, including the
+three `NEXT_PUBLIC_*` ones the web build reads, then:
+
+```bash
+vercel pull
+vercel build --prod
+vercel deploy --prebuilt --prod
+```
+
+The mail worker deploys separately with `wrangler deploy` (see above). It keeps
+the KV namespace and binding names the TypeScript worker used, so held mail
+survives swapping one for the other.
+
+Before pointing real traffic at a new deployment:
+
+1. Send one real email through the staging worker and confirm that the
+   `Authentication-Results` header Cloudflare stamps carries the authserv-id
+   `mx.cloudflare.net`. The worker trusts only that header.
+2. On the first preview deployment, check that `GET /api/health` and a real API
+   route both reach the Axum router with the path they were sent.
+3. Sign in with Privy, pay a quote, and run a Selfie Check with real ids,
+   watching the browser console for Content Security Policy refusals.
+4. Run a smoke test against a disposable Turso database before the production
+   one.
+
 ## What you can run without credentials
 
 No World ID sandbox build, no Mailgun key, no Graph API key, no Privy app —
 here is what still works:
 
-- **All three test suites, unconditionally.** `web` (`cd web && npm test`,
-  551 tests), `worker` (`cd worker && npm test`, 51 tests), and `contracts`
-  (`cd contracts && forge test`, 68 tests, once `lib/` is fetched — see
-  "Run it"). None of the three reach out to a live service.
+- **The Rust test suites, unconditionally.** `cargo nextest run --workspace`
+  (1,362 tests across the five crates) and the browser component tests
+  (124 tests), plus `contracts` (`cd contracts && forge test`, 68 tests,
+  once `lib/` is fetched — see "Run it"). None of them reach out to a live
+  service.
+- **The whole app, locally.** `node e2e/run.mjs` drives the real browser bundle
+  against the real router with every outside service stubbed.
 - **`subgraph/`** — `codegen` and `build` compile the mappings locally; only
   `deploy` needs Studio auth.
-- **`web/`** — the app boots against a local SQLite file, but the UI won't
-  render past a configuration notice without `NEXT_PUBLIC_PRIVY_APP_ID` set
-  (`web/src/app/providers.tsx:10-20`), and the challenge page's identity
-  check separately defaults to **live** World ID. Set `IDENTITY_MODE=mock`
-  to run the challenge flow without `WORLD_RP_ID`, `WORLD_RP_SIGNING_KEY`,
-  `WORLD_ACTION`, and `NEXT_PUBLIC_WORLD_APP_ID`. With that set, what still
-  will not work without its own credential: wallet signup, subgraph-priced
-  holds, onchain writes, talking to a deployed mail worker, outbound email —
-  see the breakdown under "Run it" → `web/`.
-- **`worker/`** — the test suite runs standalone; real inbound mail and
-  `wrangler deploy` need Cloudflare and Mailgun credentials this repo does
-  not ship.
+- **A release build of the web app** needs only placeholder ids to compile. It
+  will not sign anyone in: wallet signup needs a real Privy app, and the
+  challenge page needs `IDENTITY_MODE=mock` or World credentials. What still
+  will not work without its own credential: subgraph-priced holds, onchain
+  writes, talking to a deployed mail worker, outbound email — see "The API's
+  configuration".
+- **The mail worker** — its tests run with the workspace; real inbound mail and
+  `wrangler deploy` need Cloudflare and Mailgun credentials this repo does not
+  ship.
+
+## Changes from the TypeScript version
+
+The original app was TypeScript on Next.js, with a TypeScript Cloudflare worker.
+It was ported to Rust and WebAssembly with the same routes, screens and
+contracts. Where the port fixed a defect or tightened a rule, the behaviour
+changed:
+
+- **Sender authentication.** A sender counts as authenticated when SPF and DKIM
+  both pass, or when DMARC passes and the `From:` domain equals the envelope
+  domain. Some mailing-list and forwarded mail that used to pass is now
+  challenged. The worker reads only the `Authentication-Results` header stamped
+  by `mx.cloudflare.net` and sends the `From:` address to the gateway as
+  `header_from`.
+- **Pasted messages** from a sender who could not be verified go out without a
+  `Reply-To` and with an "unverified" footer.
+- **Payments.** A payment on an expired pass that still has uses left adds a
+  use, and concurrent first payments from one sender are all counted.
+- **Classifier.** Each attempt times out after 20 seconds, with one retry, and
+  the tier is constrained to the four allowed values in the request.
+- **Mock identity mode** is refused in a Vercel production environment unless
+  `POSTAGE_ALLOW_MOCK_IN_PRODUCTION=1` is set.
+- **Inbound mail** up to 4.5 MB is accepted.
+- **Challenge page.** A World ID poll that fails unexpectedly reads
+  "Verification failed. Try again, or pay instead." The browser no longer
+  applies its own subject and body limits; the server enforces 200 and 20,000
+  characters.
+- **Sign-out and races.** A second wallet on the same browser no longer sees the
+  previous wallet's inbox, concurrent claims on one handle resolve to a single
+  owner, and a slow upstream (the subgraph, Cloudflare, Resend, World) times out
+  instead of hanging the request.
 
 ## Documentation
 
 Everything above is the pitch. For the parts that need more depth:
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) — how the four tiers, the four
-  sub-projects, and the trust boundaries fit together, including what is
+- [ARCHITECTURE.md](ARCHITECTURE.md) — how the four tiers, the
+  parts of the system, and the trust boundaries fit together, including what is
   deliberately not built yet. For anyone changing the system, or checking
   what's real versus aspirational.
 - [DEPLOYMENTS.md](DEPLOYMENTS.md) — contract addresses, deploy blocks, and

@@ -7,9 +7,13 @@ requires a decision while filming.
 > **Before linking this file publicly:** the Pre-flight and "WOW moment"
 > sections below narrate how to engineer the judges' reaction on camera —
 > useful to the person recording, but it is stagecraft shown to an audience,
-> not project documentation. `SUBMISSION.md` still links here (`:568`,
-> `:587`, `:606`); the README no longer does — README.md's own note explains
-> why it stays unlinked from there.
+> not project documentation. Neither `SUBMISSION.md` nor the README links here;
+> README.md's own note explains why.
+
+The video this script produced was recorded on the app's first implementation
+(TypeScript on Next.js). The app has since been rewritten in Rust and
+WebAssembly with the same screens and flows, so the shots below still apply; the
+code citations are to the Rust source.
 
 ## The rules (quoted, automatic, non-negotiable)
 
@@ -77,16 +81,17 @@ real take.
 
 1. **Build the preview deploy.** In the Vercel project settings, set
    `NEXT_PUBLIC_WORLD_ENVIRONMENT=sandbox` and `IDENTITY_MODE=live` scoped to
-   the **Preview** environment (not Production). Trigger a fresh preview
-   deployment (push to a non-`main` branch, or run a manual preview deploy).
+   the **Preview** environment (not Production). Both values are read when the
+   browser app is built, so trigger a fresh preview deployment after setting
+   them (push to a non-`main` branch, or run a manual preview deploy).
    Open the resulting preview URL once — this only confirms the build
    succeeded, nothing about the World ID env var. There is no page you can
    load to confirm sandbox mode is active: the one build-time guard in this
-   repo (`web/next.config.ts:23-36`) only fires when `VERCEL_ENV ===
-   "production"`, so it never runs on a preview build at all, and
-   `NEXT_PUBLIC_WORLD_ENVIRONMENT` itself is only read once you reach the
-   Selfie Check call (`web/src/lib/world-id.ts:255`) — a normal page load
-   never touches it. To actually confirm this preview is in sandbox mode
+   repo (`crates/web/src/config.rs:54-59`, mirrored in `scripts/build-web.sh`)
+   only fires when `VERCEL_ENV` is `production`, so it never runs on a preview
+   build at all, and `NEXT_PUBLIC_WORLD_ENVIRONMENT` itself is only used once
+   you reach the Selfie Check call (`crates/web/src/world_id.rs:49`) — a normal
+   page load never touches it. To actually confirm this preview is in sandbox mode
    before the take: open the challenge page on the preview URL, trigger the
    World ID verify prompt, and — without tapping or scanning it — inspect
    where the "Continue in World App" connector link points (on iOS Safari,
@@ -113,7 +118,7 @@ real take.
 4. **Pin the demo inbox's floor price to one cent.** Sign in as
    `you@usepostage.com`'s own account on the landing page to open its inbox
    panel. It reads `floorPrice` and `effectiveFloor` straight off the chain
-   and shows whether a floor was ever chosen (`web/src/app/InboxPanel.tsx:22-24`
+   and shows whether a floor was ever chosen (`crates/web/src/inbox_panel.rs:296`
    — `chosen`). If `chosen` is false, the inbox is already on
    `DEFAULT_FLOOR` (`contracts/src/PostageEscrow.sol:41`) — one cent — and
    needs no change. If `chosen` is true, read the floor shown: if it isn't
@@ -262,7 +267,7 @@ baseline number you wrote down at the end of the pre-flight dry run
 (step 8); and the sender-rows count also reads at least one higher than
 that same baseline. Do not require the $0.024/$0.006 split to be
 visible — `/network` never displays a per-payment split, only the
-aggregate "Paid out" total (`web/src/app/network/page.tsx:105`). Hold
+aggregate "Paid out" total (`crates/web/src/network_page.rs:286`). Hold
 each figure long enough to read, roughly 5–6 seconds apiece.
 
 **Shot 12 — 15s — Environment: Production**

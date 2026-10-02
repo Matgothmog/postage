@@ -44,34 +44,36 @@ left unindexed. The deployed endpoint is
 
 ## Two Graph providers, and which is which
 
-`web/src/lib/graph.ts` talks to two different things and keeps them
+`crates/server/src/graph.rs` talks to two different things and keeps them
 syntactically separate:
 
-- `queryPostage` (`graph.ts:29-31`) hits `required("GRAPH_QUERY_URL")` — the
+- `Graph::query_postage` (`graph.rs:114`) hits the URL in `GRAPH_QUERY_URL` — the
   project's own subgraph above, deployed to **Subgraph Studio** and queried
-  directly with an API key. Studio is a hosted query endpoint, distinct from
-  the decentralized-network gateway used below for ENS.
-- `queryNetwork` (`graph.ts:34-36`) hits
-  `https://gateway.thegraph.com/api/${GRAPH_API_KEY}/subgraphs/id/${subgraphId}`
+  directly, with no key in the request. Studio is a hosted query endpoint,
+  distinct from the decentralized-network gateway used below for ENS.
+- `Graph::query_network` (`graph.rs:127`) hits
+  `https://gateway.thegraph.com/api/{GRAPH_API_KEY}/subgraphs/id/{subgraph_id}`
   — the **decentralized-network gateway**, authenticated with an API key, used
   to reach subgraphs Postage does not own. The one call site
-  (`web/src/lib/reputation.ts:53`) points it at `ENS_SUBGRAPH`
-  (`graph.ts:5`), a public ENS subgraph identified by its network subgraph ID.
+  (`crates/server/src/reputation.rs:19`) points it at `ENS_SUBGRAPH`
+  (`crates/core/src/reputation.rs:12`), a public ENS subgraph identified by its
+  network subgraph ID.
 
 These are not interchangeable and the code does not blur them: first-party
 reputation data (payments, spam reports) comes from Studio; third-party
 context about a wallet (ENS ownership and age) comes through the gateway. Both
 lanes are exercised on every priced message that has a wallet on file
-(`reputation.ts:48-57`, discussed below).
+(`crates/server/src/reputation.rs:13-25`, discussed below).
 
 ## Live, not fixtures
 
-`query()` (`graph.ts:12-26`) is a plain `fetch` issued at request time with
-`cache: "no-store"` (`graph.ts:17`) — no caching layer, no persisted snapshot.
-There is no fixture file, mock response, or static JSON blob anywhere in
-`subgraph/` or `web/src/lib/` standing in for a query result; every call to
-`queryPostage` or `queryNetwork` reaches a live endpoint or throws
-(`graph.ts:20,23-24`).
+`Graph::query` (`graph.rs:144`) is a plain HTTP POST issued at request time
+with a 10-second timeout (`graph.rs:23`) — no caching layer, no persisted
+snapshot. There is no fixture file, mock response, or static JSON blob anywhere
+in `subgraph/` or in the server's production code standing in for a query
+result; every call to `query_postage` or `query_network` reaches a live
+endpoint or returns an error (`graph.rs:144-178`). The stub servers that exist
+are test code and are never compiled into the API.
 
 External corroboration, not just code reading: the deployed `/network` page at
 `https://postage-seven.vercel.app/network` renders rows this subgraph
@@ -86,32 +88,33 @@ of it. Same event, two independent observations, same numbers.
 
 ## Load-bearing by construction
 
-`web/src/app/api/mail/inbound/challenge.ts:33-36`:
+`crates/server/src/routes/mail_inbound/challenge.rs:164-167`:
 
-```
-function senderSignals(wallet: string): Promise<SenderSignals> {
-  requireConfigured("GRAPH_QUERY_URL", "GRAPH_API_KEY");
-  return gatherSignals(wallet);
+```rust
+async fn sender_signals(state: &AppState, wallet: &str) -> Result<SenderSignals, BoxError> {
+    require_configured(state.env(), &["GRAPH_QUERY_URL", "GRAPH_API_KEY"])?;
+    Ok(gather_signals(state.graph(), wallet).await)
 }
 ```
 
-`requireConfigured` throws before `gatherSignals` — and therefore before any
-Graph query — runs if either variable is unset. That throw is not caught
-locally; it propagates out of `issueChallenge`
-(`challenge.ts:44-109`) to the route's top-level handler
-(`web/src/app/api/mail/inbound/route.ts:82-87`), which turns it into a fault
+`require_configured` returns an error before `gather_signals` — and therefore
+before any Graph query — runs if either variable is unset. That error is not
+handled locally; it propagates out of `issue_challenge`
+(`challenge.rs:61-110`) to the route's top-level handler
+(`crates/server/src/routes/mail_inbound.rs:138`), which turns it into a fault
 response instead of a priced challenge. Remove `GRAPH_QUERY_URL` or
 `GRAPH_API_KEY` and pricing for that request does not degrade — it fails.
 
-The precise scope: `senderSignals` is only called when the sender has a
-wallet on file (`challenge.ts:56-57`, `senderWallet ? await
-senderSignals(senderWallet) : null`). A first-time sender with no wallet
-recorded skips the Graph call and prices with `signals: null`. The hard
-failure hits exactly the population the reputation system exists for —
-returning senders — which is the case The Graph is supposed to be
-load-bearing for in the first place. There is no fallback path here of the
-kind `classify.ts` has for its own dependency (see below); an unreachable
-Graph is a failed request, not a degraded one.
+The precise scope: `sender_signals` is only called when the sender has a
+wallet on file (`challenge.rs:116-121`). A first-time sender with no wallet
+recorded skips the Graph call and prices with no signals. The hard failure on
+missing configuration hits exactly the population the reputation system
+exists for — returning senders — which is the case The Graph is supposed to be
+load-bearing for in the first place. There is no fallback for a missing
+configuration of the kind `classify_from_headers` has for the classifier (see
+below). Once both variables are set, a Graph that is unreachable or slow
+(past the 10-second timeout) is softened inside `gather_signals`, and the
+sender is priced as if the lookup had come back empty.
 
 ## The query-to-decision trace
 
@@ -121,52 +124,52 @@ One hop per step, each traceable to a line:
    picked up by `subgraph/src/escrow.ts:16-56`, which increments
    `Sender.paidCount` / `Sender.spamReports` and recomputes `spamRate`
    (`shared.ts:31-39`).
-2. **Query.** `web/src/lib/reputation.ts:16-24` (`POSTAGE_HISTORY`) asks
+2. **Query.** `crates/core/src/reputation.rs:15-23` (`POSTAGE_HISTORY`) asks
    Studio for `sender(id: $wallet) { paidCount spamReports spamRate }`,
-   fired through `queryPostage` (`graph.ts:29-31`). In parallel,
-   `reputation.ts:26-32` (`ENS_OWNED`) asks the gateway for that wallet's ENS
-   domains, fired through `queryNetwork` (`graph.ts:34-36`).
-3. **Assembling `SenderSignals`.** `reputation.ts:48-68` (`gatherSignals`)
-   runs both queries with `Promise.allSettled` — either can fail
-   independently without blocking the other or throwing — and reduces the
-   result to the five fields declared at `reputation.ts:7-14`: `paidCount`,
-   `spamReports`, `spamRate`, `ensNames`, and `oldestEnsAt` (derived from the
-   oldest ENS `createdAt`, `reputation.ts:64-66`).
-4. **Turning signals into an amount.** `web/src/lib/pricing.ts:70-89` is the
-   arithmetic core:
+   fired through `query_postage` (`graph.rs:114`). In parallel,
+   `reputation.rs:25-31` (`ENS_OWNED`) asks the gateway for that wallet's ENS
+   domains, fired through `query_network` (`graph.rs:127`).
+3. **Assembling `SenderSignals`.** `gather_signals`
+   (`crates/server/src/reputation.rs:13-25`) runs both queries concurrently
+   with `tokio::join!` and keeps each answer or an empty one — either can fail
+   independently without blocking the other or failing the request — and
+   `signals_from` (`crates/core/src/reputation.rs:63`) reduces the result to the
+   five fields declared at `crates/core/src/pricing.rs:12-19`: `paid_count`,
+   `spam_reports`, `spam_rate`, `ens_names`, and `oldest_ens_at` (derived from
+   the oldest ENS `createdAt`, `reputation.rs:78`).
+4. **Turning signals into an amount.** `crates/core/src/pricing.rs:116-149`
+   (`apply_signals`) is the arithmetic core:
 
-   ```
-   if (signals) {
-     if (signals.paidCount > 0 && signals.spamRate > 0) {
-       bps += Math.round(signals.spamRate * 4 * ONE);
+   ```rust
+   if signals.paid_count > 0 && signals.spam_rate > 0.0 {
+       *bps += js_round(signals.spam_rate * 4.0 * ONE);
        ...
-     }
-     if (signals.paidCount >= 3 && signals.spamRate < 0.2) {
-       bps = Math.round(bps * 0.5);
+   }
+   if signals.paid_count >= 3 && signals.spam_rate < 0.2 {
+       *bps = js_round(*bps * 0.5);
        ...
-     }
-     if (signals.ensNames > 0) {
-       bps = Math.round(bps * 0.7);
+   }
+   if signals.ens_names > 0 {
+       *bps = js_round(*bps * 0.7);
        ...
-       if (age > YEAR_SECONDS) { bps = Math.round(bps * 0.8); ... }
-     }
+       if age > YEAR_SECONDS { *bps = js_round(*bps * 0.8); ... }
    }
    ```
 
    A history of spam raises the multiplier; a clean paid history above three
    messages halves it; an owned ENS name discounts further, more so if it is
-   over a year old. This is fixed integer arithmetic on basis points
-   (`pricing.ts:13-15`, `ONE = 10_000`) with a hard floor and ceiling
-   (`pricing.ts:94`, `Math.min(Math.max(bps, ONE), CEILING)`) — deterministic,
-   not a model call. Every step appends a human-readable reason to the quote
-   (`pricing.ts:73,77,81,86`), so the price is explainable from its own output
-   without re-deriving it.
-5. **Signed quote.** `challenge.ts:63-71` reads the inbox's floor from the
-   chain (never a cached copy, per the comment there), calls `quote(floor,
-   verdict.tier, signals, verdict.degraded)` (`challenge.ts:71`), then
-   `signQuote` (`web/src/lib/quote.ts:51-68`) signs the messageId, inbox,
-   tier, amount, and expiry as EIP-712 typed data (`quote.ts:15-23,60-65`)
-   with `CLASSIFIER_PRIVATE_KEY`.
+   over a year old. This is fixed arithmetic on basis points
+   (`pricing.rs:4-5`, `ONE = 10_000`) with a hard floor and ceiling
+   (`pricing.rs:104`, `bps.clamp(ONE, CEILING)`) — deterministic, not a model
+   call. Every step appends a human-readable reason to the quote
+   (`pricing.rs:119,126,134,141`), so the price is explainable from its own
+   output without re-deriving it.
+5. **Signed quote.** `price` (`challenge.rs:114-135`) reads the inbox's floor
+   from the chain (never a cached copy, per the comment there) and calls
+   `quote(floor, tier, signals, degraded, now)` (`challenge.rs:128`); then
+   `sign_quote` (`crates/core/src/quote.rs:210`, called from `challenge.rs:148`)
+   signs the messageId, inbox, tier, amount, and expiry as EIP-712 typed data
+   (the `Quote` struct at `quote.rs:34-46`) with `CLASSIFIER_PRIVATE_KEY`.
 6. **Onchain enforcement.** `contracts/src/PostageEscrow.sol:162-193`
    (`payToSend`) recovers the signer of that quote
    (`PostageEscrow.sol:178`) and reverts `UnknownEnclave(signer)`
@@ -189,29 +192,31 @@ therefore consumed by a contract, not printed for a reader.
 Postage has two independent decision lanes that both bear on the outcome for
 a message, and they do not share inputs.
 
-**Lane one — the classifier.** `web/src/lib/classify.ts` exports
-`classify(mail: MailFacts)`. `MailFacts`
-(`classify.ts:6-16`) is `from`, `to`, `subject`, `body`, `spf`, `dkim`,
-`dmarc`, `urls` — the message and what the receiving MTA already computed
-about its authenticity. `classifyWithModel` (`classify.ts:143-158`) calls
-`claude-opus-5` (`classify.ts:147`) through the Anthropic SDK with a
-structured output schema (`classify.ts:27-31`) and returns one of four tiers
+**Lane one — the classifier.** `Classifier::classify`
+(`crates/server/src/classify.rs:120`) takes a `MailFacts`
+(`crates/core/src/classify.rs:15-24`): `from`, `to`, `subject`, `body`, `spf`,
+`dkim`, `dmarc`, `urls` — the message and what the receiving MTA already
+computed about its authenticity. `classify_with_model` (`classify.rs:142`)
+calls `claude-opus-5` (`classify.rs:26`) over HTTP with a structured output
+schema whose `tier` is a real enum (`classify.rs:233-250`), a 20-second timeout
+per attempt and one retry (`classify.rs:33-35`), and returns one of four tiers
 — `human`, `important`, `commercial`, `dangerous` — with a confidence and
-plain-language reasons (`classify.ts:18-25`). On failure it falls back to
-`classifyFromHeaders` (`classify.ts:168-192`), a deterministic, deliberately
-conservative fallback that can never reach the top tier.
+plain-language reasons (`ModelVerdict`, `crates/core/src/classify.rs:40-46`). On
+failure it falls back to `classify_from_headers`
+(`crates/core/src/classify.rs:244`), a deterministic, deliberately conservative
+fallback that can never reach the top tier.
 
-**Lane two — the pricing engine.** `pricing.ts:37-103` (`quote`) takes that
-tier plus `SenderSignals | null` from the Graph (step 3 above) and computes
-an amount by fixed arithmetic — no model involved.
+**Lane two — the pricing engine.** `quote` (`pricing.rs:62`) takes that tier
+plus `Option<&SenderSignals>` from the Graph (step 3 above) and computes an
+amount by fixed arithmetic — no model involved.
 
-The two lanes do not talk to each other. `classify.ts` never imports from
-`reputation.ts` or `graph.ts`; grepping `classify.ts` for
-`SenderSignals|signals|reputation|graph` returns nothing. The classifier
+The two lanes do not talk to each other. Neither `classify.rs` (the one in
+`crates/server` or the one in `crates/core`) mentions `SenderSignals`,
+`reputation` or `graph`; grepping them for those words returns nothing. The classifier
 decides *what kind of message this is* from the message alone; the Graph
 decides *what this sender's history is worth* from indexed chain data alone.
-`challenge.ts:44-71` is where the two lanes meet — `verdict` from lane one and
-`signals` from lane two are both passed into `quote()` — but they meet as two
+`challenge.rs:61-135` is where the two lanes meet — the verdict from lane one and
+the signals from lane two are both passed into `quote()` — but they meet as two
 separate arguments to one deterministic function, not as one blended input to
 a model.
 
@@ -239,12 +244,12 @@ paid count or a spam rate. Computing "has this wallet paid before, and how
 often was it reported" from chain state alone means scanning every past
 `Paid` and `SpamReported` log and filtering by sender — on Arc testnet today,
 cheap; at any real volume, an `eth_getLogs` scan is not something to run
-synchronously inside `challenge.ts`, which sits on the critical path of
+synchronously inside `challenge.rs`, which sits on the critical path of
 holding an inbound email before the sender's browser has even loaded the
 challenge page.
 
 The subgraph turns that into `sender(id: $wallet) { paidCount spamReports
-spamRate }` (`reputation.ts:17-23`) — one indexed lookup, already aggregated,
+spamRate }` (`crates/core/src/reputation.rs:15-23`) — one indexed lookup, already aggregated,
 already correct as of the last indexed block. That is what let the pricing
 path be a request-time read instead of a background job or an event-scan the
 product would otherwise have needed to run and cache itself, duplicating what
@@ -264,21 +269,21 @@ npm run deploy    # graph deploy usepostage --node https://api.studio.thegraph.c
 `subgraph/.env.example` names `GRAPH_DEPLOY_KEY` (from Studio's own subgraph
 page) and `GRAPH_SUBGRAPH_SLUG=usepostage`.
 
-To exercise the query-to-decision path in `web/`, the relevant variables
-(named at their throw sites: `graph.ts:30`, `graph.ts:35`,
-`challenge.ts:34`) are:
+To exercise the query-to-decision path in `crates/server`, the relevant
+variables (named where they are read: `graph.rs:122`, `graph.rs:136`,
+`challenge.rs:165`) are:
 
 - `GRAPH_QUERY_URL` — the deployed Studio endpoint,
   `https://api.studio.thegraph.com/query/1758667/usepostage/v0.4.0`
   (`DEPLOYMENTS.md:88`).
 - `GRAPH_API_KEY` — a decentralized-network gateway key, used only for the
-  `queryNetwork` / ENS path (`graph.ts:34-36`).
+  `query_network` / ENS path (`graph.rs:127`).
 - `CLASSIFIER_PRIVATE_KEY` and `MESSAGE_ID_SECRET` — needed downstream of the
-  quote, checked immediately before use at `challenge.ts:77`, without which
-  `issueChallenge` cannot sign what `quote()` computed.
+  quote, checked immediately before use at `challenge.rs:145-147`, without which
+  `issue_challenge` cannot sign what `quote()` computed.
 
 With those set, sending mail to a handle that has a wallet with prior history
-will produce a quote whose `reasons` array (`pricing.ts:73,77,81,86`) names
+will produce a quote whose `reasons` array (`pricing.rs:119,126,134,141`) names
 which Graph-derived signal moved the price, and that price can be checked
 against `sender(id: $wallet)` on the Studio endpoint directly.
 
@@ -286,18 +291,18 @@ against `sender(id: $wallet)` on the Studio endpoint directly.
 
 - **Load-bearing, not optional.** The app uses The Graph as its actual source
   of blockchain data, and that dependency is not decorative. See
-  *Load-bearing by construction* above: `challenge.ts:34` hard-fails pricing
+  *Load-bearing by construction* above: `challenge.rs:165` hard-fails pricing
   for any returning sender if the Graph endpoints are unset, with no fallback
   of the kind the classifier has.
 - **Live data, not a fixture.** Postage's own subgraph is queried through
-  Subgraph Studio with an API key (`graph.ts:29-31`) — never a mocked,
-  local-only, or static dataset. See *Live, not fixtures*: `graph.ts:17`'s
-  `cache: "no-store"` fetch, no fixtures anywhere in the tree, and the live
+  Subgraph Studio (`graph.rs:114`) — never a mocked,
+  local-only, or static dataset. See *Live, not fixtures*: `graph.rs:144`'s
+  request-time POST, no fixtures in any production code path, and the live
   `/network` page and `DEPLOYMENTS.md:94-98` agreeing on the same indexed
   numbers independently.
 - **Data that decides something, not data that's just printed.** See *The
   query-to-decision trace*: the Graph-derived `SenderSignals` are reduced
-  to a priced, EIP-712-signed quote (`pricing.ts:70-89`, `quote.ts:51-68`)
+  to a priced, EIP-712-signed quote (`pricing.rs:116-149`, `quote.rs:210`)
   that a smart contract independently verifies and enforces
   (`PostageEscrow.sol:162-193`) before it will accept payment. That is a
   decision with an onchain consequence, not a display of what was queried.

@@ -6,6 +6,11 @@ is the point.
 
 This describes what runs today, including the parts that are not finished.
 
+The application is Rust compiled two ways: natively for the API, and to
+WebAssembly for the browser app and the mail worker. Source comments in the Rust
+crates that cite paths under `web/`, `worker/` or `shared/` refer to the
+TypeScript those crates replaced, as it stood at commit `eb36792`.
+
 ## The shape of it
 
 ```mermaid
@@ -15,7 +20,7 @@ flowchart TB
     W["Email Worker"]
     K[("Workers KV<br/>held mail, raw<br/>expires in a day")]
     M["Mailgun<br/>carries a release"]
-    V["Next.js on Vercel"]
+    V["Rust API on Vercel<br/>Axum"]
     T[("Turso / libSQL<br/>inboxes, passes,<br/>challenges — no mail")]
     C["Claude<br/>four-tier classifier"]
     A["Arc testnet<br/>Escrow · EnclaveRegistry<br/>HumanRegistry · Vault"]
@@ -38,6 +43,16 @@ flowchart TB
     V <--> P
     V --> WO
 ```
+
+## What runs where
+
+| Part | Source | Runs as |
+| --- | --- | --- |
+| Browser app | `crates/web` | A Leptos app compiled to WebAssembly, served as static files. Privy and World IDKit have no Rust SDK, so a small JavaScript bridge (`crates/web/js`) loads them and the Rust code calls it |
+| API | `crates/server`, entered through `api/index.rs` | An Axum router in one Vercel function. It talks to Turso over libSQL, to Arc through alloy, and to Anthropic over HTTP |
+| Mail worker | `crates/mail-worker` | A Cloudflare Worker (workers-rs) compiled to WebAssembly |
+| Domain logic | `crates/core`, `crates/shared` | Libraries: pure logic that builds for native and WebAssembly, and the wire types the API and worker share |
+| Contracts, subgraph | `contracts/`, `subgraph/` | Solidity on Arc; AssemblyScript on The Graph |
 
 ## The four tiers
 
@@ -83,6 +98,19 @@ somebody who did not write to us, and mailing them would be backscatter. So an
 unauthenticated sender is refused inside the session instead and the link travels
 in the bounce their own server writes them. Their message is held either way.
 
+The gateway makes its own call about who is authenticated, because everything it
+keys on — passes, the per-sender classification budget, the hold notice — is
+keyed on the envelope sender. Evidence counts when SPF and DKIM both passed, or
+when DMARC passed for a `From:` domain equal to the envelope's domain
+(`crates/core/src/sender_auth.rs`). A DMARC pass alone is not enough: anyone can
+sign for their own domain while writing somebody else's address on the envelope.
+The worker sends the `From:` address along (`header_from`) so the gateway can
+make that comparison, and it reads results only from the `Authentication-Results`
+header stamped by `mx.cloudflare.net`, never one the sender wrote
+(`crates/mail-worker/src/auth_results.rs`). Some mail from mailing lists and
+forwarders, which breaks one of these checks, is challenged where it used to
+pass.
+
 ## The price cannot be invented
 
 ```
@@ -119,25 +147,25 @@ swapping it in changes who may sign, not the interface.
 
 ## The verdict is declared once, not twice
 
-Worker and web are separate npm packages — their own tsconfigs, no workspace
-tooling connecting them — so when the worker asks what to do with a message,
-there is no package either side could import the answer's shape from without
-adding one. `shared/gateway-verdict.ts` sits outside both, at the repo root:
-one `interface GatewayVerdict`, `forward | hold | reject` plus whatever each
-of those needs, reached by a plain relative import from `worker/src/index.ts`
-and from `web/src/app/api/mail/inbound/route.ts`.
+The mail worker and the API are different programs built for different targets —
+the worker compiles to WebAssembly for Cloudflare, the API to a native binary for
+Vercel — so when the worker asks what to do with a message, the answer's shape has
+to live somewhere both can depend on. That is `crates/shared` (`postage-shared`),
+which holds `GatewayVerdict`: `forward | hold | reject` plus whatever each of
+those needs, along with the release request the gateway sends back
+(`crates/shared/src/verdict.rs`, `release.rs`). `crates/mail-worker` and
+`crates/server` both depend on it; neither depends on the other.
 
-It is `import type` only, so nothing about a request path or a build step is
-added on either side by depending on it — the import is erased before either
-package runs. The two imports even look different: the worker's tsconfig sets
-`allowImportingTsExtensions`, so its import names `../../shared/gateway-verdict.ts`
-with the extension; web's does not, so its import omits it. Same file, two
-valid ways in, because each side's bundler settles the question on its own.
+The crate is wire types only, with no I/O and no clock, so depending on it adds
+nothing to either build. The pure domain logic — pricing, quote signing, sender
+authentication, the classifier's header fallback — is a second crate,
+`crates/core`, that compiles for both targets, so the API, the worker and the
+browser app apply the same rules.
 
 The alternative was drift: a field the gateway stopped sending that the worker
 still read as present, caught by nothing until a release went out wrong. One
-declaration both sides typecheck against turns that into a compile error in
-whichever package fell behind.
+declaration both sides compile against turns that into a compile error in
+whichever crate fell behind.
 
 ## Why each piece
 
@@ -347,11 +375,11 @@ opposite case, where `ALTER TABLE` names a table nothing has created yet.
 Two consequences worth stating outright:
 
 - **A new indexed column is two edits.** The column goes in the `CREATE TABLE`
-  in `web/src/lib/db/schema.ts` *and* in `ADDED_COLUMNS` in
-  `web/src/lib/db/migrations.ts`. The first is what a database created today
+  in `crates/server/src/db/schema.rs` *and* in `ADDED_COLUMNS` in
+  `crates/server/src/db/migrations.rs`. The first is what a database created today
   gets; the second is the only thing that reaches one created before. The index
-  itself needs no thought — the split puts anything that is not a `CREATE TABLE`
-  into the phase after the migration.
+  itself needs no thought — each schema statement is tagged `CreateTable` or
+  `ColumnDependent`, and the second kind runs after the migration.
 - **Adding a column is idempotent in both directions.** A column already present
   is skipped, and a column another instance adds in the same instant is not an
   error, because a deploy cold-starts several instances at once and only one of
@@ -372,8 +400,15 @@ Two consequences worth stating outright:
 | `RESEND_API_KEY` | Vercel env | The code for an address Privy has not already checked |
 | `MAILGUN_API_KEY` | Worker secret | Carries a released message; never leaves Cloudflare |
 
-Only `NEXT_PUBLIC_PRIVY_APP_ID` reaches the browser, and Privy app ids are public
-by design. `NEXT_PUBLIC_` is a broadcast, not a permission.
+Only the `NEXT_PUBLIC_*` values reach the browser — the Privy app id, the World ID
+app id and the World environment — and they are public by design. They are read
+when the browser app is built and compiled into the WebAssembly, so changing one
+means rebuilding. `NEXT_PUBLIC_` is a broadcast, not a permission.
+
+`IDENTITY_MODE=mock` skips World ID and clears a sender on a stand-in, and the
+free lane behind it still spends relayer funds. The API therefore refuses it when
+`VERCEL_ENV` is `production` unless `POSTAGE_ALLOW_MOCK_IN_PRODUCTION=1` is set
+as well.
 
 The attester, relayer and classifier are separate keys on purpose. Compromising
 the relayer drains a few cents of sponsorship and nothing else; compromising the

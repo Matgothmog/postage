@@ -5,7 +5,11 @@ ETHOnline 2026, an email app where verified people send for free and everyone
 else attaches refundable USDC postage. World ID is the free lane, so the
 integration is load bearing rather than decorative.
 
-Written as we hit each thing, not reconstructed afterwards.
+Written as we hit each thing, not reconstructed afterwards. The findings were
+made against the app's first implementation, in TypeScript on Next.js; where one
+cites that code or that dev server, it says so. The app is now Rust and
+WebAssembly, with the IDKit calls made from a small JavaScript bridge, and the
+findings about World's docs, SDK and Portal are unchanged by it.
 
 ## At a glance
 
@@ -174,8 +178,8 @@ even reach a request: `allow_legacy_proofs: boolean;`, with no `?`, in
 `idkit-core@4.2.4`'s own config type
 (`node_modules/@worldcoin/idkit-core/dist/index.d.ts:59`) — the same file
 that marks `environment` optional a few lines later at `:65`
-(`environment?: "production" | "staging" | "sandbox";`, the line
-`web/src/lib/world-id.ts:156-163` correctly cites). `tsc` catches a missing
+(`environment?: "production" | "staging" | "sandbox";`, the line our
+`WorldEnvironment` type correctly mirrors, `crates/web/src/config.rs:76-100`). `tsc` catches a missing
 `allow_legacy_proofs` at compile time for anyone who lets the type flow
 through; the risk is narrower than "fails at runtime instead of at a type
 check" — it's that the docs give no reason to expect the field is mandatory
@@ -191,9 +195,9 @@ shipped WASM binary as a literal enum variant. Three vocabularies for one
 event, and nothing on World's side connects them — the v4 schema does not
 even mention the two older names, let alone say they are the same failure as
 the third. On our end, all three now carry the same sentence in our own
-error-mapping table (`WORLD_ID_FAILURE_MESSAGES`,
-`web/src/lib/world-id-messages.ts:83-85`, read by `describeWorldIdFailure`,
-`web/src/lib/world-id.ts:198`), which is what it took to stop a real
+error-mapping table (`world_id_failure_message`,
+`crates/core/src/world_id_messages.rs:195-201`, read by
+`describe_world_id_failure`, `:203`), which is what it took to stop a real
 verification-limit failure from landing on whichever one of the three names
 actually got sent — but that took us enumerating all three ourselves, from
 search results and IDKit's own binary, rather than anything in World's
@@ -399,7 +403,8 @@ IDKit knows about renders client-side only. Three separate bugs stood between
 that silence and a working flow. We want to be precise about which of them
 were actually World's to fix, because two of them were entirely ours.
 
-The first was ours. Next.js 16 blocks a dev server's hot-reload socket for any
+The first was ours, and belonged to the Next.js 16 build the app had at the time.
+Next.js 16 blocks a dev server's hot-reload socket for any
 origin not explicitly allowed, and loading the page from a LAN address instead
 of `localhost` tripped it silently — the verify button existed in the DOM, but
 React had never attached to it, so there was no click handler to fire, no

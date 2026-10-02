@@ -161,6 +161,14 @@ a person wrote it. The worker logged the inbound and the `POST /release`
 thirty-three seconds apart, KV was empty afterwards, and the challenge row read
 resolved with `held_until` null.
 
+### The Rust worker
+
+`crates/mail-worker` is the Rust port of the worker above, named `postage-mail-rs`
+in its `wrangler.toml`. It binds the same KV namespace as `HELD`, so the two can
+be swapped without orphaning held mail, and it serves the same `POST /release`
+route. The addresses in this section are those of the TypeScript worker and
+gateway from the ETHOnline deployment.
+
 ## Arc Mainnet (5042)
 
 Not deployed yet.
