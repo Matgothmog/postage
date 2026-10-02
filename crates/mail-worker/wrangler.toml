@@ -1,5 +1,5 @@
-# Copy-ready config for the Rust worker. It does not replace worker/wrangler.toml
-# (the live TypeScript worker); the bindings and vars below match it name for name.
+# Copy-ready config for the Rust worker; its bindings and vars keep the names
+# the former TypeScript worker used.
 # Secrets are never written here. Set them with:
 #   wrangler secret put POSTAGE_API_URL
 #   wrangler secret put POSTAGE_SECRET

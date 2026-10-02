@@ -1,15 +1,11 @@
 # Golden vectors
 
-Byte-exact outputs of the TypeScript implementation, for testing the Rust ports.
+Byte-exact outputs of the former TypeScript implementation, for testing the Rust
+ports. They were captured at commit `eb36792` and are frozen reference data;
+there is no command to regenerate them.
 
-Regenerate from the repo root:
-
-    cd web && npm ci
-    node --experimental-strip-types --import ./test/register.mjs scripts/golden-capture.ts
-
-The script calls the real functions in `web/src/lib` and the real
-`@worldcoin/idkit` / `@worldcoin/idkit-server` packages. Running it twice
-produces identical files.
+The capture called the real functions in `web/src/lib` and the real
+`@worldcoin/idkit` / `@worldcoin/idkit-server` packages.
 
 ## Fixed inputs
 

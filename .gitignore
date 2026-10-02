@@ -8,20 +8,12 @@ contracts/out/
 contracts/cache/
 contracts/broadcast/
 
-# next
-web/.next/
-web/out/
-
 # subgraph codegen
 subgraph/generated/
 subgraph/build/
 
 # forge install pulls these
 contracts/lib/
-
-# wrangler local state and secrets
-worker/.dev.vars
-worker/.wrangler/
 
 # claude development logs
 .claude/
