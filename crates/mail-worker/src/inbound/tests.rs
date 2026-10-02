@@ -45,6 +45,7 @@ async fn the_gateway_is_told_what_the_receiving_mta_concluded() {
     assert_eq!(payload["from"], SENDER);
     assert_eq!(payload["to"], RECIPIENT);
     assert_eq!(payload["subject"], "A question");
+    assert_eq!(payload["header_from"], SENDER);
     assert!(
         payload["body"]
             .as_str()

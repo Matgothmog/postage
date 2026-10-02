@@ -307,6 +307,104 @@ async fn spf_pass_alone_without_a_verified_dkim_signature_does_not_authenticate_
     );
 }
 
+/// Alice, whose address has earned a paid pass for the `demo` inbox.
+const ALICE: &str = "alice@gmail.com";
+
+async fn uses_left(db: &Db, sender: &str) -> Option<i64> {
+    #[derive(serde::Deserialize)]
+    struct Row {
+        uses_left: Option<i64>,
+    }
+    let rows: Vec<Row> = db
+        .all(
+            "SELECT uses_left FROM passes WHERE handle = 'demo' AND sender = ?",
+            [sender],
+        )
+        .await
+        .unwrap();
+    rows[0].uses_left
+}
+
+/// Mail on Alice's envelope whose `From:` header names `header_from`, with
+/// the DMARC pass that header earned and the SPF softfail a forged envelope
+/// gets.
+fn on_alices_envelope(header_from: &str) -> Value {
+    json!({
+        "from": ALICE,
+        "to": "demo@usepostage.com",
+        "subject": "Your verification code is 4821",
+        "body": "x",
+        "spf": "softfail",
+        "dkim": "pass",
+        "dmarc": "pass",
+        "header_from": header_from,
+    })
+}
+
+/// DMARC vouches for the `From:` header. An attacker signing for their own
+/// domain while writing Alice's address on the envelope must not spend her
+/// pass, charge her budget or have a notice mailed to her.
+#[tokio::test]
+async fn a_dmarc_pass_for_another_from_domain_cannot_borrow_the_envelope_senders_pass() {
+    let gateway = Gateway::new(Some("important")).await;
+    grant_pass(&gateway.db, "demo", ALICE, "paid", Some(1), NOW)
+        .await
+        .unwrap();
+
+    let answer = gateway
+        .post(&on_alices_envelope("x@attacker.example"))
+        .await;
+
+    assert_eq!(answer.body["action"], "hold");
+    assert_eq!(
+        answer.body["notice"],
+        Value::Null,
+        "Alice must not be mailed"
+    );
+    assert_eq!(
+        uses_left(&gateway.db, ALICE).await,
+        Some(1),
+        "her pass is unspent"
+    );
+    assert_eq!(
+        count(&gateway.db, "classifications").await,
+        0,
+        "nothing is charged to her classification budget"
+    );
+    assert_eq!(gateway.model_calls(), 0);
+}
+
+/// The same message with a `From:` header on the envelope's domain is the
+/// sender DMARC proved, and spends the pass as before.
+#[tokio::test]
+async fn a_dmarc_pass_for_the_envelopes_own_domain_still_spends_the_pass() {
+    let gateway = Gateway::new(Some("commercial")).await;
+    grant_pass(&gateway.db, "demo", ALICE, "paid", Some(1), NOW)
+        .await
+        .unwrap();
+
+    let answer = gateway.post(&on_alices_envelope("Alice@Gmail.com")).await;
+
+    assert_eq!(answer.body["action"], "forward");
+    assert_eq!(answer.body["reason"], "paid");
+    assert_eq!(uses_left(&gateway.db, ALICE).await, Some(0));
+}
+
+/// An older worker sends no `header_from`; its DMARC pass then proves nothing
+/// about the envelope, rather than everything.
+#[tokio::test]
+async fn a_dmarc_pass_without_the_from_header_does_not_authenticate() {
+    let gateway = Gateway::new(Some("important")).await;
+
+    let answer = gateway
+        .deliver_with_auth(ALICE, "hello", "softfail", "none", "pass")
+        .await;
+
+    assert_eq!(answer.body["action"], "hold");
+    assert_eq!(answer.body["notice"], Value::Null);
+    assert_eq!(gateway.model_calls(), 0);
+}
+
 // --- faults.test.ts, the cases that drive the route -----------------------
 
 /// The defect the live outage exposed: the worker read the status, found

@@ -122,7 +122,8 @@ const inbound = (message, secret = server.ready.webhookSecret) =>
   fetch(`${origin}/api/mail/inbound`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-postage-secret": secret },
-    body: JSON.stringify({ dmarc: "pass", ...message }),
+    // DMARC passed for a From: header on the envelope's own domain, as the worker reports it.
+    body: JSON.stringify({ dmarc: "pass", header_from: message.from, ...message }),
   });
 const shot = (browser, name) => browser.screenshot(join(shots, `${name}.png`));
 const HANDLE = "alice";

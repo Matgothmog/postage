@@ -39,6 +39,7 @@ use postage_core::classify::{MailFacts, Verdict, classify_from_headers, extract_
 use postage_core::handle::{handle_of, is_ours};
 use postage_core::quote_types::QuoteFields;
 use postage_core::secret::offered_secret_matches;
+use postage_core::sender_auth::{SenderEvidence, sender_is_authenticated};
 use postage_shared::{
     GatewayAction, GatewayNotice, GatewayVerdict, INBOUND_BODY_LIMIT_BYTES, INBOUND_DEADLINE_MS,
     Tier,
@@ -90,6 +91,9 @@ struct InboundMessage {
     spf: Option<String>,
     dkim: Option<String>,
     dmarc: Option<String>,
+    /// The `From:` header address, which is what DMARC evaluated. Absent from
+    /// an older worker, and then DMARC proves nothing about the envelope.
+    header_from: Option<String>,
 }
 
 /// How long one message may be worked on before the gateway answers with its
@@ -271,6 +275,7 @@ fn read_message(body: &Bytes) -> Result<InboundMessage, Stop> {
         spf: text("spf")?,
         dkim: text("dkim")?,
         dmarc: text("dmarc")?,
+        header_from: text("header_from")?,
     })
 }
 
@@ -285,17 +290,20 @@ fn optional_text(value: Option<&Value>) -> Option<Option<String>> {
 }
 
 /// Whether the receiving server could confirm the envelope sender is who it
-/// says.
+/// says ([`sender_is_authenticated`] holds the rule).
 ///
-/// The allowlist is keyed on that address, so letting an unauthenticated
-/// message skip the gate would let anyone through by writing someone else's
-/// name on the envelope; and answering a forged sender is backscatter. Not
-/// "dkim is not fail": the worker collapses disagreeing
-/// Authentication-Results to null, and null must not read as clean. Only an
-/// actual verified signature counts.
-fn sender_is_authenticated(message: &InboundMessage) -> bool {
-    let passed = |value: &Option<String>| value.as_deref() == Some("pass");
-    passed(&message.dmarc) || (passed(&message.spf) && passed(&message.dkim))
+/// The allowlist, the budget and the notice are keyed on that address, so
+/// letting an unauthenticated message skip the gate would let anyone through
+/// by writing someone else's name on the envelope; and answering a forged
+/// sender is backscatter.
+fn envelope_is_authenticated(message: &InboundMessage) -> bool {
+    sender_is_authenticated(&SenderEvidence {
+        envelope_from: &message.from,
+        header_from: message.header_from.as_deref(),
+        spf: message.spf.as_deref(),
+        dkim: message.dkim.as_deref(),
+        dmarc: message.dmarc.as_deref(),
+    })
 }
 
 /// What the classifier made of a message, and what it was allowed to spend.
@@ -325,7 +333,7 @@ async fn judge(
     handle: &str,
 ) -> Result<Judged, Stop> {
     let sender = message.from.to_lowercase();
-    let authenticated = sender_is_authenticated(message);
+    let authenticated = envelope_is_authenticated(message);
     let facts = MailFacts {
         from: sender,
         to: message.to.clone(),

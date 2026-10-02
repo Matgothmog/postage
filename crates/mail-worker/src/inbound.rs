@@ -33,6 +33,9 @@ struct GatewayRequest<'a> {
     spf: Option<&'a str>,
     dkim: Option<&'a str>,
     dmarc: Option<&'a str>,
+    /// The `From:` header address DMARC evaluated, so the gateway can tell
+    /// whether a DMARC pass says anything about the envelope sender.
+    header_from: Option<&'a str>,
 }
 
 pub async fn handle_email<E: Edge, M: InboundMessage>(edge: &E, settings: &Settings, message: &M) {
@@ -91,6 +94,7 @@ async fn ask_gateway<E: Edge, M: InboundMessage>(
         spf: auth.spf.as_deref(),
         dkim: auth.dkim.as_deref(),
         dmarc: auth.dmarc.as_deref(),
+        header_from: readable.header_from.as_deref(),
     };
     let body = serde_json::to_string(&payload).map_err(|cause| EdgeError(cause.to_string()))?;
 
